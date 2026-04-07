@@ -1,1 +1,8 @@
 /target
+tmp/
+testdata/
+.vscode/
+copilot-office/missions
+# copilot-office/missions/*/*.md
+# copilot-office/missions/*/copilot-desk/completed-reports
+# copilot-office/missions/*/copilot-desk/completed-stages

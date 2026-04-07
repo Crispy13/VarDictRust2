@@ -9,6 +9,10 @@ Maximum Goal is 3X faster than VDJ, and similar or less memory usage than VDJ.
 In this phase, we will port the Java Code script by script (as best as possible). We only focus on logic matching and output matching. Ignore all performance things and idiomatic Rust things. Just Faithfully port the code so that it produces the same output as VDJ and has the same logic. But because of language differences, we may need to make some adjustments, but faithful porting is the first priority.
 
 I am planning at least 5 bams to test the output parity.
+**1. Making codebase documents:** Agents have limited context window, so they can't hold the whole codebase in memory. To solve this problem, we make codebase documents in detail. Maybe you can use "codebase-doc-manage" skill. 
+**2. Porting code:**
+    Port code. We port one by one, not all at once. And we can go on next steps only if output parity is achieved.
+    - TDD approach: Make failed tests first with VDJ output, then port code to make tests pass. 
 
 ### Phase 2: Refactoring and Optimization
 In this phase, we will refactor the code to make it more idiomatic Rust and optimize. Everytime we modify the code, we should check the output parity with VDJ. 

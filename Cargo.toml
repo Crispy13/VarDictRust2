@@ -4,3 +4,38 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+rust-htslib = { git = "https://github.com/Crispy13/rust-htslib.git", tag = "v1.0.0c3", features = [
+    "libdeflate",
+] }
+rustc-hash = { version = "2.1" }
+mimalloc = { version = "0.1.48" }
+bio = "3.0.0" # for fasta parsing.
+indexmap = { version = "2", features = ["serde"] }
+regex = "1"
+once_cell = "1"
+clap = { version = "4", features = ["derive"] }
+lazy_static = "1"
+ordered-float = "5"
+statrs = "0.18"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.6"
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+lto = 'thin'
+debug = "line-tables-only"
+
+[profile.debug-release]
+inherits = "release"
+debug = true
+
+[profile.deploy]
+inherits = "release"
+panic = "abort"
+lto = true
+codegen-units = 1
+debug = false
