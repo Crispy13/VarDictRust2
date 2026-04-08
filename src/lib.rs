@@ -2,6 +2,7 @@ pub mod data;
 pub mod fisher;
 pub mod parity;
 pub mod patterns;
+pub mod reference;
 pub mod scope;
 pub mod utils;
 pub mod variations;

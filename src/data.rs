@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashMap};
+use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use indexmap::IndexMap;
@@ -158,6 +159,76 @@ pub struct Mate {
     pub qmean_qq: f64,
 
     pub nm: f64,
+}
+
+// Java: Cluster L6-L41
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Cluster {
+    #[serde(flatten)]
+    pub base: Mate,
+
+    pub cnt: i32,
+}
+
+impl Cluster {
+    /// Ported from: Cluster.java:L9-L15
+    pub fn new(cnt: i32, mate_start_ms: i32, mate_end_me: i32, start_s: i32, end_e: i32) -> Self {
+        Self {
+            base: Mate {
+                mate_start_ms,
+                mate_end_me,
+                start_s,
+                end_e,
+                ..Mate::default()
+            },
+            cnt,
+        }
+    }
+
+    /// Ported from: Cluster.java:L17-L29
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_metrics(
+        mate_start_ms: i32,
+        mate_end_me: i32,
+        cnt: i32,
+        mate_length_mlen: i32,
+        start_s: i32,
+        end_e: i32,
+        pmean_rp: f64,
+        qmean_q: f64,
+        qmean_qq: f64,
+        nm: f64,
+    ) -> Self {
+        Self {
+            base: Mate {
+                mate_start_ms,
+                mate_end_me,
+                mate_length_mlen,
+                start_s,
+                end_e,
+                pmean_rp,
+                qmean_q,
+                qmean_qq,
+                nm,
+            },
+            cnt,
+        }
+    }
+}
+
+impl fmt::Display for Cluster {
+    /// Ported from: Cluster.toString() L31-L40
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "Cluster{{cnt={}, mateStart_ms={}, mateEnd_me={}, start_s={}, end_e={}}}",
+            self.cnt,
+            self.base.mate_start_ms,
+            self.base.mate_end_me,
+            self.base.start_s,
+            self.base.end_e
+        )
+    }
 }
 
 // Java: Sclip L8-L48 (extends Variation)
