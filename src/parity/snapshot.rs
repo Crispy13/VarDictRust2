@@ -1,0 +1,51 @@
+use crate::data::Region;
+use serde::Serialize;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::path::Path;
+
+/// Writes a 2-line JSONL file: line 1 = meta envelope, line 2 = data.
+pub fn write_module_snapshot<T: Serialize>(
+    module_name: &str,
+    region: &Region,
+    data: &T,
+    output_dir: &Path,
+) -> io::Result<()> {
+    let filename = format!(
+        "{}_{}_{}-{}.jsonl",
+        module_name, region.chr, region.start, region.end
+    );
+    let path = output_dir.join(&filename);
+    std::fs::create_dir_all(output_dir)?;
+    let file = File::create(&path)?;
+    let mut writer = BufWriter::new(file);
+
+    let meta = serde_json::json!({
+        "module": module_name,
+        "region": format!("{}:{}-{}", region.chr, region.start, region.end),
+        "version": "1"
+    });
+    serde_json::to_writer(&mut writer, &meta).map_err(io::Error::other)?;
+    writeln!(writer)?;
+
+    serde_json::to_writer(&mut writer, data).map_err(io::Error::other)?;
+    writeln!(writer)?;
+
+    writer.flush()?;
+    Ok(())
+}
+
+/// Reads the golden data line (line 2) from a JSONL file.
+pub fn load_golden(path: &Path) -> io::Result<String> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+
+    lines
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "missing meta line"))??;
+
+    lines
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "missing data line"))?
+}
