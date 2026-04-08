@@ -1,5 +1,6 @@
 pub mod data;
 pub mod fisher;
+pub mod parity;
 pub mod patterns;
 pub mod scope;
 pub mod utils;

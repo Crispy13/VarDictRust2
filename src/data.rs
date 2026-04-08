@@ -1,7 +1,11 @@
+use std::collections::BTreeMap;
+use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 
+use indexmap::IndexMap;
+
 // Java: Region L9-L106
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Region {
     pub chr: String,
     pub start: i32,
@@ -67,7 +71,8 @@ impl Hash for Region {
 }
 
 // Java: Side L6-L11
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Side {
     Three,
     Five,
@@ -84,13 +89,199 @@ impl Side {
     }
 }
 
-// TODO(S09): replace this placeholder with the full Sclip port from
-// VarDictJava/src/main/java/com/astrazeneca/vardict/variations/Sclip.java.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Sclip;
+// Java: Variation L10-L125
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Variation {
+    #[serde(rename = "varsCount")]
+    pub vars_count: i32,
+
+    #[serde(rename = "varsCountOnForward")]
+    pub vars_count_on_forward: i32,
+
+    #[serde(rename = "varsCountOnReverse")]
+    pub vars_count_on_reverse: i32,
+
+    #[serde(rename = "meanPosition")]
+    pub mean_position: f64,
+
+    #[serde(rename = "meanQuality")]
+    pub mean_quality: f64,
+
+    #[serde(rename = "meanMappingQuality")]
+    pub mean_mapping_quality: f64,
+
+    #[serde(rename = "numberOfMismatches")]
+    pub number_of_mismatches: f64,
+
+    #[serde(rename = "lowQualityReadsCount")]
+    pub low_quality_reads_count: i32,
+
+    #[serde(rename = "highQualityReadsCount")]
+    pub high_quality_reads_count: i32,
+
+    pub pstd: bool,
+
+    pub qstd: bool,
+
+    pub pp: i32,
+
+    pub pq: f64,
+
+    pub extracnt: i32,
+}
+
+// Java: Mate L4-L30
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Mate {
+    #[serde(rename = "mateStart_ms")]
+    pub mate_start_ms: i32,
+
+    #[serde(rename = "mateEnd_me")]
+    pub mate_end_me: i32,
+
+    #[serde(rename = "mateLength_mlen")]
+    pub mate_length_mlen: i32,
+
+    #[serde(rename = "start_s")]
+    pub start_s: i32,
+
+    #[serde(rename = "end_e")]
+    pub end_e: i32,
+
+    #[serde(rename = "pmean_rp")]
+    pub pmean_rp: f64,
+
+    #[serde(rename = "qmean_q")]
+    pub qmean_q: f64,
+
+    #[serde(rename = "Qmean_Q")]
+    pub qmean_qq: f64,
+
+    pub nm: f64,
+}
+
+// Java: Sclip L8-L48 (extends Variation)
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Sclip {
+    #[serde(flatten)]
+    pub base: Variation,
+    pub nt: Option<BTreeMap<i32, BTreeMap<String, i32>>>,
+    pub seq: Option<BTreeMap<i32, BTreeMap<String, Variation>>>,
+    pub sequence: Option<String>,
+    pub used: bool,
+    pub start: i32,
+    pub end: i32,
+    pub mstart: i32,
+    pub mend: i32,
+    pub mlen: i32,
+    pub disc: i32,
+    pub softp: i32,
+    pub soft: IndexMap<i32, i32>,
+    pub mates: Vec<Mate>,
+}
+
+// Java: VariationMap.SV (inner class) L24-L40
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct VariationMapSV {
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+
+    pub pairs: i32,
+
+    pub splits: i32,
+
+    pub clusters: i32,
+}
+
+// Java: VariationMap L8-L65 (extends LinkedHashMap<String, Variation>)
+// Always serializes as {"entries": [[k,v], ...], "sv": null|{...}}
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct VariationMap {
+    #[serde(serialize_with = "crate::parity::format::serialize_indexmap_as_pairs")]
+    pub entries: IndexMap<String, Variation>,
+
+    pub sv: Option<VariationMapSV>,
+}
+
+// Java: SVStructures L12-L55
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SVStructures {
+    pub svdelfend: i32,
+    pub svdelrend: i32,
+    pub svfdel: Vec<Sclip>,
+    pub svrdel: Vec<Sclip>,
+
+    pub svdupfend: i32,
+    pub svduprend: i32,
+    pub svfdup: Vec<Sclip>,
+    pub svrdup: Vec<Sclip>,
+
+    pub svinvfend3: i32,
+    pub svinvrend3: i32,
+    pub svfinv3: Vec<Sclip>,
+    pub svrinv3: Vec<Sclip>,
+
+    pub svinvfend5: i32,
+    pub svinvrend5: i32,
+    pub svfinv5: Vec<Sclip>,
+    pub svrinv5: Vec<Sclip>,
+
+    pub svffus: BTreeMap<String, Vec<Sclip>>,
+    pub svrfus: BTreeMap<String, Vec<Sclip>>,
+    pub svfusfend: BTreeMap<String, i32>,
+    pub svfusrend: BTreeMap<String, i32>,
+}
+
+// Java: VariationData L11-L40 (CigarParser output boundary type)
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct VariationData {
+    #[serde(rename = "nonInsertionVariants")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub non_insertion_variants: HashMap<i32, VariationMap>,
+
+    #[serde(rename = "insertionVariants")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub insertion_variants: HashMap<i32, VariationMap>,
+
+    #[serde(rename = "positionToInsertionCount")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub position_to_insertion_count: HashMap<i32, BTreeMap<String, i32>>,
+
+    #[serde(rename = "positionToDeletionsCount")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub position_to_deletions_count: HashMap<i32, BTreeMap<String, i32>>,
+
+    #[serde(rename = "refCoverage")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub ref_coverage: HashMap<i32, i32>,
+
+    #[serde(rename = "softClips5End")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub soft_clips_5_end: HashMap<i32, Sclip>,
+
+    #[serde(rename = "softClips3End")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub soft_clips_3_end: HashMap<i32, Sclip>,
+
+    #[serde(rename = "svStructures")]
+    pub sv_structures: SVStructures,
+
+    #[serde(rename = "maxReadLength")]
+    pub max_read_length: Option<i32>,
+
+    pub duprate: f64,
+
+    pub splice: Option<BTreeSet<String>>,
+
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub mnp: HashMap<i32, BTreeMap<String, i32>>,
+
+    #[serde(rename = "spliceCount")]
+    pub splice_count: BTreeMap<String, Vec<i32>>,
+}
 
 // Java: SortPositionSclip L8-L24
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SortPositionSclip {
     pub position: i32,
     pub soft_clip: Sclip,
@@ -107,8 +298,23 @@ impl SortPositionSclip {
     }
 }
 
+impl PartialEq for SortPositionSclip {
+    fn eq(&self, other: &Self) -> bool {
+        self.position == other.position && self.count == other.count
+    }
+}
+
+impl Eq for SortPositionSclip {}
+
+impl Hash for SortPositionSclip {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.position.hash(state);
+        self.count.hash(state);
+    }
+}
+
 // Java: BaseInsertion L7-L24
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BaseInsertion {
     pub base_insert: Option<i32>,
     pub insertion_sequence: String,
@@ -126,7 +332,7 @@ impl BaseInsertion {
 }
 
 // Java: Match L6-L13
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Match {
     pub base_position: i32,
     pub matched_sequence: String,
@@ -142,7 +348,7 @@ impl Match {
 }
 
 // Java: Match35 L6-L23
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Match35 {
     pub matched_5_end: i32,
     pub matched_3_end: i32,
@@ -160,7 +366,7 @@ impl Match35 {
 }
 
 // Java: ModifiedCigar L3-L14
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ModifiedCigar {
     pub position: i32,
     pub cigar: String,
@@ -185,7 +391,7 @@ impl ModifiedCigar {
 }
 
 // Java: CurrentSegment L6-L15
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct CurrentSegment {
     pub chr: String,
     pub start: i32,
@@ -202,9 +408,227 @@ impl CurrentSegment {
     }
 }
 
+// Java: Variant L15-L190
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Variant {
+    #[serde(rename = "descriptionString")]
+    pub description_string: String,
+
+    #[serde(rename = "positionCoverage")]
+    pub position_coverage: i32,
+
+    #[serde(rename = "varsCountOnForward")]
+    pub vars_count_on_forward: i32,
+
+    #[serde(rename = "varsCountOnReverse")]
+    pub vars_count_on_reverse: i32,
+
+    #[serde(rename = "strandBiasFlag")]
+    pub strand_bias_flag: String,
+
+    #[serde(rename = "frequency")]
+    pub frequency: f64,
+
+    #[serde(rename = "meanPosition")]
+    pub mean_position: f64,
+
+    #[serde(rename = "isAtLeastAt2Positions")]
+    pub is_at_least_at_2_positions: bool,
+
+    #[serde(rename = "meanQuality")]
+    pub mean_quality: f64,
+
+    #[serde(rename = "hasAtLeast2DiffQualities")]
+    pub has_at_least_2_diff_qualities: bool,
+
+    #[serde(rename = "meanMappingQuality")]
+    pub mean_mapping_quality: f64,
+
+    #[serde(rename = "highQualityToLowQualityRatio")]
+    pub high_quality_to_low_quality_ratio: f64,
+
+    #[serde(rename = "highQualityReadsFrequency")]
+    pub high_quality_reads_frequency: f64,
+
+    #[serde(rename = "extraFrequency")]
+    pub extra_frequency: f64,
+
+    #[serde(rename = "shift3")]
+    pub shift3: i32,
+
+    #[serde(rename = "msi")]
+    pub msi: f64,
+
+    #[serde(rename = "msint")]
+    pub msint: i32,
+
+    #[serde(rename = "numberOfMismatches")]
+    pub number_of_mismatches: f64,
+
+    #[serde(rename = "hicnt")]
+    pub hicnt: i32,
+
+    #[serde(rename = "hicov")]
+    pub hicov: i32,
+
+    #[serde(rename = "leftseq")]
+    pub leftseq: String,
+
+    #[serde(rename = "rightseq")]
+    pub rightseq: String,
+
+    #[serde(rename = "startPosition")]
+    pub start_position: i32,
+
+    #[serde(rename = "endPosition")]
+    pub end_position: i32,
+
+    #[serde(rename = "refReverseCoverage")]
+    pub ref_reverse_coverage: i32,
+
+    #[serde(rename = "refForwardCoverage")]
+    pub ref_forward_coverage: i32,
+
+    #[serde(rename = "totalPosCoverage")]
+    pub total_pos_coverage: i32,
+
+    #[serde(rename = "duprate")]
+    pub duprate: f64,
+
+    #[serde(rename = "genotype")]
+    pub genotype: String,
+
+    #[serde(rename = "varallele")]
+    pub varallele: String,
+
+    #[serde(rename = "refallele")]
+    pub refallele: String,
+
+    #[serde(rename = "vartype")]
+    pub vartype: String,
+
+    #[serde(rename = "DEBUG")]
+    pub debug: String,
+
+    #[serde(rename = "crispr")]
+    pub crispr: i32,
+}
+
+impl Default for Variant {
+    fn default() -> Self {
+        Self {
+            description_string: String::new(),
+            position_coverage: 0,
+            vars_count_on_forward: 0,
+            vars_count_on_reverse: 0,
+            strand_bias_flag: String::from("0"),
+            frequency: 0.0,
+            mean_position: 0.0,
+            is_at_least_at_2_positions: false,
+            mean_quality: 0.0,
+            has_at_least_2_diff_qualities: false,
+            mean_mapping_quality: 0.0,
+            high_quality_to_low_quality_ratio: 0.0,
+            high_quality_reads_frequency: 0.0,
+            extra_frequency: 0.0,
+            shift3: 0,
+            msi: 0.0,
+            msint: 0,
+            number_of_mismatches: 0.0,
+            hicnt: 0,
+            hicov: 0,
+            leftseq: String::new(),
+            rightseq: String::new(),
+            start_position: 0,
+            end_position: 0,
+            ref_reverse_coverage: 0,
+            ref_forward_coverage: 0,
+            total_pos_coverage: 0,
+            duprate: 0.0,
+            genotype: String::new(),
+            varallele: String::new(),
+            refallele: String::new(),
+            vartype: String::new(),
+            debug: String::new(),
+            crispr: 0,
+        }
+    }
+}
+
+// Java: Vars L11-L27
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Vars {
+    #[serde(rename = "referenceVariant")]
+    pub reference_variant: Option<Variant>,
+
+    #[serde(rename = "variants")]
+    pub variants: Vec<Variant>,
+
+    #[serde(rename = "varDescriptionStringToVariants")]
+    pub var_description_string_to_variants: BTreeMap<String, Variant>,
+
+    #[serde(rename = "sv")]
+    pub sv: String,
+}
+
+// Java: RealignedVariationData (VariationRealigner output boundary type)
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RealignedVariationData {
+    #[serde(rename = "nonInsertionVariants")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub non_insertion_variants: HashMap<i32, VariationMap>,
+
+    #[serde(rename = "insertionVariants")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub insertion_variants: HashMap<i32, VariationMap>,
+
+    #[serde(rename = "softClips5End")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub soft_clips_5_end: HashMap<i32, Sclip>,
+
+    #[serde(rename = "softClips3End")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub soft_clips_3_end: HashMap<i32, Sclip>,
+
+    #[serde(rename = "refCoverage")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub ref_coverage: HashMap<i32, i32>,
+
+    #[serde(rename = "maxReadLength")]
+    pub max_read_length: Option<i32>,
+
+    #[serde(rename = "svStructures")]
+    pub sv_structures: SVStructures,
+
+    pub duprate: f64,
+
+    #[serde(rename = "CURSEG")]
+    pub curseg: CurrentSegment,
+
+    #[serde(rename = "SOFTP2SV")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub softp2sv: HashMap<i32, Vec<Sclip>>,
+
+    #[serde(skip_serializing, default)]
+    pub previous_scope: (),
+}
+
+// Java: AlignedVarsData (ToVarsBuilder output boundary type)
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AlignedVarsData {
+    #[serde(rename = "maxReadLength")]
+    pub max_read_length: i32,
+
+    #[serde(rename = "alignedVariants")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    pub aligned_variants: HashMap<i32, Vars>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use serde_json::Value;
     use std::collections::hash_map::DefaultHasher;
 
     fn hash_region(region: &Region) -> u64 {
@@ -258,7 +682,7 @@ mod tests {
 
     #[test]
     fn small_data_types_construct() {
-        let sort_position = SortPositionSclip::new(12, Sclip, 3);
+        let sort_position = SortPositionSclip::new(12, Sclip::default(), 3);
         let insertion = BaseInsertion::new(8, "AC", 6);
         let matched = Match::new(15, "TT");
         let matched_ends = Match35::new(5, 9, 4);
@@ -282,5 +706,113 @@ mod tests {
         assert_eq!(segment.chr, "chr7");
         assert_eq!(segment.start, 30);
         assert_eq!(segment.end, 40);
+    }
+
+    #[test]
+    fn variation_data_default_serializes_all_expected_keys() {
+        let serialized = serde_json::to_value(VariationData::default()).unwrap();
+        let Value::Object(object) = serialized else {
+            panic!("expected VariationData to serialize as a JSON object");
+        };
+
+        assert_eq!(object.len(), 13);
+        assert!(object.contains_key("nonInsertionVariants"));
+        assert!(object.contains_key("insertionVariants"));
+        assert!(object.contains_key("positionToInsertionCount"));
+        assert!(object.contains_key("positionToDeletionsCount"));
+        assert!(object.contains_key("refCoverage"));
+        assert!(object.contains_key("softClips5End"));
+        assert!(object.contains_key("softClips3End"));
+        assert!(object.contains_key("svStructures"));
+        assert!(object.contains_key("maxReadLength"));
+        assert!(object.contains_key("duprate"));
+        assert!(object.contains_key("splice"));
+        assert!(object.contains_key("mnp"));
+        assert!(object.contains_key("spliceCount"));
+    }
+
+    #[test]
+    fn variant_default_serializes_all_expected_keys() {
+        let serialized = serde_json::to_value(Variant::default()).unwrap();
+        let Value::Object(object) = serialized else {
+            panic!("expected Variant to serialize as a JSON object");
+        };
+
+        assert_eq!(object.len(), 34);
+        assert_eq!(
+            object.get("strandBiasFlag"),
+            Some(&Value::String(String::from("0")))
+        );
+        assert!(object.contains_key("DEBUG"));
+    }
+
+    #[test]
+    fn vars_default_serializes_expected_keys() {
+        let serialized = serde_json::to_value(Vars::default()).unwrap();
+        let Value::Object(object) = serialized else {
+            panic!("expected Vars to serialize as a JSON object");
+        };
+
+        assert_eq!(object.len(), 4);
+        assert!(object.contains_key("referenceVariant"));
+        assert!(object.contains_key("variants"));
+        assert!(object.contains_key("varDescriptionStringToVariants"));
+        assert!(object.contains_key("sv"));
+    }
+
+    proptest! {
+        #[test]
+        fn variant_f64_roundtrip(
+            freq in proptest::num::f64::NORMAL,
+            msi in proptest::num::f64::NORMAL,
+            duprate in proptest::num::f64::NORMAL,
+        ) {
+            let variant = Variant {
+                frequency: freq,
+                msi,
+                duprate,
+                ..Variant::default()
+            };
+
+            let json = serde_json::to_string(&variant).unwrap();
+            let roundtrip: Variant = serde_json::from_str(&json).unwrap();
+
+            prop_assert_eq!(roundtrip.frequency, variant.frequency);
+            prop_assert_eq!(roundtrip.msi, variant.msi);
+            prop_assert_eq!(roundtrip.duprate, variant.duprate);
+        }
+    }
+
+    #[test]
+    fn realigned_variation_data_default_serializes_expected_keys() {
+        let serialized = serde_json::to_value(RealignedVariationData::default()).unwrap();
+        let Value::Object(object) = serialized else {
+            panic!("expected RealignedVariationData to serialize as a JSON object");
+        };
+
+        assert_eq!(object.len(), 10);
+        assert!(object.contains_key("nonInsertionVariants"));
+        assert!(object.contains_key("insertionVariants"));
+        assert!(object.contains_key("softClips5End"));
+        assert!(object.contains_key("softClips3End"));
+        assert!(object.contains_key("refCoverage"));
+        assert!(object.contains_key("maxReadLength"));
+        assert!(object.contains_key("svStructures"));
+        assert!(object.contains_key("duprate"));
+        assert!(object.contains_key("CURSEG"));
+        assert!(object.contains_key("SOFTP2SV"));
+        assert!(!object.contains_key("previousScope"));
+    }
+
+    #[test]
+    fn aligned_vars_data_default_serializes_expected_keys() {
+        let serialized = serde_json::to_value(AlignedVarsData::default()).unwrap();
+        let Value::Object(object) = serialized else {
+            panic!("expected AlignedVarsData to serialize as a JSON object");
+        };
+
+        assert_eq!(object.len(), 2);
+        assert!(object.contains_key("maxReadLength"));
+        assert!(object.contains_key("alignedVariants"));
     }
 }

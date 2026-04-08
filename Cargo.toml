@@ -11,6 +11,8 @@ rustc-hash = { version = "2.1" }
 mimalloc = { version = "0.1.48" }
 bio = "3.0.0" # for fasta parsing.
 indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
 regex = "1"
 once_cell = "1"
 clap = { version = "4", features = ["derive"] }
@@ -20,7 +22,8 @@ statrs = "0.18"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-proptest = "1.6"
+insta = { version = "1", features = ["json"] }
+proptest = "1"
 
 [profile.dev]
 incremental = true
