@@ -121,13 +121,14 @@ install_region_fixtures() {
         fi
 
         cp "$source_file" "$fixture_dir/"
+        zstd --rm -q "$fixture_dir/$(basename "$source_file")"
         copied_any=1
         copied_fixtures=$((copied_fixtures + 1))
         module_counts[$idx]=$((module_counts[$idx] + 1))
 
-        local dest_file="$fixture_dir/$(basename "$source_file")"
+        local dest_file="$fixture_dir/$(basename "$source_file").zst"
         local line_count
-        line_count="$(wc -l < "$dest_file" | tr -d '[:space:]')"
+        line_count="$(zstd -dcq "$dest_file" | wc -l | tr -d '[:space:]')"
         if [[ "$line_count" -ne 2 ]]; then
             echo "WARN: fixture does not have 2 lines: $dest_file" >&2
             invalid_fixtures=$((invalid_fixtures + 1))
@@ -169,7 +170,7 @@ if [[ "$MODE" == "generate" ]]; then
     echo "--- Resetting fixture directories ---"
     for local_fixture_dir in "${MODULE_DIRS[@]}"; do
         mkdir -p "$PROJECT_ROOT/testdata/fixtures/$local_fixture_dir"
-        rm -f "$PROJECT_ROOT/testdata/fixtures/$local_fixture_dir"/*.jsonl
+        rm -f "$PROJECT_ROOT/testdata/fixtures/$local_fixture_dir"/*.jsonl.zst
     done
 fi
 

@@ -1,4 +1,8 @@
-use std::path::PathBuf;
+use std::{
+    fs::File,
+    io::Read,
+    path::PathBuf,
+};
 
 pub fn load_region_config() -> Vec<(String, PathBuf, PathBuf)> {
     let tsv = std::fs::read_to_string("testdata/parity_regions.tsv")
@@ -24,7 +28,7 @@ pub fn load_region_config() -> Vec<(String, PathBuf, PathBuf)> {
 
 pub fn golden_fixture_path(module: &str, region: &str) -> PathBuf {
     let safe_region = region.replace(':', "_").replace('-', "_");
-    let filename = format!("{module}_{safe_region}.jsonl");
+    let filename = format!("{module}_{safe_region}.jsonl.zst");
     PathBuf::from("testdata/fixtures")
         .join(module)
         .join(filename)
@@ -32,7 +36,13 @@ pub fn golden_fixture_path(module: &str, region: &str) -> PathBuf {
 
 pub fn load_golden_data(module: &str, region: &str) -> String {
     let path = golden_fixture_path(module, region);
-    let content = std::fs::read_to_string(&path)
+    let file = File::open(&path)
+        .unwrap_or_else(|error| panic!("Failed to open {}: {error}", path.display()));
+    let mut decoder = zstd::stream::read::Decoder::new(file)
+        .unwrap_or_else(|error| panic!("Failed to decode {}: {error}", path.display()));
+    let mut content = String::new();
+    decoder
+        .read_to_string(&mut content)
         .unwrap_or_else(|error| panic!("Failed to read {}: {error}", path.display()));
     let lines: Vec<&str> = content.lines().collect();
 

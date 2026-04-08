@@ -24,6 +24,7 @@ statrs = "0.18"
 criterion = { version = "0.5", features = ["html_reports"] }
 insta = { version = "1", features = ["json"] }
 proptest = "1"
+zstd = "0.13"
 
 [profile.dev]
 incremental = true

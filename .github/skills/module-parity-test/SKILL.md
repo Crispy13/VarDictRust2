@@ -42,7 +42,7 @@ Before running parity tests, verify these are in place:
 Check whether golden fixtures already exist for the target module:
 
 ```bash
-ls testdata/fixtures/<module>/*.jsonl 2>/dev/null | wc -l
+ls testdata/fixtures/<module>/*.jsonl.zst 2>/dev/null | wc -l
 ```
 
 - **If fixtures exist and are current:** skip to Step 3.
@@ -76,15 +76,27 @@ Do NOT proceed to fixture generation until the A-A gate passes 100%.
 scripts/batch_fixtures.sh --mode generate
 ```
 
-This runs VarDictJava once per region and copies JSONL output to `testdata/fixtures/<module>/`.
+This runs VarDictJava once per region and stores zstd-compressed JSONL output in `testdata/fixtures/<module>/`.
 
 **Verify:** each fixture file has exactly 2 lines (meta + data):
 ```bash
-for f in testdata/fixtures/<module>/*.jsonl; do
-  lines=$(wc -l < "$f")
-  [[ "$lines" -eq 2 ]] || echo "BAD: $f has $lines lines"
+for f in testdata/fixtures/<module>/*.jsonl.zst; do
+   lines=$(zstd -dcq "$f" | wc -l)
+   [[ "$lines" -eq 2 ]] || echo "BAD: $f has $lines lines"
 done
 ```
+
+#### 2c: Compress Fixtures
+
+All golden fixtures **must** be stored as zstd-compressed JSONL (`.jsonl.zst`). The `batch_fixtures.sh --mode generate` script compresses automatically. For manual compression:
+
+```bash
+zstd --rm testdata/fixtures/<module>/*.jsonl
+```
+
+**Naming convention:** `<module>_<chr>_<start>_<end>.jsonl.zst`
+
+On the benchmarked fixture corpus (8 MiB JSONL), zstd achieves ~95% compression with <2 ms decompression — negligible overhead per test run.
 
 ### Step 3: Run Rust Parity Tests
 
@@ -172,7 +184,7 @@ The test for module N+1 loads module N's golden JSONL, deserializes it as Rust t
 | `scripts/aa_gate.sh` | Single-region A-A gate |
 | `scripts/sample_regions.py` | Sample coverage-stratified regions from a BAM |
 | `testdata/parity_regions.tsv` | 100 sampled regions (3 BAMs × ~33 regions each) |
-| `tests/common/mod.rs` | Shared helpers: `load_region_config()`, `load_golden_data()`, `golden_fixture_path()` |
+| `tests/common/mod.rs` | Shared helpers: `load_region_config()`, `load_golden_data()`, `golden_fixture_path()`, and transparent zstd decompression |
 | `tests/parity_cigar_parser.rs` | CigarParser parity test (ignored until module is ported) |
 | `tests/parity_realigner.rs` | Realigner parity test (ignored) |
 | `tests/parity_sv_processor.rs` | SVProcessor parity test (ignored) |
@@ -180,7 +192,7 @@ The test for module N+1 loads module N's golden JSONL, deserializes it as Rust t
 
 ## JSONL Format
 
-See [JSONL format contract](./references/jsonl-format-contract.md) for the canonical spec covering file structure, type mappings, float format, and field naming conventions. Both Java writers and Rust serde output must produce bytes matching this contract.
+See [JSONL format contract](./references/jsonl-format-contract.md) for the canonical spec covering file structure, type mappings, float format, and field naming conventions. Fixtures are stored on disk as `.jsonl.zst`, but the decompressed payload must still be byte-identical JSONL matching this contract.
 
 ## Relationship to Other Skills
 
