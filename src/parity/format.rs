@@ -1,6 +1,7 @@
 use indexmap::IndexMap;
+use serde::de::Deserializer;
 use serde::ser::SerializeSeq;
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 
 /// Serializes a HashMap<i32, V> as sorted array of pairs: [[key, value], ...]
@@ -41,4 +42,15 @@ pub fn serialize_sorted_string_map<V: Serialize, S: Serializer>(
         seq.serialize_element(&(key, value))?;
     }
     seq.end()
+}
+
+pub fn deserialize_sorted_string_map<'de, V, D>(
+    deserializer: D,
+) -> Result<HashMap<String, V>, D::Error>
+where
+    V: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    let entries = Vec::<(String, V)>::deserialize(deserializer)?;
+    Ok(entries.into_iter().collect())
 }

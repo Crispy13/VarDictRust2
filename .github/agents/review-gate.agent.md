@@ -4,7 +4,7 @@ description: >
   approval. Use when: reviewing ported code, checking performance impact, producing
   binding PERF verdict. Produces PERF_SAFE | PERF_RISK | PERF_REGRESSION.
 name: Review Gate
-tools: [execute, read, search, web]
+tools: [vscode/memory, vscode/resolveMemoryFileUri, execute, read, search, web]
 model: ['Claude Opus 4.6 (fast mode) (Preview) (copilot)', 'Claude Opus 4.6 (copilot)', ]
 user-invocable: false
 disable-model-invocation: true

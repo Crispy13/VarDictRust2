@@ -5,7 +5,7 @@ description: >
   runs local tests, reports implementation status. Uses faithful-port skill for
   module implementation.
 name: Port Engineer
-tools: [read, search, edit, execute, web]
+tools: [vscode/memory, vscode/resolveMemoryFileUri, execute, read, edit, search, web]
 model: ['GPT-5.4 (copilot)']
 user-invocable: false
 disable-model-invocation: true

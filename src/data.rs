@@ -203,7 +203,7 @@ pub struct VariationMap {
     pub sv: Option<VariationMapSV>,
 }
 
-// Java: SVStructures L12-L55
+// Java: SVStructures.java L1-L45
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SVStructures {
     pub svdelfend: i32,
@@ -226,10 +226,21 @@ pub struct SVStructures {
     pub svfinv5: Vec<Sclip>,
     pub svrinv5: Vec<Sclip>,
 
-    pub svffus: BTreeMap<String, Vec<Sclip>>,
-    pub svrfus: BTreeMap<String, Vec<Sclip>>,
-    pub svfusfend: BTreeMap<String, i32>,
-    pub svfusrend: BTreeMap<String, i32>,
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_string_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_string_map")]
+    pub svffus: HashMap<String, Vec<Sclip>>,
+
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_string_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_string_map")]
+    pub svrfus: HashMap<String, Vec<Sclip>>,
+
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_string_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_string_map")]
+    pub svfusfend: HashMap<String, i32>,
+
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_string_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_string_map")]
+    pub svfusrend: HashMap<String, i32>,
 }
 
 // Java: VariationData L11-L40 (CigarParser output boundary type)
@@ -758,6 +769,152 @@ mod tests {
         assert!(object.contains_key("variants"));
         assert!(object.contains_key("varDescriptionStringToVariants"));
         assert!(object.contains_key("sv"));
+    }
+
+    #[test]
+    fn sv_structures_default_matches_java_initialization() {
+        let sv_structures = SVStructures::default();
+
+        assert_eq!(sv_structures.svdelfend, 0);
+        assert_eq!(sv_structures.svdelrend, 0);
+        assert_eq!(sv_structures.svdupfend, 0);
+        assert_eq!(sv_structures.svduprend, 0);
+        assert_eq!(sv_structures.svinvfend3, 0);
+        assert_eq!(sv_structures.svinvrend3, 0);
+        assert_eq!(sv_structures.svinvfend5, 0);
+        assert_eq!(sv_structures.svinvrend5, 0);
+        assert!(sv_structures.svfdel.is_empty());
+        assert!(sv_structures.svrdel.is_empty());
+        assert!(sv_structures.svfdup.is_empty());
+        assert!(sv_structures.svrdup.is_empty());
+        assert!(sv_structures.svfinv3.is_empty());
+        assert!(sv_structures.svfinv5.is_empty());
+        assert!(sv_structures.svrinv3.is_empty());
+        assert!(sv_structures.svrinv5.is_empty());
+        assert!(sv_structures.svffus.is_empty());
+        assert!(sv_structures.svrfus.is_empty());
+        assert!(sv_structures.svfusfend.is_empty());
+        assert!(sv_structures.svfusrend.is_empty());
+    }
+
+    #[test]
+    fn sv_structures_fields_mutate_as_expected() {
+        let mut sv_structures = SVStructures::default();
+        let forward_clip = Sclip {
+            sequence: Some(String::from("ACGT")),
+            start: 101,
+            end: 125,
+            ..Sclip::default()
+        };
+        let reverse_clip = Sclip {
+            sequence: Some(String::from("TGCA")),
+            start: 130,
+            end: 160,
+            ..Sclip::default()
+        };
+
+        sv_structures.svdelfend = 11;
+        sv_structures.svdelrend = 12;
+        sv_structures.svdupfend = 21;
+        sv_structures.svduprend = 22;
+        sv_structures.svinvfend3 = 31;
+        sv_structures.svinvrend3 = 32;
+        sv_structures.svinvfend5 = 41;
+        sv_structures.svinvrend5 = 42;
+        sv_structures.svfdel.push(forward_clip.clone());
+        sv_structures.svrdel.push(reverse_clip.clone());
+        sv_structures.svfdup.push(forward_clip.clone());
+        sv_structures.svrdup.push(reverse_clip.clone());
+        sv_structures.svfinv3.push(forward_clip.clone());
+        sv_structures.svfinv5.push(reverse_clip.clone());
+        sv_structures.svrinv3.push(forward_clip.clone());
+        sv_structures.svrinv5.push(reverse_clip.clone());
+        sv_structures
+            .svffus
+            .insert(String::from("chr2"), vec![forward_clip.clone()]);
+        sv_structures
+            .svrfus
+            .insert(String::from("chr3"), vec![reverse_clip.clone()]);
+        sv_structures.svfusfend.insert(String::from("chr2"), 500);
+        sv_structures.svfusrend.insert(String::from("chr3"), 750);
+
+        assert_eq!(sv_structures.svdelfend, 11);
+        assert_eq!(sv_structures.svdelrend, 12);
+        assert_eq!(sv_structures.svdupfend, 21);
+        assert_eq!(sv_structures.svduprend, 22);
+        assert_eq!(sv_structures.svinvfend3, 31);
+        assert_eq!(sv_structures.svinvrend3, 32);
+        assert_eq!(sv_structures.svinvfend5, 41);
+        assert_eq!(sv_structures.svinvrend5, 42);
+        assert_eq!(sv_structures.svfdel.len(), 1);
+        assert_eq!(sv_structures.svrdel.len(), 1);
+        assert_eq!(sv_structures.svfdup.len(), 1);
+        assert_eq!(sv_structures.svrdup.len(), 1);
+        assert_eq!(sv_structures.svfinv3.len(), 1);
+        assert_eq!(sv_structures.svfinv5.len(), 1);
+        assert_eq!(sv_structures.svrinv3.len(), 1);
+        assert_eq!(sv_structures.svrinv5.len(), 1);
+        assert_eq!(
+            sv_structures.svffus["chr2"][0].sequence.as_deref(),
+            Some("ACGT")
+        );
+        assert_eq!(
+            sv_structures.svrfus["chr3"][0].sequence.as_deref(),
+            Some("TGCA")
+        );
+        assert_eq!(sv_structures.svfusfend["chr2"], 500);
+        assert_eq!(sv_structures.svfusrend["chr3"], 750);
+    }
+
+    #[test]
+    fn sv_structures_serde_roundtrip_preserves_fields() {
+        let mut sv_structures = SVStructures {
+            svdelfend: 10,
+            svdelrend: 11,
+            svdupfend: 20,
+            svduprend: 21,
+            svinvfend3: 30,
+            svinvrend3: 31,
+            svinvfend5: 40,
+            svinvrend5: 41,
+            ..SVStructures::default()
+        };
+        let fusion_clip = Sclip {
+            sequence: Some(String::from("GGGG")),
+            start: 201,
+            end: 230,
+            ..Sclip::default()
+        };
+        sv_structures.svfinv3.push(fusion_clip.clone());
+        sv_structures
+            .svffus
+            .insert(String::from("chr10"), vec![fusion_clip.clone()]);
+        sv_structures.svfusfend.insert(String::from("chr10"), 901);
+        sv_structures.svfusrend.insert(String::from("chr11"), 902);
+
+        let json = serde_json::to_string(&sv_structures).unwrap();
+        let roundtrip: SVStructures = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(roundtrip.svdelfend, 10);
+        assert_eq!(roundtrip.svdupfend, 20);
+        assert_eq!(roundtrip.svinvrend5, 41);
+        assert_eq!(roundtrip.svfinv3.len(), 1);
+        assert_eq!(
+            roundtrip.svffus["chr10"][0].sequence.as_deref(),
+            Some("GGGG")
+        );
+        assert_eq!(roundtrip.svfusfend["chr10"], 901);
+        assert_eq!(roundtrip.svfusrend["chr11"], 902);
+    }
+
+    #[test]
+    fn variation_map_sv_default_matches_java_zero_state() {
+        let sv = VariationMapSV::default();
+
+        assert_eq!(sv.type_, None);
+        assert_eq!(sv.pairs, 0);
+        assert_eq!(sv.splits, 0);
+        assert_eq!(sv.clusters, 0);
     }
 
     proptest! {

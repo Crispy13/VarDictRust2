@@ -4,7 +4,7 @@ description: >
   output. Use when: verifying module parity, running parity tests, reporting divergences.
   Always use after Port Engineer completes a module.
 name: Parity Verifier
-tools: [read, search, execute]
+tools: [vscode/memory, vscode/resolveMemoryFileUri, execute, read, search]
 model: ['GPT-5.4 (copilot)', ]
 user-invocable: false
 disable-model-invocation: true

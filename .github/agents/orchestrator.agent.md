@@ -3,7 +3,7 @@ description: >
   Orchestrator for VarDict-rs Java→Rust porting project. Use when: planning next
   module to port, routing tasks to Port Engineer/Verifier/Reviewer, deciding module
   sequencing, enforcing parity gates, escalating high-risk modules to Java Analyst.
-name: Orchestrator
+name: 🥖Parity-Orchestrator
 tools: [vscode, read, agent, browser, edit, search, web, 'gitkraken/*', todo]
 model: ['Claude Opus 4.6 (copilot)', ]
 user-invocable: true

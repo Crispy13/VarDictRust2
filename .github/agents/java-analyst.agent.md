@@ -4,7 +4,7 @@ description: >
   Use when: Orchestrator identifies high-risk module (LOC > 1000, complex control flow,
   2+ prior parity failures). Produces behavioral brief for Port Engineer.
 name: Java Analyst
-tools: [read, search, web]
+tools: [vscode/memory, vscode/resolveMemoryFileUri, read, search, web]
 model: ['Claude Opus 4.6 (fast mode) (Preview) (copilot)', 'Claude Opus 4.6 (copilot)', ]
 user-invocable: false
 disable-model-invocation: true
