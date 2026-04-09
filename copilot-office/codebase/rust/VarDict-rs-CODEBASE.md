@@ -32,7 +32,7 @@ Rows below mirror the Java cache structure so Java↔Rust correspondence can be 
 | Configuration and CLI | `src/config.rs` | LOW | [configuration.md](configuration.md) | not started |
 | RegionBuilder | `src/reference.rs` | MEDIUM | [region_builder.md](region_builder.md) | not started |
 | Modes | `src/scope.rs` | LOW | [modes.md](modes.md) | not started |
-| SAMFileParser | `src/data.rs` | MEDIUM | [sam_file_parser.md](sam_file_parser.md) | not started |
+| SAMFileParser | `src/mods/sam_file_parser.rs` | MEDIUM | [sam_file_parser.md](sam_file_parser.md) | complete |
 | CigarModifier | `src/data.rs` | MEDIUM | [cigar_modifier.md](cigar_modifier.md) | not started |
 | CigarParser | `src/data.rs` | HIGH | [cigar_parser.md](cigar_parser.md) | not started |
 | VariationRealigner | `src/variations.rs` | HIGH | [variation_realigner.md](variation_realigner.md) | not started |
@@ -48,7 +48,7 @@ Rows below mirror the Java cache structure so Java↔Rust correspondence can be 
 
 ## Coverage Summary
 
-- Rust cache docs in this index: 2 module docs (variations.md, scope_data.md), placeholder index for remaining modules
+- Rust cache docs in this index: 3 module docs (variations.md, scope_data.md, sam_file_parser.md), placeholder index for remaining modules
 - Expected workflow: create per-module docs as Review Gate updates Rust cache coverage after approved reviews
 
 ## Per-Module File Template
