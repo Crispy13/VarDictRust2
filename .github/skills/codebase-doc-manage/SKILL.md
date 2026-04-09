@@ -110,10 +110,10 @@ Run when asked to check cache health or before a large parity sweep.
 
 ## Documentation Gate Protocol
 
-Use this after receiving a report from `java-analyst` or `rust-implementer`.
+Use this after receiving a report from `Module Analyst` or `Port Engineer`.
 
 1. Save the report to a session file: `/memories/session/{agent}-{module}-report.md`.
-2. Dispatch `codebase-librarian` with `report_path`, `module`, `language`, and `mode: update`.
+2. Dispatch `Review Gate` with `report_path`, `module`, `language`, and `mode: update`.
 3. Verify the librarian response contains a `Cache Update:` footer before you treat the doc task as complete.
 
 | Footer Value | Action |
@@ -123,7 +123,7 @@ Use this after receiving a report from `java-analyst` or `rust-implementer`.
 | `Cache Update: no actionable content ...` | Acceptable — log and proceed |
 | Footer absent or error | Re-dispatch the librarian once. If it fails twice, log the gap and continue; do not block parity work on doc failures. |
 
-Before switching to a new module, run a module-transition audit by dispatching `codebase-librarian` in `audit` mode for modules touched in the current session.
+Before switching to a new module, run a module-transition audit by dispatching `Review Gate` in `audit` mode for modules touched in the current session.
 
 ## Constraints
 

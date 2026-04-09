@@ -28,7 +28,7 @@ You are the sole implementer. Read Java code, translate it to Rust with byte-ide
 
 Use the `faithful-port` skill for porting tasks. It provides:
 
-1. **Orient** — Read task brief from the path provided by Orchestrator. Read Java module docs, extract parity traps.
+1. **Orient** — Read task brief from the path provided by Orchestrator. If a design brief path is included, read it first: adopt its module classification and decomposition plan. Then read Java module docs parity traps section to validate traps and verify cross-module dependencies. If the design brief appears incomplete or contradicts the Java docs, escalate to Orchestrator — do not silently override the design phase.
 2. **Implement** — Faithful translation: line-by-line logic, IndexMap for LinkedHashMap, HALF_UP float formatting, traceability comments.
 3. **Structural Review** — Self-check: all methods ported, no todo!(), IndexMap where LinkedHashMap, floats use java_format_double().
 4. **Test** — `cargo build --profile debug-release && cargo test --profile debug-release -- --include-ignored`
@@ -54,6 +54,7 @@ Use the `faithful-port` skill for porting tasks. It provides:
 - Lint: ✅/❌ (`cargo clippy -- -D warnings`, `cargo fmt --check`)
 
 ## Parity Traps Addressed
+- Design brief traps validated: ✅/❌ (any discrepancies noted)
 {Specific traps handled}
 
 ## Blockers (if any)

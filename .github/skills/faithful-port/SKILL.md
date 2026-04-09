@@ -20,6 +20,8 @@ The rationale: premature idiomatic Rust introduces divergences that are hard to 
 
 Before starting, classify the module to pick the right approach:
 
+When a Module Analyst design brief is provided, use its classification — it is authoritative. The rubric below is the fallback for runs without a design brief.
+
 **Can I test this module with a single function call using known scalar inputs?**
 
 - **YES → TDD-heavy.** Write a Java fixture probe, capture exact outputs, write `#[test]` functions with Java outputs as expected values, then implement to make tests pass.
@@ -32,6 +34,18 @@ Before starting, classify the module to pick the right approach:
     - Examples: Variation, Variant, Region, Sclip, ScopeData containers.
 
 ## Phase 1: Orient
+
+**If the task brief references a design brief path:**
+- Read the design brief from the provided session memory path.
+- Adopt the module classification from the brief; it is authoritative. Do NOT re-derive classification.
+- Adopt the decomposition plan from the brief (method clusters, data layout). Do NOT re-derive.
+- Skip generating a condensed parity brief; the design brief replaces it.
+- STILL DO: Read Java module docs from `copilot-office/codebase/java/{Module}.md`. Extract parity traps and verify cross-module dependencies. This is a targeted read, not full behavioral analysis.
+- If any contradiction is found between the brief and Java docs, escalate to Orchestrator before proceeding to Phase 2.
+
+**If no design brief is referenced in the task brief:** Execute the full Phase 1 Orient below as-is.
+
+### Full Orient (no design brief)
 
 Read the module's Java documentation from `copilot-office/codebase/java/{Module}.md`. Extract:
 
@@ -170,17 +184,18 @@ If tests or parity checks fail:
 ## Relationship to Other Skills
 
 ```
-active-plan  ──→  faithful-port  ──→  module-parity-test / cargo test
-(what to port)    (how to port)       (verify output)
-                                            ↓ (if failures)
-                                      shard-diagnosis  ──→  mismatch-repair
-                                      (find divergence)     (fix in-place)
-                                                                  ↓
-                                                          tiered-config-test
-                                                          (verify broadly)
+active-plan      ──→  module-analyst  ──→  faithful-port  ──→  module-parity-test / cargo test
+(what to port)        (design brief)       (how to port)       (verify output)
+                                                                     ↓ (if failures)
+                                                               shard-diagnosis  ──→  mismatch-repair
+                                                               (find divergence)     (fix in-place)
+                                                                                 ↓
+                                                                         tiered-config-test
+                                                                         (verify broadly)
 ```
 
 - **Active plan:** Upstream. Tells the agent which module to port. This skill tells the agent how.
+- **Module Analyst:** Upstream. Produces design brief with classification, decomposition, and design decisions. faithful-port Phase 1 consumes it when available.
 - **module-parity-test:** Downstream. Verifies pipeline module output against Java golden fixtures.
 - **mismatch-repair:** Downstream. Fixes parity mismatches found during testing.
 - **shard-diagnosis:** Downstream. Diagnoses specific shard failures.
