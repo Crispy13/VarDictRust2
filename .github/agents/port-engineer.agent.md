@@ -6,7 +6,7 @@ description: >
   module implementation.
 name: Port Engineer
 tools: [vscode/memory, vscode/resolveMemoryFileUri, execute, read, edit, search, web]
-model: ['GPT-5.4 (copilot)']
+model: ['Claude Opus 4.6 (copilot)']
 user-invocable: false
 disable-model-invocation: true
 ---

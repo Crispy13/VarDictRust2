@@ -1,0 +1,106 @@
+# Sweep Parity
+
+## Overview
+
+The sweep parity gate has two tiers:
+
+- Tier 1: fast gate over 100 sampled regions using committed fixtures in `testdata/fixtures/`.
+- Tier 2: promotion gate over the full sampled BED sweep using ephemeral fixtures in `tmp/sweep_fixtures/`.
+
+Tier 1 is for routine validation. Tier 2 is for broader parity coverage before promotion when you need much higher confidence.
+
+## Prerequisites
+
+Activate the Rust build environment before running scripts or tests:
+
+```bash
+conda activate rust_build_env && export LIBCLANG_PATH="$CONDA_PREFIX/lib"
+```
+
+Required tools:
+
+- `bedtools` for sweep BED generation:
+
+```bash
+conda install -c bioconda bedtools
+```
+
+- VarDictJava built and runnable from `VarDictJava/build/install/VarDict/bin/VarDict`.
+  If needed:
+
+```bash
+(cd VarDictJava && ./gradlew installDist)
+```
+
+## Workflow
+
+```bash
+# Step 1: Generate sweep BEDs for each BAM
+scripts/gen_sweep_bed.sh --min-interval 700 testdata/NA12878.chrom20.ILLUMINA.bwa.CEU.exome.20121211.bam na12878_exome
+scripts/gen_sweep_bed.sh --min-interval 700 testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam hg002
+scripts/gen_sweep_bed.sh --min-interval 700 testdata/NA12878.mapped.ILLUMINA.bwa.CEU.low_coverage.20121211.bam na12878_lowcov
+
+# Step 2: Generate sweep fixtures
+scripts/sweep_fixtures.sh
+
+# Step 3: A-A determinism spot-check
+scripts/sweep_aa_check.sh
+
+# Step 4: Run sweep parity tests
+cargo test --profile debug-release -- --include-ignored parity_cigar_parser_sweep
+cargo test --profile debug-release -- --include-ignored parity_realigner_sweep
+cargo test --profile debug-release -- --include-ignored parity_sv_processor_sweep
+cargo test --profile debug-release -- --include-ignored parity_tovars_sweep
+```
+
+Notes:
+
+- `scripts/gen_sweep_bed.sh` writes per-chromosome BED files under `tmp/sweep_beds/<bam_tag>/`.
+- `scripts/sweep_fixtures.sh` reads those BEDs and emits JSONL fixtures under `tmp/sweep_fixtures/` by default.
+- `scripts/sweep_aa_check.sh` samples 100 deterministic regions from `tmp/sweep_beds/` and runs VarDictJava twice per region to catch nondeterminism before Rust-vs-Java parity runs.
+- `scripts/sweep_fixtures.sh --bam-tags na12878_exome,hg002` limits fixture generation to selected BAM tags.
+- `scripts/sweep_fixtures.sh --dry-run` prints the planned work without invoking VarDictJava.
+
+## Scale
+
+With `--min-interval 700`, the current `na12878_exome` sweep produces about 39,484 tiles. Other BAMs differ, but full-sweep runs are substantially larger than the 100-region Tier 1 gate.
+
+## Stale Fixtures
+
+`tmp/sweep_fixtures/manifest.json` records the `vardictjava_commit` used to generate the sweep fixtures. The sweep tests compare that value against `git -C VarDictJava rev-parse HEAD` and fail fast if they do not match.
+
+If the tests report stale sweep fixtures, regenerate them:
+
+```bash
+scripts/sweep_fixtures.sh
+```
+
+## Fixture Directory Override
+
+The sweep tests read fixtures from `tmp/sweep_fixtures/` by default. Override that location with `VARDICT_SWEEP_FIXTURE_DIR`:
+
+```bash
+export VARDICT_SWEEP_FIXTURE_DIR=/path/to/sweep_fixtures
+```
+
+Point it at a directory with the same layout, including `manifest.json` and the module subdirectories.
+
+## Troubleshooting
+
+- `ERROR: bedtools is not available in PATH`
+  Install it in the active conda env with `conda install -c bioconda bedtools`.
+
+- `ERROR: sweep BED directory not found` or `ERROR: no sweep BED regions found`
+  Run the three `scripts/gen_sweep_bed.sh` commands first, then rerun `scripts/sweep_fixtures.sh` or `scripts/sweep_aa_check.sh`.
+
+- `ERROR: VarDictJava binary not found`
+  Build VarDictJava with `(cd VarDictJava && ./gradlew installDist)`. The sweep scripts try to do this automatically, so persistent failures usually mean the Gradle build itself is broken.
+
+- `Sweep fixture directory not found` in Rust tests
+  Generate fixtures with `scripts/sweep_fixtures.sh`, or set `VARDICT_SWEEP_FIXTURE_DIR` to an existing sweep fixture root.
+
+- `Sweep fixtures are stale. Regenerate with: scripts/sweep_fixtures.sh`
+  The checked-out VarDictJava commit changed after fixture generation. Regenerate the sweep fixtures.
+
+- `scripts/sweep_aa_check.sh` reports run failures or diffs
+  Treat that as a VarDictJava determinism issue first; fix the A-A failure before trusting any Rust-vs-Java sweep result.
