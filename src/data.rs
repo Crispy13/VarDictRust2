@@ -318,6 +318,34 @@ pub struct SVStructures {
     pub svfusrend: HashMap<String, i32>,
 }
 
+// Java: InitialData L14-L42
+#[derive(Debug, Default)]
+pub struct InitialData {
+    pub non_insertion_variants: HashMap<i32, VariationMap>,
+    pub insertion_variants: HashMap<i32, VariationMap>,
+    pub ref_coverage: HashMap<i32, i32>,
+    pub soft_clips_5_end: HashMap<i32, Sclip>,
+    pub soft_clips_3_end: HashMap<i32, Sclip>,
+}
+
+impl InitialData {
+    pub fn new(
+        non_insertion_variants: HashMap<i32, VariationMap>,
+        insertion_variants: HashMap<i32, VariationMap>,
+        ref_coverage: HashMap<i32, i32>,
+        soft_clips_3_end: HashMap<i32, Sclip>,
+        soft_clips_5_end: HashMap<i32, Sclip>,
+    ) -> Self {
+        Self {
+            non_insertion_variants,
+            insertion_variants,
+            ref_coverage,
+            soft_clips_5_end,
+            soft_clips_3_end,
+        }
+    }
+}
+
 // Java: VariationData L11-L40 (CigarParser output boundary type)
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VariationData {
@@ -915,6 +943,22 @@ pub struct AlignedVarsData {
     pub aligned_variants: HashMap<i32, Vars>,
 }
 
+// Java: CombineAnalysisData L7-L15
+#[derive(Debug)]
+pub struct CombineAnalysisData {
+    pub max_read_length: i32,
+    pub type_: String,
+}
+
+impl CombineAnalysisData {
+    pub fn new(max_read_length: i32, type_: impl Into<String>) -> Self {
+        Self {
+            max_read_length,
+            type_: type_.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -997,6 +1041,25 @@ mod tests {
         assert_eq!(segment.chr, "chr7");
         assert_eq!(segment.start, 30);
         assert_eq!(segment.end, 40);
+    }
+
+    #[test]
+    fn initial_data_default_creates_empty_maps() {
+        let initial_data = InitialData::default();
+
+        assert!(initial_data.non_insertion_variants.is_empty());
+        assert!(initial_data.insertion_variants.is_empty());
+        assert!(initial_data.ref_coverage.is_empty());
+        assert!(initial_data.soft_clips_5_end.is_empty());
+        assert!(initial_data.soft_clips_3_end.is_empty());
+    }
+
+    #[test]
+    fn combine_analysis_data_new_sets_fields() {
+        let combine_analysis_data = CombineAnalysisData::new(150, "SNV");
+
+        assert_eq!(combine_analysis_data.max_read_length, 150);
+        assert_eq!(combine_analysis_data.type_, "SNV");
     }
 
     #[test]

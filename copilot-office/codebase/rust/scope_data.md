@@ -25,8 +25,8 @@ Pipeline infrastructure module providing two state containers (`Scope<T>`, `Glob
 | `Variant::is_noise()` | yes | Noise gate: mutates self (zeroes counts) if criteria met |
 | `Variant::adj_complex()` | yes | Prefix/suffix allele trimming using substr helpers |
 | `Variant::var_type()` | yes | Allele classification: SNV/Insertion/Deletion/Complex/SV |
-| `Variant::is_good_var()` | yes | Multi-criteria quality filter (10+ stages) |
-
+| `Variant::is_good_var()` | yes | Multi-criteria quality filter (10+ stages) || `InitialData` | yes | 5 HashMap fields for variants/coverage/softclips; Default impl |
+| `CombineAnalysisData` | yes | max_read_length + type_ data holder for combine analysis |
 ## Java↔Rust Correspondence
 
 | Java | Rust | Notes |
@@ -42,6 +42,8 @@ Pipeline infrastructure module providing two state containers (`Scope<T>`, `Glob
 | `Variant.adjComplex()` | `Variant::adj_complex(&mut self)` | Uses substr/substr_with_len |
 | `Variant.varType()` | `Variant::var_type(&self) -> String` | Uses ANY_SV regex |
 | `Variant.isGoodVar(Variant, String, Set)` | `Variant::is_good_var(&self, Option<&Variant>, Option<&str>, &HashSet, &Configuration)` | Explicit conf param |
+| `InitialData` (5 HashMap fields) | `InitialData` in `src/data.rs` (L323) | HashMap outer maps, VariationMap inner; Default → 5 empty maps |
+| `CombineAnalysisData` (int + String) | `CombineAnalysisData` in `src/data.rs` (L948) | `type` → `type_` keyword rename |
 | `Set<String> splice` in Scope | `Arc<HashSet<String>>` | HashSet for .contains() only |
 | `samplem: String` (nullable) | `samplem: Option<String>` | Nullable semantics preserved |
 | `ampliconBasedCalling: String` (nullable) | `amplicon_based_calling: Option<String>` | Nullable semantics preserved |
