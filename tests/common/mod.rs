@@ -1,8 +1,4 @@
-use std::{
-    fs::File,
-    io::Read,
-    path::PathBuf,
-};
+use std::{fs::File, io::Read, path::PathBuf};
 
 #[allow(dead_code)]
 pub fn load_region_config() -> Vec<(String, PathBuf, PathBuf)> {
@@ -83,21 +79,12 @@ pub fn check_sweep_manifest() {
             manifest_path.display()
         )
     });
-    let manifest_json: serde_json::Value = serde_json::from_str(&manifest).unwrap_or_else(|error| {
-        panic!(
-            "Failed to parse {}: {error}",
-            manifest_path.display()
-        )
-    });
+    let manifest_json: serde_json::Value = serde_json::from_str(&manifest)
+        .unwrap_or_else(|error| panic!("Failed to parse {}: {error}", manifest_path.display()));
     let manifest_commit = manifest_json
         .get("vardictjava_commit")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or_else(|| {
-            panic!(
-                "Missing vardictjava_commit in {}",
-                manifest_path.display()
-            )
-        });
+        .unwrap_or_else(|| panic!("Missing vardictjava_commit in {}", manifest_path.display()));
     let output = std::process::Command::new("git")
         .args(["-C", "VarDictJava", "rev-parse", "HEAD"])
         .output()
@@ -159,10 +146,7 @@ pub fn sweep_fixture_path(module: &str, region: &str) -> PathBuf {
         .unwrap_or_else(|| panic!("Invalid sweep region range: {region}"));
     let filename = format!("{module}_{chrom}_{start}_{end}.jsonl.zst");
 
-    sweep_fixture_base()
-        .join(module)
-        .join(chrom)
-        .join(filename)
+    sweep_fixture_base().join(module).join(chrom).join(filename)
 }
 
 #[allow(dead_code)]

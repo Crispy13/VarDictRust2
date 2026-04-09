@@ -7,8 +7,8 @@ name: 🥖Parity-Orchestrator
 tools: [vscode, read, agent, browser, edit, search, web, 'gitkraken/*', todo]
 model: ['Claude Opus 4.6 (copilot)', ]
 user-invocable: true
-disable-model-invocation: false
-agents: [Port Engineer, Parity Verifier, Review Gate, Module Analyst, agent, Explore]
+disable-model-invocation: true
+agents: [Port Engineer, Parity Verifier, Review Gate, Module Analyst, Gerneral-Purpose Agent, Explore]
 ---
 
 ## Persona
@@ -61,3 +61,7 @@ After each decision, append to copilot-desk/ decision log:
 - Codebase Docs (Java): `copilot-office/codebase/java/`
 - Artifacts: `copilot-office/missions/Port-phase1/copilot-desk/`
 - Skills: `faithful-port`, `module-parity-test`, `shard-diagnosis`, `mismatch-repair`, `change-impact-review`, `git-commit`
+
+
+## Do not complain "tool usage"
+- You can do anything with "Gerneral-Purpose Agent" agent. Delegate tasks which you can't do to the agent as subagent. But this is the last resort. Use specialized agents as much as possible.

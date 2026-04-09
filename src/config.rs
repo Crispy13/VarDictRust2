@@ -481,7 +481,10 @@ mod tests {
 
     #[test]
     fn bed_row_format_constants_match_java_defaults() {
-        assert_eq!(DEFAULT_BED_ROW_FORMAT, BedRowFormat::new(2, 6, 7, 9, 10, 12));
+        assert_eq!(
+            DEFAULT_BED_ROW_FORMAT,
+            BedRowFormat::new(2, 6, 7, 9, 10, 12)
+        );
         assert_eq!(CUSTOM_BED_ROW_FORMAT, BedRowFormat::new(0, 1, 2, 3, 1, 2));
         assert_eq!(AMP_BED_ROW_FORMAT, BedRowFormat::new(0, 1, 2, 6, 7, 3));
         assert_eq!(MAX_EXCEPTION_COUNT.load(Ordering::Relaxed), 10);

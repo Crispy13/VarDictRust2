@@ -7,7 +7,7 @@ name: Review Gate
 tools: [vscode/memory, vscode/resolveMemoryFileUri, edit, execute, read, search, web]
 model: ['Claude Opus 4.6 (fast mode) (Preview) (copilot)', 'Claude Opus 4.6 (copilot)', ]
 user-invocable: false
-disable-model-invocation: true
+disable-model-invocation: fakse
 ---
 
 ## Persona

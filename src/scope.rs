@@ -206,8 +206,8 @@ impl GlobalReadOnlyScope {
     pub fn set_mode(run_mode: SharedMode) {
         if read_global_mode().is_some() {
             panic!(
-				"Mode was already initialized for GlobalReadOnlyScope. Must be initialized only once."
-			);
+                "Mode was already initialized for GlobalReadOnlyScope. Must be initialized only once."
+            );
         }
 
         write_global_mode(Some(run_mode));

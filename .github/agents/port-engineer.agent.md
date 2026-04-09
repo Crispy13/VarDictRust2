@@ -8,7 +8,7 @@ name: Port Engineer
 tools: [vscode/memory, vscode/resolveMemoryFileUri, execute, read, edit, search, web]
 model: ['Claude Opus 4.6 (copilot)']
 user-invocable: false
-disable-model-invocation: true
+disable-model-invocation: false
 ---
 
 ## Persona

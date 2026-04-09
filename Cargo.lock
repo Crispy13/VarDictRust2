@@ -1969,6 +1969,7 @@ dependencies = [
  "once_cell",
  "ordered-float",
  "proptest",
+ "rand 0.8.5",
  "regex",
  "rust-htslib",
  "rustc-hash",
