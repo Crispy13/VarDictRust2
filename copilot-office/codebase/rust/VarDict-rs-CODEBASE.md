@@ -41,14 +41,14 @@ Rows below mirror the Java cache structure so Java↔Rust correspondence can be 
 | PostProcessModules | `src/parity/format.rs` | HIGH | [post_process_modules.md](post_process_modules.md) | not started |
 | OutputVariant Printers | `src/parity/format.rs` | MEDIUM | [output_variant.md](output_variant.md) | not started |
 | FisherExact | `src/fisher.rs` | HIGH | [fisher_exact.md](fisher_exact.md) | not started |
-| ScopeData | `src/scope.rs`<br>`src/data.rs` | LOW | [scope_data.md](scope_data.md) | not started |
+| ScopeData | `src/scope.rs`<br>`src/data.rs` | LOW | [scope_data.md](scope_data.md) | complete |
 | VariationMap and Collections | `src/data.rs` | LOW | [variation_map.md](variation_map.md) | not started |
 | Variations | `src/variations.rs` | MEDIUM | [variations.md](variations.md) | complete |
 | Utils | `src/utils.rs`<br>`src/patterns.rs` | LOW | [utils.md](utils.md) | not started |
 
 ## Coverage Summary
 
-- Rust cache docs in this index: 1 module doc (variations.md), placeholder index for remaining modules
+- Rust cache docs in this index: 2 module docs (variations.md, scope_data.md), placeholder index for remaining modules
 - Expected workflow: create per-module docs as Review Gate updates Rust cache coverage after approved reviews
 
 ## Per-Module File Template

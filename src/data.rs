@@ -1,9 +1,13 @@
 use std::collections::BTreeMap;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use indexmap::IndexMap;
+
+use crate::config::Configuration;
+use crate::patterns::ANY_SV;
+use crate::utils::{substr, substr_with_len};
 
 // Java: Region L9-L106
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -637,6 +641,211 @@ impl Default for Variant {
     }
 }
 
+impl Variant {
+    /// Ported from: Variant.isNoise()
+    /// Java source: Variant.java:L177-L195
+    pub fn is_noise(&mut self, conf: &Configuration) -> bool {
+        let qual = self.mean_quality;
+        if ((qual < 4.5 || (qual < 12.0 && !self.has_at_least_2_diff_qualities))
+            && self.position_coverage <= 3)
+            || (qual < conf.goodq
+                && self.frequency < 2.0 * conf.lofreq
+                && self.position_coverage <= 1)
+        {
+            self.total_pos_coverage = self.total_pos_coverage.wrapping_sub(self.position_coverage);
+            self.position_coverage = 0;
+            self.vars_count_on_forward = 0;
+            self.vars_count_on_reverse = 0;
+            self.frequency = 0.0;
+            self.high_quality_reads_frequency = 0.0;
+            return true;
+        }
+
+        false
+    }
+
+    /// Ported from: Variant.adjComplex()
+    /// Java source: Variant.java:L201-L241
+    pub fn adj_complex(&mut self) {
+        let mut ref_allele = self.refallele.clone();
+        let mut var_allele = self.varallele.clone();
+
+        if var_allele.as_bytes().first() == Some(&b'<') {
+            return;
+        }
+
+        let ref_bytes = ref_allele.as_bytes();
+        let var_bytes = var_allele.as_bytes();
+        let mut n = 0_i32;
+        while i32::try_from(ref_bytes.len()).expect("ref allele length exceeds i32") - n > 1
+            && i32::try_from(var_bytes.len()).expect("var allele length exceeds i32") - n > 1
+            && ref_bytes[usize::try_from(n).expect("negative prefix index")]
+                == var_bytes[usize::try_from(n).expect("negative prefix index")]
+        {
+            n += 1;
+        }
+
+        if n > 0 {
+            self.start_position += n;
+            self.refallele =
+                String::from_utf8_lossy(&substr(ref_allele.as_bytes(), n)).into_owned();
+            self.varallele =
+                String::from_utf8_lossy(&substr(var_allele.as_bytes(), n)).into_owned();
+            self.leftseq
+                .push_str(&String::from_utf8_lossy(&substr_with_len(
+                    ref_allele.as_bytes(),
+                    0,
+                    n,
+                )));
+            self.leftseq =
+                String::from_utf8_lossy(&substr(self.leftseq.as_bytes(), n)).into_owned();
+        }
+
+        ref_allele = self.refallele.clone();
+        var_allele = self.varallele.clone();
+        n = 1;
+        while i32::try_from(ref_allele.len()).expect("ref allele length exceeds i32") - n > 0
+            && i32::try_from(var_allele.len()).expect("var allele length exceeds i32") - n > 0
+            && substr_with_len(ref_allele.as_bytes(), -n, 1)
+                == substr_with_len(var_allele.as_bytes(), -n, 1)
+        {
+            n += 1;
+        }
+
+        if n > 1 {
+            self.end_position -= n - 1;
+            self.refallele =
+                String::from_utf8_lossy(&substr_with_len(ref_allele.as_bytes(), 0, 1 - n))
+                    .into_owned();
+            self.varallele =
+                String::from_utf8_lossy(&substr_with_len(var_allele.as_bytes(), 0, 1 - n))
+                    .into_owned();
+            self.rightseq = format!(
+                "{}{}",
+                String::from_utf8_lossy(&substr_with_len(ref_allele.as_bytes(), 1 - n, n - 1)),
+                String::from_utf8_lossy(&substr_with_len(self.rightseq.as_bytes(), 0, 1 - n))
+            );
+        }
+    }
+
+    /// Ported from: Variant.varType()
+    /// Java source: Variant.java:L249-L274
+    #[allow(clippy::collapsible_if)]
+    pub fn var_type(&self) -> String {
+        if self.refallele == self.varallele && self.refallele.len() == 1 {
+            return String::new();
+        }
+
+        if self.refallele.len() == 1 && self.varallele.len() == 1 {
+            return String::from("SNV");
+        }
+
+        if let Some(captures) = ANY_SV.captures(&self.varallele) {
+            if let Some(kind) = captures.get(1) {
+                return kind.as_str().to_string();
+            }
+        }
+
+        if self.refallele.is_empty() || self.varallele.is_empty() {
+            return String::from("Complex");
+        }
+
+        if self.refallele.as_bytes()[0] != self.varallele.as_bytes()[0] {
+            return String::from("Complex");
+        }
+
+        if self.refallele.len() == 1
+            && self.varallele.len() > 1
+            && self.varallele.starts_with(&self.refallele)
+        {
+            return String::from("Insertion");
+        }
+
+        if self.refallele.len() > 1
+            && self.varallele.len() == 1
+            && self.refallele.starts_with(&self.varallele)
+        {
+            return String::from("Deletion");
+        }
+
+        String::from("Complex")
+    }
+
+    /// Ported from: Variant.isGoodVar(Variant, String, Set<String>)
+    /// Java source: Variant.java:L283-L348
+    #[allow(clippy::collapsible_if)]
+    pub fn is_good_var(
+        &self,
+        reference_var: Option<&Variant>,
+        var_type: Option<&str>,
+        splice: &HashSet<String>,
+        conf: &Configuration,
+    ) -> bool {
+        if self.refallele.is_empty() {
+            return false;
+        }
+
+        let resolved_type = match var_type {
+            Some(kind) if !kind.is_empty() => kind.to_string(),
+            _ => self.var_type(),
+        };
+
+        if self.frequency < conf.freq
+            || self.hicnt < conf.minr
+            || self.mean_position < f64::from(conf.read_pos_filter)
+            || self.mean_quality < conf.goodq
+        {
+            return false;
+        }
+
+        if let Some(reference_var) = reference_var {
+            if reference_var.hicnt > conf.minr && self.frequency < 0.25 {
+                let d = self.mean_mapping_quality
+                    + self.refallele.len() as f64
+                    + self.varallele.len() as f64;
+                let f = (1.0 + d) / (reference_var.mean_mapping_quality + 1.0);
+                if ((d - 2.0 < 5.0) && reference_var.mean_mapping_quality > 20.0) || f < 0.25 {
+                    return false;
+                }
+            }
+        }
+
+        if resolved_type == "Deletion"
+            && splice.contains(&format!("{}-{}", self.start_position, self.end_position))
+        {
+            return false;
+        }
+
+        if self.high_quality_to_low_quality_ratio < conf.qratio {
+            return false;
+        }
+
+        if self.frequency > 0.30 {
+            return true;
+        }
+
+        if self.mean_mapping_quality < conf.mapq {
+            return false;
+        }
+
+        if self.msi >= 15.0 && self.frequency <= conf.monomer_msi_frequency && self.msint == 1 {
+            return false;
+        }
+
+        if self.msi >= 12.0 && self.frequency <= conf.non_monomer_msi_frequency && self.msint > 1 {
+            return false;
+        }
+
+        if self.strand_bias_flag == "2;1" && self.frequency < 0.20 {
+            if resolved_type == "SNV" || (self.refallele.len() < 3 && self.varallele.len() < 3) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
 // Java: Vars L11-L27
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Vars {
@@ -826,6 +1035,161 @@ mod tests {
             Some(&Value::String(String::from("0")))
         );
         assert!(object.contains_key("DEBUG"));
+    }
+
+    fn base_config() -> Configuration {
+        Configuration::default()
+    }
+
+    fn baseline_variant() -> Variant {
+        Variant {
+            refallele: String::from("A"),
+            varallele: String::from("T"),
+            frequency: 0.31,
+            hicnt: 4,
+            mean_position: 12.0,
+            mean_quality: 30.0,
+            high_quality_to_low_quality_ratio: 2.0,
+            mean_mapping_quality: 25.0,
+            strand_bias_flag: String::from("0"),
+            start_position: 100,
+            end_position: 100,
+            ..Variant::default()
+        }
+    }
+
+    #[test]
+    fn variant_is_noise_zeroes_fields_for_low_quality_low_coverage_calls() {
+        let mut variant = Variant {
+            mean_quality: 4.4,
+            has_at_least_2_diff_qualities: false,
+            position_coverage: 3,
+            total_pos_coverage: 10,
+            vars_count_on_forward: 2,
+            vars_count_on_reverse: 1,
+            frequency: 0.15,
+            high_quality_reads_frequency: 0.12,
+            ..Variant::default()
+        };
+
+        assert!(variant.is_noise(&base_config()));
+        assert_eq!(variant.total_pos_coverage, 7);
+        assert_eq!(variant.position_coverage, 0);
+        assert_eq!(variant.vars_count_on_forward, 0);
+        assert_eq!(variant.vars_count_on_reverse, 0);
+        assert_eq!(variant.frequency, 0.0);
+        assert_eq!(variant.high_quality_reads_frequency, 0.0);
+    }
+
+    #[test]
+    fn variant_adj_complex_trims_shared_prefix_and_suffix() {
+        let mut variant = Variant {
+            refallele: String::from("AACG"),
+            varallele: String::from("AATG"),
+            leftseq: String::from("TTAA"),
+            rightseq: String::from("GGCC"),
+            start_position: 10,
+            end_position: 13,
+            ..Variant::default()
+        };
+
+        variant.adj_complex();
+
+        assert_eq!(variant.start_position, 12);
+        assert_eq!(variant.end_position, 12);
+        assert_eq!(variant.refallele, "C");
+        assert_eq!(variant.varallele, "T");
+        assert_eq!(variant.leftseq, "AAAA");
+        assert_eq!(variant.rightseq, "GGGC");
+    }
+
+    #[test]
+    fn variant_var_type_matches_java_classification_rules() {
+        let snv = Variant {
+            refallele: String::from("A"),
+            varallele: String::from("T"),
+            ..Variant::default()
+        };
+        let insertion = Variant {
+            refallele: String::from("A"),
+            varallele: String::from("AT"),
+            ..Variant::default()
+        };
+        let deletion = Variant {
+            refallele: String::from("AT"),
+            varallele: String::from("A"),
+            ..Variant::default()
+        };
+        let structural = Variant {
+            refallele: String::from("A"),
+            varallele: String::from("<DEL>"),
+            ..Variant::default()
+        };
+
+        assert_eq!(snv.var_type(), "SNV");
+        assert_eq!(insertion.var_type(), "Insertion");
+        assert_eq!(deletion.var_type(), "Deletion");
+        assert_eq!(structural.var_type(), "DEL");
+    }
+
+    #[test]
+    fn variant_is_good_var_rejects_splice_deletions() {
+        let variant = Variant {
+            refallele: String::from("AT"),
+            varallele: String::from("A"),
+            start_position: 100,
+            end_position: 101,
+            ..baseline_variant()
+        };
+        let mut splice = HashSet::new();
+        splice.insert(String::from("100-101"));
+
+        assert!(!variant.is_good_var(None, Some("Deletion"), &splice, &base_config()));
+    }
+
+    #[test]
+    fn variant_is_good_var_rejects_low_quality_ratio_before_mapq_checks() {
+        let mut config = base_config();
+        config.qratio = 1.5;
+        let variant = Variant {
+            high_quality_to_low_quality_ratio: 1.49,
+            frequency: 0.29,
+            ..baseline_variant()
+        };
+
+        assert!(!variant.is_good_var(None, Some("SNV"), &HashSet::new(), &config));
+    }
+
+    #[test]
+    fn variant_is_good_var_applies_reference_mapq_penalty() {
+        let variant = Variant {
+            refallele: String::from("A"),
+            varallele: String::from("AT"),
+            frequency: 0.2,
+            mean_mapping_quality: 3.0,
+            ..baseline_variant()
+        };
+        let reference_variant = Variant {
+            hicnt: 5,
+            mean_mapping_quality: 30.0,
+            ..Variant::default()
+        };
+
+        assert!(!variant.is_good_var(
+            Some(&reference_variant),
+            Some("Insertion"),
+            &HashSet::new(),
+            &base_config()
+        ));
+    }
+
+    #[test]
+    fn variant_is_good_var_accepts_high_frequency_call_early() {
+        let mut config = base_config();
+        config.mapq = 60.0;
+        let variant = baseline_variant();
+
+        assert!(variant.is_good_var(None, None, &HashSet::new(), &config));
     }
 
     #[test]
