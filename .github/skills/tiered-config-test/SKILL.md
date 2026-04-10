@@ -14,6 +14,7 @@ argument-hint: "Specify tier like 'tier1', 'config-spread', or 'promote to core-
 ## Purpose
 
 Use a graduated testing pyramid to expand config coverage without defaulting to the full 44 x 25 release matrix on every change. Start with fast smoke validation, promote only after each gate passes, and reserve pairwise and full-release sweeps for broader interaction and ship-readiness checks.
+Verify the `logic-parity-audit` report is all-VERIFIED or explicitly user-approved before starting Tier 2 or broader presets.
 
 ## Testing Pyramid
 

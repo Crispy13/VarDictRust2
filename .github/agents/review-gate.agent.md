@@ -33,7 +33,7 @@ You are the final independent reviewer. Verify correctness, assess performance, 
   - Check: Were parity traps from the brief addressed in the implementation?
   - Check: Were data layout decisions implemented as designed (struct fields, collection types)?
   - If no design brief was provided, skip this section.
-1. **Parity Spot-Check** — Read Rust implementation, compare 3-5 key methods against Java module docs. Check parity traps (IndexMap, HALF_UP, null→Option).
+1. **Parity Spot-Check** — Read Rust implementation, compare 3-5 key methods against Java module docs. Check parity traps (IndexMap, HALF_UP, null→Option). If a `logic-parity-audit` report is available in session memory or `tmp/logic-parity-audit/`, read it and incorporate its findings — pay particular attention to any NEEDS_REVIEW or FAILED rows.
   - For any mismatch fix included in this review: verify the fix modifies the logic that computed the wrong value, not a downstream wrapper or conversion. A fix that adds a new function to transform an already-computed result is treating the symptom — the `mismatch-repair` skill's anti-adapter rule explains why this leads to long-term accumulation of fragile shims. Flag such fixes for justification.
 2. **Code Quality** — Readability, safety (no unjustified unsafe), consistency with `rust.instructions.md`, traceability comments.
 3. **Performance Impact** — Use `change-impact-review` skill. Hot-path + algorithm change = HIGH risk. Run benchmarks if MEDIUM/HIGH.

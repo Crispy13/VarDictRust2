@@ -79,7 +79,7 @@ fn update_scope(scope: VariationUtilsScope) {
     }
 }
 
-fn get_dir(variation: &Variation, dir: bool) -> i32 {
+pub fn get_dir(variation: &Variation, dir: bool) -> i32 {
     if dir {
         variation.vars_count_on_reverse
     } else {
@@ -87,7 +87,7 @@ fn get_dir(variation: &Variation, dir: bool) -> i32 {
     }
 }
 
-fn add_dir(variation: &mut Variation, dir: bool, add: i32) {
+pub fn add_dir(variation: &mut Variation, dir: bool, add: i32) {
     if dir {
         variation.vars_count_on_reverse += add;
     } else {
@@ -95,7 +95,7 @@ fn add_dir(variation: &mut Variation, dir: bool, add: i32) {
     }
 }
 
-fn sub_dir(variation: &mut Variation, dir: bool, sub: i32) {
+pub fn sub_dir(variation: &mut Variation, dir: bool, sub: i32) {
     if dir {
         variation.vars_count_on_reverse -= sub;
     } else {

@@ -119,6 +119,8 @@ cargo test --profile debug-release --test 'parity_*' -- --include-ignored
 #### All tests pass → PARITY ACHIEVED
 
 Report success. The module's parity test `#[ignore]` attribute should be removed to make it part of the regular test suite. Update the active plan marking the module as parity-verified.
+After Tier 1 passes, route the module to `logic-parity-audit` for white-box
+verification before advancing to `tiered-config-test` or other Tier 2 sweep coverage.
 
 #### Tests fail → Route to Diagnosis
 

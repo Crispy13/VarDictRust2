@@ -157,9 +157,10 @@ cargo fmt --check
 
 Based on module type:
 
-- **TDD-heavy (leaf modules):** Run `cargo test --profile debug-release -- --include-ignored`. All fixture tests must pass.
+- **TDD-heavy (leaf modules):** Run `cargo test --profile debug-release -- --include-ignored`. All fixture tests must pass. After passing, route to `logic-parity-audit` for method-level verification before promotion review.
 - **SDD (data types):** Compile gate passed in Phase 3. Done — these are tested implicitly by consumers.
 - **Analysis-heavy (pipeline modules):** Hand off to the `module-parity-test` skill for JSONL golden fixture comparison, or to the shard parity harness for TSV output comparison.
+  After Tier 1 parity passes, route next to `logic-parity-audit` before any Tier 2 sweep or promotion review.
 
 ## Phase 5: Fix Failures
 
@@ -186,18 +187,25 @@ If tests or parity checks fail:
 ```
 active-plan      ──→  module-analyst  ──→  faithful-port  ──→  module-parity-test / cargo test
 (what to port)        (design brief)       (how to port)       (verify output)
-                                                                     ↓ (if failures)
+                                                                     │ (pass)
+                                                                     ↓
+                                                               logic-parity-audit
+                                                               (white-box method check)
+                                                                     │ (pass)
+                                                                     ↓
+                                                               tiered-config-test
+                                                               (verify broadly)
+                                                                     │ (if failures)
+                                                                     ↓
                                                                shard-diagnosis  ──→  mismatch-repair
                                                                (find divergence)     (fix in-place)
-                                                                                 ↓
-                                                                         tiered-config-test
-                                                                         (verify broadly)
 ```
 
 - **Active plan:** Upstream. Tells the agent which module to port. This skill tells the agent how.
 - **Module Analyst:** Upstream. Produces design brief with classification, decomposition, and design decisions. faithful-port Phase 1 consumes it when available.
-- **module-parity-test:** Downstream. Verifies pipeline module output against Java golden fixtures.
+- **module-parity-test:** Downstream. Verifies pipeline module output against Java golden fixtures. Must pass before logic-parity-audit.
+- **logic-parity-audit:** Downstream. White-box method-level comparison between Java source and Rust implementation after Tier 1 parity passes. Runs before Tier 2 sweep.
 - **mismatch-repair:** Downstream. Fixes parity mismatches found during testing.
 - **shard-diagnosis:** Downstream. Diagnoses specific shard failures.
-- **tiered-config-test:** Further downstream. Expands config coverage after fixes.
+- **tiered-config-test:** Further downstream. Expands config coverage after logic-parity-audit passes.
 - **codebase-doc-manage:** Parallel. Manages the Java module documentation that Phase 1 reads.

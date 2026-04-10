@@ -43,7 +43,7 @@ Use the `module-parity-test` skill:
 All {N} test cases produce byte-identical output to Java.
 
 ## Recommendation
-Module is ready for Review Gate.
+Module is ready for `logic-parity-audit` (white-box method comparison). Route there before Review Gate.
 ```
 
 ### FAIL
