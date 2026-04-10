@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::{EXTENSION, MINSVCDIST, SEED_1, SVFLANK, SVMAXLEN};
 use crate::data::{BaseInsertion, Cluster, CurrentSegment, Match, Match35, RealignedVariationData, Sclip, SortPositionSclip, Variation, VariationData, VariationMap, VariationMapSV};
+use crate::reference::Reference;
 use crate::patterns::{
     AMP_ATGC, ATGSs_AMP_ATGSs_END, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_ANY, BEGIN_PLUS_ATGC,
     CARET_ATGC_END, CARET_ATGNC, DUP_NUM_ATGC, HASH_ATGC,
@@ -2814,31 +2815,6 @@ fn remove_sv(non_insertion_variants: &mut HashMap<i32, VariationMap>, pos: i32) 
     }
 }
 
-/// Stub: StructuralVariantsProcessor.findMatch()
-/// Java: S17 — not yet ported. Returns zero bp which causes caller to `continue`.
-fn find_match_stub(
-    _seq: &str,
-    _reference_sequences: &HashMap<i32, u8>,
-    _p: i32,
-    _dir: i32,
-    _seed: i32,
-    _min_matches: i32,
-) -> Match {
-    // Java: StructuralVariantsProcessor.findMatch() — S17 stub
-    Match::new(0, String::new())
-}
-
-/// Stub: StructuralVariantsProcessor.markSV()
-/// Java: S17 — not yet ported. Returns (0, 0, 0).
-fn mark_sv_stub(
-    _bp: i32,
-    _p: i32,
-    _sv_lists: &[&Vec<Sclip>],
-    _max_read_length: i32,
-) -> (i32, i32, i32) {
-    (0, 0, 0)
-}
-
 /// Stub: partialPipeline — re-entrant CigarParser call.
 /// Java: S17/pipeline — not yet ported. No-op for now.
 fn partial_pipeline_stub() {
@@ -2861,6 +2837,7 @@ pub fn realignlgdel(
     ref_coverage: &mut HashMap<i32, i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    reference: &Reference,
     reference_sequences: &HashMap<i32, u8>,
     chr: &str,
     max_read_length: i32,
@@ -2932,8 +2909,8 @@ pub fn realignlgdel(
             if islowcomplexseq(&seq) {
                 continue;
             }
-            // Java: VariationRealigner.java#L1026 — stub findMatch
-            let match_result = find_match_stub(&seq, reference_sequences, p, -1, SEED_1, 1);
+            // Java: VariationRealigner.java#L1026 — findMatch
+            let match_result = super::structural_variants_processor::find_match(&seq, reference, p, -1, SEED_1, 1);
             bp = match_result.base_position;
             extra_upper = match_result.matched_sequence;
             // Java: VariationRealigner.java#L1029
@@ -2941,8 +2918,8 @@ pub fn realignlgdel(
                 continue;
             }
             bp += 1; // Java: VariationRealigner.java#L1033
-            // Java: VariationRealigner.java#L1034 — markSV stub
-            let sv_mark = mark_sv_stub(bp, p, &[&svfdel.to_vec(), &svrdel.to_vec()], max_read_length);
+            // Java: VariationRealigner.java#L1034 — markSV
+            let sv_mark = super::structural_variants_processor::mark_sv(bp, p, &mut [&mut svfdel.to_vec(), &mut svrdel.to_vec()], max_read_length);
             svcov = sv_mark.0;
             clusters = sv_mark.1;
             pairs = sv_mark.2;
@@ -3297,8 +3274,8 @@ pub fn realignlgdel(
             if islowcomplexseq(&seq) {
                 continue;
             }
-            // Java: VariationRealigner.java#L1248 — stub findMatch
-            let match_result = find_match_stub(&seq, reference_sequences, p, 1, SEED_1, 1);
+            // Java: VariationRealigner.java#L1248 — findMatch
+            let match_result = super::structural_variants_processor::find_match(&seq, reference, p, 1, SEED_1, 1);
             bp = match_result.base_position;
             extra_upper = match_result.matched_sequence;
             // Java: VariationRealigner.java#L1251
@@ -3306,8 +3283,8 @@ pub fn realignlgdel(
                 continue;
             }
 
-            // Java: VariationRealigner.java#L1255 — markSV stub
-            let sv_mark = mark_sv_stub(p, bp, &[&svfdel.to_vec(), &svrdel.to_vec()], max_read_length);
+            // Java: VariationRealigner.java#L1255 — markSV
+            let sv_mark = super::structural_variants_processor::mark_sv(p, bp, &mut [&mut svfdel.to_vec(), &mut svrdel.to_vec()], max_read_length);
             svcov = sv_mark.0;
             clusters = sv_mark.1;
             pairs = sv_mark.2;
@@ -3523,17 +3500,6 @@ pub fn realignlgdel(
 
 // ─── Cluster E: Large Insertion Discovery ───────────────────────────
 
-/// Stub: StructuralVariantsProcessor.markDUPSV()
-/// Java: S17 — not yet ported. Returns (0, 0).
-fn mark_dup_sv_stub(
-    _bp1: i32,
-    _bp2: i32,
-    _sv_lists: &[&Vec<Sclip>],
-    _max_read_length: i32,
-) -> (i32, i32) {
-    (0, 0)
-}
-
 /// Ported from: VariationRealigner.realignlgins30()
 /// Java: VariationRealigner.java#L1377-L1597
 ///
@@ -3546,6 +3512,7 @@ pub fn realignlgins30(
     ref_coverage: &mut HashMap<i32, i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    reference: &Reference,
     reference_sequences: &HashMap<i32, u8>,
     chr: &str,
     max_read_length: i32,
@@ -4037,6 +4004,7 @@ pub fn realignlgins(
     ref_coverage: &mut HashMap<i32, i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    reference: &Reference,
     reference_sequences: &HashMap<i32, u8>,
     chr: &str,
     max_read_length: i32,
@@ -4100,8 +4068,8 @@ pub fn realignlgins(
             if islowcomplexseq(&seq) {
                 continue;
             }
-            // Java: VariationRealigner.java#L1658 — findMatch stub
-            let match_result = find_match_stub(&seq, reference_sequences, p, -1, SEED_1, 1);
+            // Java: VariationRealigner.java#L1658 — findMatch
+            let match_result = super::structural_variants_processor::find_match(&seq, reference, p, -1, SEED_1, 1);
             bi = match_result.base_position;
             extra = match_result.matched_sequence;
             // Java: VariationRealigner.java#L1661
@@ -4131,11 +4099,11 @@ pub fn realignlgins(
             }
             ins += &extra;
 
-            // Java: VariationRealigner.java#L1693 — markDUPSV stub
-            let tp2 = mark_dup_sv_stub(
+            // Java: VariationRealigner.java#L1693 — markDUPSV
+            let tp2 = super::structural_variants_processor::mark_dup_sv(
                 p,
                 bi,
-                &[&svfdup.to_vec(), &svrdup.to_vec()],
+                &mut [&mut svfdup.to_vec(), &mut svrdup.to_vec()],
                 max_read_length,
             );
             let clusters = tp2.0;
@@ -4391,8 +4359,8 @@ pub fn realignlgins(
             if islowcomplexseq(&seq) {
                 continue;
             }
-            // Java: VariationRealigner.java#L1829 — findMatch stub
-            let match_result = find_match_stub(&seq, reference_sequences, p, 1, SEED_1, 1);
+            // Java: VariationRealigner.java#L1829 — findMatch
+            let match_result = super::structural_variants_processor::find_match(&seq, reference, p, 1, SEED_1, 1);
             bi = match_result.base_position;
             extra = match_result.matched_sequence;
             // Java: VariationRealigner.java#L1832
@@ -4431,11 +4399,11 @@ pub fn realignlgins(
             }
             ins += &extra;
 
-            // Java: VariationRealigner.java#L1871 — markDUPSV stub
-            let tp2 = mark_dup_sv_stub(
+            // Java: VariationRealigner.java#L1871 — markDUPSV
+            let tp2 = super::structural_variants_processor::mark_dup_sv(
                 bi,
                 p - 1,
-                &[&svfdup.to_vec(), &svrdup.to_vec()],
+                &mut [&mut svfdup.to_vec(), &mut svrdup.to_vec()],
                 max_read_length,
             );
             let clusters = tp2.0;
@@ -4667,6 +4635,7 @@ pub fn realign_indels(
     ref_coverage: &mut HashMap<i32, i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    reference: &Reference,
     reference_sequences: &HashMap<i32, u8>,
     chr: &str,
     max_read_length: i32,
@@ -4724,6 +4693,7 @@ pub fn realign_indels(
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
+        reference,
         reference_sequences,
         chr,
         max_read_length,
@@ -4743,6 +4713,7 @@ pub fn realign_indels(
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
+        reference,
         reference_sequences,
         chr,
         max_read_length,
@@ -4764,6 +4735,7 @@ pub fn realign_indels(
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
+        reference,
         reference_sequences,
         chr,
         max_read_length,
@@ -4873,6 +4845,7 @@ pub fn process(scope: Scope<VariationData>) -> Scope<RealignedVariationData> {
             &mut ref_coverage,
             &mut soft_clips_3_end,
             &mut soft_clips_5_end,
+            &reference,
             reference_sequences,
             &chr,
             max_read_length,
