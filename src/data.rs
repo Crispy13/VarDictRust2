@@ -135,6 +135,27 @@ pub struct Variation {
     pub extracnt: i32,
 }
 
+impl Variation {
+    /// Ported from: Variation.incDir() L81-L86
+    /// dir: false = forward, true = reverse
+    pub fn inc_dir(&mut self, dir: bool) {
+        if dir {
+            self.vars_count_on_reverse += 1;
+        } else {
+            self.vars_count_on_forward += 1;
+        }
+    }
+
+    /// Ported from: Variation.decDir() L92-L97
+    pub fn dec_dir(&mut self, dir: bool) {
+        if dir {
+            self.vars_count_on_reverse -= 1;
+        } else {
+            self.vars_count_on_forward -= 1;
+        }
+    }
+}
+
 // Java: Mate L4-L30
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Mate {

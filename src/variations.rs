@@ -543,6 +543,18 @@ pub fn get_variation_maybe(
         .and_then(|map| map.entries.get(&description_string))
 }
 
+/// Mutable version of get_variation_maybe — used by processInsertion's subCnt path.
+pub fn get_variation_maybe_mut(
+    hash: &mut HashMap<i32, VariationMap>,
+    start: i32,
+    ref_base: Option<u8>,
+) -> Option<&mut Variation> {
+    let ref_base = ref_base?;
+    let description_string = char::from(ref_base).to_string();
+    hash.get_mut(&start)
+        .and_then(|map| map.entries.get_mut(&description_string))
+}
+
 /// Ported from: VariationUtils.java:L460-L464
 pub fn is_has_and_equals_base(ch1: u8, reference: &HashMap<i32, u8>, index: i32) -> bool {
     reference.get(&index).is_some_and(|refc| *refc == ch1)
