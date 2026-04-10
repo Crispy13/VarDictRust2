@@ -2,14 +2,14 @@
 /// Core variant detection engine: iterates BAM records, parses CIGAR strings
 /// operation-by-operation, populates variant maps, coverage, soft-clip structures,
 /// and structural variant accumulators.
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use rust_htslib::bam::{self, HeaderView, record::Aux};
 
 use crate::config::{MINMAPBASE, MINSVCDIST, MINSVPOS, SEED_1};
 use crate::data::{
-    BaseInsertion, Mate, Region, SVStructures, Sclip, Variation, VariationData, VariationMap,
+    BaseInsertion, Mate, Region, SVStructures, Sclip, SortedStringMap, Variation, VariationData, VariationMap,
 };
 use crate::mods::cigar_modifier::modify_cigar;
 use crate::mods::sam_file_parser::get_mate_reference_name;
@@ -218,10 +218,10 @@ pub struct CigarParser {
     pub ref_coverage: HashMap<i32, i32>,
     pub soft_clips_3_end: HashMap<i32, Sclip>,
     pub soft_clips_5_end: HashMap<i32, Sclip>,
-    pub position_to_insertion_count: HashMap<i32, BTreeMap<String, i32>>,
-    pub mnp: HashMap<i32, BTreeMap<String, i32>>,
-    pub position_to_deletion_count: HashMap<i32, BTreeMap<String, i32>>,
-    pub splice_count: BTreeMap<String, Vec<i32>>,
+    pub position_to_insertion_count: HashMap<i32, SortedStringMap<i32>>,
+    pub mnp: HashMap<i32, SortedStringMap<i32>>,
+    pub position_to_deletion_count: HashMap<i32, SortedStringMap<i32>>,
+    pub splice_count: SortedStringMap<Vec<i32>>,
     pub sv_structures: SVStructures,
 
     // ── Scope copies (set in init_from_scope) ──
@@ -259,7 +259,7 @@ impl CigarParser {
             position_to_insertion_count: HashMap::new(),
             mnp: HashMap::new(),
             position_to_deletion_count: HashMap::new(),
-            splice_count: BTreeMap::new(),
+            splice_count: SortedStringMap::new(),
             sv_structures: SVStructures::default(),
 
             // Scope copies — placeholder defaults, set by init_from_scope
@@ -710,7 +710,7 @@ impl CigarParser {
     /// Ported from: CigarParser.java:L1451-L1460 (increment)
     /// Increments a count in a nested Map<Integer, Map<String, Integer>>.
     pub fn increment(
-        counters: &mut HashMap<i32, BTreeMap<String, i32>>,
+        counters: &mut HashMap<i32, SortedStringMap<i32>>,
         index: i32,
         description_string: &str,
     ) {
@@ -1048,7 +1048,7 @@ impl CigarParser {
                     // Java: CigarParser.java#L413 — require higher quality for MNV
                     let next_n = (self.read_position_including_soft_clipped + 1) as usize;
                     if next_n >= query_qual_bytes.len()
-                        || (query_qual_bytes[next_n] as i32 - 33) < conf.goodq as i32 + 5
+                        || ((query_qual_bytes[next_n] as i32 - 33) as f64) < conf.goodq + 5.0
                     {
                         break;
                     }
@@ -1102,7 +1102,7 @@ impl CigarParser {
                         // Java: CigarParser.java#L450 — require higher quality for MNV
                         let ssn_n = (self.read_position_including_soft_clipped + ssn) as usize;
                         if ssn_n >= query_qual_bytes.len()
-                            || (query_qual_bytes[ssn_n] as i32 - 33) < conf.goodq as i32 + 5
+                            || ((query_qual_bytes[ssn_n] as i32 - 33) as f64) < conf.goodq + 5.0
                         {
                             break;
                         }
@@ -1420,7 +1420,7 @@ impl CigarParser {
                     }
                     // Java: CigarParser.java#L720
                     if tn_vi >= qq_bytes.len()
-                        || (qq_bytes[tn_vi] as i32 - 33) < conf.goodq as i32
+                        || ((qq_bytes[tn_vi] as i32 - 33) as f64) < conf.goodq
                     {
                         break;
                     }
@@ -1487,7 +1487,7 @@ impl CigarParser {
                         break;
                     }
                     if tn_vi >= qq_bytes.len()
-                        || (qq_bytes[tn_vi] as i32 - 33) < conf.goodq as i32
+                        || ((qq_bytes[tn_vi] as i32 - 33) as f64) < conf.goodq
                     {
                         break;
                     }
@@ -1532,7 +1532,7 @@ impl CigarParser {
                         break;
                     }
                     if n_vi >= qq_bytes.len()
-                        || (qq_bytes[n_vi] as i32 - 33) < conf.goodq as i32
+                        || ((qq_bytes[n_vi] as i32 - 33) as f64) < conf.goodq
                     {
                         break;
                     }
@@ -1725,7 +1725,7 @@ impl CigarParser {
                     }
                     // Java: CigarParser.java#L999
                     if n_vi >= qq_bytes.len()
-                        || (qq_bytes[n_vi] as i32 - 33) < conf.goodq as i32
+                        || ((qq_bytes[n_vi] as i32 - 33) as f64) < conf.goodq
                     {
                         break;
                     }
@@ -3045,7 +3045,7 @@ impl CigarParser {
                 break;
             }
             // Java: CigarParser.java#L1519
-            if rp < query_qual_bytes.len() && (query_qual_bytes[rp] as i32 - 33) < conf.goodq as i32
+            if rp < query_qual_bytes.len() && ((query_qual_bytes[rp] as i32 - 33) as f64) < conf.goodq
             {
                 break;
             }
@@ -3316,8 +3316,8 @@ impl CigarParser {
                 let idx = self.cigar_element_length - 1 - si;
 
                 // Java: CigarParser.java#L1974-L1978
-                let nt_map = sclip.nt.get_or_insert_with(BTreeMap::new);
-                let cnts = nt_map.entry(idx).or_insert_with(BTreeMap::new);
+                let nt_map = &mut sclip.nt;
+                let cnts = nt_map.entry(idx).or_insert_with(SortedStringMap::new);
                 inc_cnt(cnts, ch.to_string(), 1);
 
                 // Java: CigarParser.java#L1979
@@ -3387,8 +3387,8 @@ impl CigarParser {
                 let idx = si;
 
                 // Java: CigarParser.java#L1938-L1942
-                let nt_map = sclip.nt.get_or_insert_with(BTreeMap::new);
-                let cnts = nt_map.entry(idx).or_insert_with(BTreeMap::new);
+                let nt_map = &mut sclip.nt;
+                let cnts = nt_map.entry(idx).or_insert_with(SortedStringMap::new);
                 inc_cnt(cnts, ch.to_string(), 1);
 
                 // Java: CigarParser.java#L1943

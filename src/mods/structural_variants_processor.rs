@@ -17,7 +17,7 @@ use crate::reference::{Reference, ReferenceResource};
 use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{
     char_at, complement_base, complement_sequence, get_reverse_complemented_sequence,
-    reverse_sequence,
+    reverse_sequence, substr_with_len,
 };
 use crate::variations::{
     adj_cnt, adj_cnt_with_reference, find_conseq, get_variation,
@@ -672,6 +672,10 @@ fn get_sv(non_insertion_variants: &mut HashMap<i32, VariationMap>, pos: i32) -> 
     let vmap = non_insertion_variants.entry(pos).or_insert_with(VariationMap::default);
     if vmap.sv.is_none() {
         vmap.sv = Some(VariationMapSV::default());
+        vmap.entries.insert("SV".to_string(), Variation::default());
+    }
+    if !vmap.entries.contains_key("SV") {
+        vmap.entries.insert("SV".to_string(), Variation::default());
     }
     vmap.sv.as_mut().unwrap()
 }
@@ -2909,7 +2913,7 @@ pub fn adj_snv(
             continue;
         }
         // Java: StructuralVariantsProcessor.java#L1999 — substr(seq, 0, 1)
-        let bp = seq[..1].to_string();
+        let bp = String::from_utf8_lossy(&substr_with_len(seq.as_bytes(), 0, 1)).into_owned();
 
         // Java: StructuralVariantsProcessor.java#L2001
         let previous_position = position - 1;
@@ -2952,7 +2956,7 @@ pub fn adj_snv(
             continue;
         }
         // Java: StructuralVariantsProcessor.java#L2026 — substr(seq, 0, 1)
-        let bp = seq[..1].to_string();
+        let bp = String::from_utf8_lossy(&substr_with_len(seq.as_bytes(), 0, 1)).into_owned();
         // Java: StructuralVariantsProcessor.java#L2027-L2028
         let has_key = non_insertion_variants.get(&position)
             .map_or(false, |vm| vm.entries.contains_key(&bp));

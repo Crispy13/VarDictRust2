@@ -50,6 +50,16 @@ where
     }
 }
 
+impl CountMap<String> for crate::data::SortedStringMap<i32> {
+    fn get_value(&self, key: &String) -> Option<i32> {
+        self.0.get(key).copied()
+    }
+
+    fn insert_value(&mut self, key: String, value: i32) {
+        self.0.insert(key, value);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VarsType {
     Varn,
@@ -203,7 +213,8 @@ pub fn find_conseq(soft_clip: &mut Sclip, dir: i32) -> String {
     let mut candidate_sequence = String::new();
     let mut flag = false;
 
-    if let Some(nt_map) = soft_clip.nt.as_ref() {
+    if !soft_clip.nt.is_empty() {
+        let nt_map = &soft_clip.nt;
         for (position_in_sclip, nucleotide_counts) in nt_map {
             let mut max_count = 0;
             let mut max_quality = 0.0;
@@ -215,15 +226,13 @@ pub fn find_conseq(soft_clip: &mut Sclip, dir: i32) -> String {
 
                 let current_quality = soft_clip
                     .seq
-                    .as_ref()
-                    .and_then(|seq_map| seq_map.get(position_in_sclip))
+                    .get(position_in_sclip)
                     .and_then(|base_map| base_map.get(current_base))
                     .map_or(0.0, |variation| variation.mean_quality);
 
                 let has_higher_quality = soft_clip
                     .seq
-                    .as_ref()
-                    .and_then(|seq_map| seq_map.get(position_in_sclip))
+                    .get(position_in_sclip)
                     .and_then(|base_map| base_map.get(current_base))
                     .is_some()
                     && current_quality > max_quality;
@@ -260,7 +269,7 @@ pub fn find_conseq(soft_clip: &mut Sclip, dir: i32) -> String {
         }
     }
 
-    let nt_size = soft_clip.nt.as_ref().map_or(0, BTreeMap::len);
+    let nt_size: usize = soft_clip.nt.len();
     let mut sequence = if total != 0
         && matched as f64 / total as f64 > 0.9
         && candidate_sequence.len() as f64 / 1.5 > nt_size as f64 - candidate_sequence.len() as f64
@@ -515,8 +524,8 @@ pub fn get_variation_from_seq(
     base: impl Into<String>,
 ) -> &mut Variation {
     let base = base.into();
-    let sequence_map = soft_clip.seq.get_or_insert_with(BTreeMap::new);
-    let base_map = sequence_map.entry(idx).or_insert_with(BTreeMap::new);
+    let sequence_map = &mut soft_clip.seq;
+    let base_map = sequence_map.entry(idx).or_insert_with(crate::data::SortedStringMap::new);
     base_map.entry(base).or_default()
 }
 
@@ -640,6 +649,7 @@ pub fn clear_variation_utils_scope() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::{SortedIntMap, SortedStringMap};
     use std::sync::Mutex;
 
     static TEST_SCOPE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
@@ -647,19 +657,19 @@ mod tests {
     fn init_sclip() -> Sclip {
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 2;
-        sclip.nt = Some(BTreeMap::from([
-            (0, BTreeMap::from([(String::from("C"), 2)])),
-            (1, BTreeMap::from([(String::from("T"), 2)])),
-            (2, BTreeMap::from([(String::from("A"), 2)])),
-            (3, BTreeMap::from([(String::from("A"), 2)])),
-            (4, BTreeMap::from([(String::from("A"), 2)])),
-            (5, BTreeMap::from([(String::from("T"), 2)])),
-            (6, BTreeMap::from([(String::from("C"), 2)])),
-        ]));
-        sclip.seq = Some(BTreeMap::from([
+        sclip.nt = SortedIntMap::from([
+            (0, SortedStringMap::from([(String::from("C"), 2)])),
+            (1, SortedStringMap::from([(String::from("T"), 2)])),
+            (2, SortedStringMap::from([(String::from("A"), 2)])),
+            (3, SortedStringMap::from([(String::from("A"), 2)])),
+            (4, SortedStringMap::from([(String::from("A"), 2)])),
+            (5, SortedStringMap::from([(String::from("T"), 2)])),
+            (6, SortedStringMap::from([(String::from("C"), 2)])),
+        ]);
+        sclip.seq = SortedIntMap::from([
             (
                 0,
-                BTreeMap::from([(
+                SortedStringMap::from([(
                     String::from("C"),
                     Variation {
                         mean_quality: 82.0,
@@ -669,7 +679,7 @@ mod tests {
             ),
             (
                 1,
-                BTreeMap::from([(
+                SortedStringMap::from([(
                     String::from("T"),
                     Variation {
                         mean_quality: 82.0,
@@ -679,7 +689,7 @@ mod tests {
             ),
             (
                 2,
-                BTreeMap::from([(
+                SortedStringMap::from([(
                     String::from("A"),
                     Variation {
                         mean_quality: 78.0,
@@ -689,7 +699,7 @@ mod tests {
             ),
             (
                 3,
-                BTreeMap::from([(
+                SortedStringMap::from([(
                     String::from("A"),
                     Variation {
                         mean_quality: 53.0,
@@ -699,7 +709,7 @@ mod tests {
             ),
             (
                 4,
-                BTreeMap::from([(
+                SortedStringMap::from([(
                     String::from("A"),
                     Variation {
                         mean_quality: 78.0,
@@ -709,7 +719,7 @@ mod tests {
             ),
             (
                 5,
-                BTreeMap::from([(
+                SortedStringMap::from([(
                     String::from("T"),
                     Variation {
                         mean_quality: 73.0,
@@ -719,7 +729,7 @@ mod tests {
             ),
             (
                 6,
-                BTreeMap::from([(
+                SortedStringMap::from([(
                     String::from("C"),
                     Variation {
                         mean_quality: 78.0,
@@ -727,7 +737,7 @@ mod tests {
                     },
                 )]),
             ),
-        ]));
+        ]);
         sclip
     }
 
@@ -880,8 +890,7 @@ mod tests {
         assert_eq!(
             sclip
                 .seq
-                .as_ref()
-                .and_then(|seq| seq.get(&1))
+                .get(&1)
                 .and_then(|bases| bases.get("A"))
                 .map(|variation| variation.mean_quality),
             Some(7.0)
@@ -1003,27 +1012,27 @@ mod tests {
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 2;
-        sclip.nt = Some(BTreeMap::from([
-            (0, BTreeMap::from([(String::from("A"), 2)])),
-            (1, BTreeMap::from([(String::from("A"), 2)])),
-            (2, BTreeMap::from([(String::from("A"), 2)])),
-            (3, BTreeMap::from([(String::from("A"), 2)])),
-            (4, BTreeMap::from([(String::from("A"), 2)])),
-            (5, BTreeMap::from([(String::from("A"), 2)])),
-            (6, BTreeMap::from([(String::from("A"), 2)])),
-            (7, BTreeMap::from([(String::from("A"), 2)])),
-            (8, BTreeMap::from([(String::from("A"), 2)])),
-            (9, BTreeMap::from([(String::from("A"), 2)])),
-            (10, BTreeMap::from([(String::from("A"), 2)])),
-            (11, BTreeMap::from([(String::from("A"), 2)])),
-            (12, BTreeMap::from([(String::from("A"), 2)])),
-        ]));
-        sclip.seq = Some(
+        sclip.nt = SortedIntMap::from([
+            (0, SortedStringMap::from([(String::from("A"), 2)])),
+            (1, SortedStringMap::from([(String::from("A"), 2)])),
+            (2, SortedStringMap::from([(String::from("A"), 2)])),
+            (3, SortedStringMap::from([(String::from("A"), 2)])),
+            (4, SortedStringMap::from([(String::from("A"), 2)])),
+            (5, SortedStringMap::from([(String::from("A"), 2)])),
+            (6, SortedStringMap::from([(String::from("A"), 2)])),
+            (7, SortedStringMap::from([(String::from("A"), 2)])),
+            (8, SortedStringMap::from([(String::from("A"), 2)])),
+            (9, SortedStringMap::from([(String::from("A"), 2)])),
+            (10, SortedStringMap::from([(String::from("A"), 2)])),
+            (11, SortedStringMap::from([(String::from("A"), 2)])),
+            (12, SortedStringMap::from([(String::from("A"), 2)])),
+        ]);
+        sclip.seq =
             (0..=12)
                 .map(|index| {
                     (
                         index,
-                        BTreeMap::from([(
+                        SortedStringMap::from([(
                             String::from("A"),
                             Variation {
                                 mean_quality: 50.0,
@@ -1032,8 +1041,7 @@ mod tests {
                         )]),
                     )
                 })
-                .collect::<BTreeMap<_, _>>(),
-        );
+                .collect::<SortedIntMap<_>>();
 
         assert_eq!(find_conseq(&mut sclip, 0), "AAAAAAAAAAAAA");
         assert!(sclip.used);
@@ -1093,8 +1101,7 @@ mod tests {
         assert_eq!(
             sclip
                 .seq
-                .as_ref()
-                .and_then(|seq| seq.get(&2))
+                .get(&2)
                 .and_then(|bases| bases.get("G"))
                 .map(|variation| variation.vars_count),
             Some(2)
@@ -1134,20 +1141,20 @@ mod tests {
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 10;
-        sclip.nt = Some(BTreeMap::from([
+        sclip.nt = SortedIntMap::from([
             (
                 0,
-                BTreeMap::from([(String::from("A"), 4), (String::from("C"), 4)]),
+                SortedStringMap::from([(String::from("A"), 4), (String::from("C"), 4)]),
             ),
             (
                 1,
-                BTreeMap::from([(String::from("A"), 4), (String::from("C"), 4)]),
+                SortedStringMap::from([(String::from("A"), 4), (String::from("C"), 4)]),
             ),
-        ]));
-        sclip.seq = Some(BTreeMap::from([
+        ]);
+        sclip.seq = SortedIntMap::from([
             (
                 0,
-                BTreeMap::from([
+                SortedStringMap::from([
                     (
                         String::from("A"),
                         Variation {
@@ -1166,7 +1173,7 @@ mod tests {
             ),
             (
                 1,
-                BTreeMap::from([
+                SortedStringMap::from([
                     (
                         String::from("A"),
                         Variation {
@@ -1183,7 +1190,7 @@ mod tests {
                     ),
                 ]),
             ),
-        ]));
+        ]);
 
         assert_eq!(find_conseq(&mut sclip, 0), "");
         clear_variation_utils_scope();
@@ -1247,13 +1254,13 @@ mod tests {
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 4;
-        sclip.nt = Some(BTreeMap::from([(
+        sclip.nt = SortedIntMap::from([(
             0,
-            BTreeMap::from([(String::from("A"), 2), (String::from("C"), 2)]),
-        )]));
-        sclip.seq = Some(BTreeMap::from([(
+            SortedStringMap::from([(String::from("A"), 2), (String::from("C"), 2)]),
+        )]);
+        sclip.seq = SortedIntMap::from([(
             0,
-            BTreeMap::from([
+            SortedStringMap::from([
                 (
                     String::from("A"),
                     Variation {
@@ -1269,7 +1276,7 @@ mod tests {
                     },
                 ),
             ]),
-        )]));
+        )]);
 
         assert_eq!(find_conseq(&mut sclip, 0), "");
         assert_eq!(sclip.sequence.as_deref(), Some(""));
@@ -1290,17 +1297,16 @@ mod tests {
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 2;
-        sclip.nt = Some(
+        sclip.nt =
             (0..=12)
-                .map(|index| (index, BTreeMap::from([(String::from("T"), 2)])))
-                .collect::<BTreeMap<_, _>>(),
-        );
-        sclip.seq = Some(
+                .map(|index| (index, SortedStringMap::from([(String::from("T"), 2)])))
+                .collect::<SortedIntMap<_>>();
+        sclip.seq =
             (0..=12)
                 .map(|index| {
                     (
                         index,
-                        BTreeMap::from([(
+                        SortedStringMap::from([(
                             String::from("T"),
                             Variation {
                                 mean_quality: 40.0,
@@ -1309,8 +1315,7 @@ mod tests {
                         )]),
                     )
                 })
-                .collect::<BTreeMap<_, _>>(),
-        );
+                .collect::<SortedIntMap<_>>();
 
         assert_eq!(find_conseq(&mut sclip, 0), "TTTTTTTTTTTTT");
         assert!(sclip.used);
@@ -1372,17 +1377,17 @@ mod tests {
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 1;
-        sclip.nt = Some(BTreeMap::from([(
+        sclip.nt = SortedIntMap::from([(
             0,
-            BTreeMap::from([(String::from("A"), 1), (String::from("C"), 1)]),
-        )]));
-        sclip.seq = Some(BTreeMap::from([(
+            SortedStringMap::from([(String::from("A"), 1), (String::from("C"), 1)]),
+        )]);
+        sclip.seq = SortedIntMap::from([(
             0,
-            BTreeMap::from([
+            SortedStringMap::from([
                 (String::from("A"), Variation::default()),
                 (String::from("C"), Variation::default()),
             ]),
-        )]));
+        )]);
 
         assert_eq!(find_conseq(&mut sclip, 0), "");
         assert_eq!(find_conseq(&mut sclip, 0), "");
@@ -1470,8 +1475,7 @@ mod tests {
         assert_eq!(
             sclip
                 .seq
-                .as_ref()
-                .and_then(|seq| seq.get(&1))
+                .get(&1)
                 .and_then(|bases| bases.get("T"))
                 .map(|variation| variation.vars_count),
             Some(3)

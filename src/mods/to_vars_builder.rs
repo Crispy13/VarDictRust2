@@ -27,6 +27,15 @@ const REF_30_BASES: i32 = 30;
 const REF_50_BASES: i32 = 50;
 const REF_70_BASES: i32 = 70;
 
+fn chromosome_limit(region: &Region, ref_map: &HashMap<i32, u8>) -> i32 {
+    GlobalReadOnlyScope::instance()
+        .chr_lengths
+        .get(&region.chr)
+        .copied()
+        .or_else(|| ref_map.keys().copied().max())
+        .unwrap_or(0)
+}
+
 /// IUPAC ambiguity code replacements.
 /// Ported from: ToVarsBuilder.java:L54-L65
 fn iupac_replacement(code: char) -> Option<char> {
@@ -130,11 +139,7 @@ pub fn proceed_vref_is_deletion(
 ) -> (f64, i32, String) {
     // left 70 bases in reference sequence
     let leftseq = join_ref(ref_map, (position - REF_70_BASES).max(1), position - 1);
-    let chr0 = GlobalReadOnlyScope::instance()
-        .chr_lengths
-        .get(&region.chr)
-        .copied()
-        .unwrap_or(0); // Trap T23: non-mutating
+    let chr0 = chromosome_limit(region, ref_map); // Trap T23: non-mutating
     // right dellen+70 bases in reference sequence
     let tseq = join_ref(ref_map, position, (position + dellen + REF_70_BASES).min(chr0));
 
@@ -178,11 +183,7 @@ pub fn proceed_vref_is_insertion(
     let tseq1 = &vn[1..];
     // left 50 bases (inclusive of position)
     let leftseq = join_ref(ref_map, (position - REF_50_BASES).max(1), position);
-    let x = GlobalReadOnlyScope::instance()
-        .chr_lengths
-        .get(&region.chr)
-        .copied()
-        .unwrap_or(0); // Trap T23: non-mutating
+    let x = chromosome_limit(region, ref_map); // Trap T23: non-mutating
     // right 70 bases
     let tseq2 = join_ref(ref_map, position + 1, (position + REF_70_BASES).min(x));
 
@@ -648,7 +649,7 @@ fn update_ref_variant(
         .unwrap_or_default();
     vref.refallele = validate_refallele(&reference_base);
     vref.varallele = validate_refallele(&reference_base);
-    vref.genotype = format!("{}/{}", reference_base, reference_base);
+    vref.genotype = Some(format!("{}/{}", reference_base, reference_base));
     // Trap T36: leftseq/rightseq set to empty
     vref.leftseq = String::new();
     vref.rightseq = String::new();
@@ -734,6 +735,7 @@ pub fn collect_reference_variants(
 
     let mut positions_for_changed_ref_variant: Vec<i32> = Vec::new();
     let scope = GlobalReadOnlyScope::instance();
+    let chr0 = chromosome_limit(region, ref_map);
 
     // Step 9: Non-reference variants exist
     if !variations_at_pos.variants.is_empty() {
@@ -914,7 +916,6 @@ pub fn collect_reference_variants(
             // Branch: SNP/MNP (neither insertion nor deletion)
             {
                 let tseq1 = join_ref(ref_map, (position - REF_30_BASES).max(1), position + 1);
-                let chr0 = scope.chr_lengths.get(&region.chr).copied().unwrap_or(0);
                 let tseq2 = join_ref(ref_map, position + 2, (position + REF_70_BASES).min(chr0));
                 let (m, s, ms) = find_msi(&tseq1, &tseq2, None);
                 msi = m;
@@ -1032,7 +1033,7 @@ fn process_variant_finalization(
     positions_for_changed_ref_variant: &mut Vec<i32>,
     position: i32,
 ) {
-    let scope = GlobalReadOnlyScope::instance();
+    let chr0 = chromosome_limit(region, ref_map);
 
     // Handle '&' (followed by matched sequence) — step 9bb-9cc
     // Trap T17: replaceFirst for '&' in varallele (first only)
@@ -1207,7 +1208,6 @@ fn process_variant_finalization(
     }
 
     // Set flanking sequences
-    let chr0 = scope.chr_lengths.get(&region.chr).copied().unwrap_or(0);
     variations_at_pos.variants[vi].leftseq =
         join_ref(ref_map, (start_position - REF_20_BASES).max(1), start_position - 1);
     variations_at_pos.variants[vi].rightseq =
@@ -1232,7 +1232,7 @@ fn process_variant_finalization(
     vref.end_position = end_position;
     vref.refallele = validate_refallele(refallele);
     vref.varallele = varallele;
-    vref.genotype = genotype;
+    vref.genotype = Some(genotype);
     vref.total_pos_coverage = *total_pos_coverage;
     vref.ref_forward_coverage = reference_forward_coverage;
     vref.ref_reverse_coverage = reference_reverse_coverage;
@@ -1437,6 +1437,13 @@ fn process_position(
         duprate,
         conf,
     );
+
+    variations_at_pos.var_description_string_to_variants = variations_at_pos
+        .variants
+        .iter()
+        .cloned()
+        .map(|variant| (variant.description_string.clone(), variant))
+        .collect();
 }
 
 // ---------------------------------------------------------------------------

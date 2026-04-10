@@ -148,6 +148,12 @@ echo "Regions file: $REGIONS_FILE"
 echo "Output root:  $TMP_ROOT"
 echo ""
 
+if ! command -v zstd &>/dev/null; then
+    echo "ERROR: zstd is required but not found in PATH." >&2
+    echo "       Activate the conda environment first: conda activate rust_build_env" >&2
+    exit 1
+fi
+
 if [[ ! -f "$REGIONS_FILE" ]]; then
     echo "ERROR: regions file not found: $REGIONS_FILE" >&2
     exit 1

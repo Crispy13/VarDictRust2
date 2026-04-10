@@ -7,7 +7,7 @@ name: Review Gate
 tools: [vscode/memory, vscode/resolveMemoryFileUri, edit, execute, read, search, web]
 model: ['Claude Opus 4.6 (fast mode) (Preview) (copilot)', 'Claude Opus 4.6 (copilot)', ]
 user-invocable: false
-disable-model-invocation: fakse
+disable-model-invocation: false
 ---
 
 ## Persona
@@ -34,6 +34,11 @@ You are the final independent reviewer. Verify correctness, assess performance, 
   - Check: Were data layout decisions implemented as designed (struct fields, collection types)?
   - If no design brief was provided, skip this section.
 1. **Parity Spot-Check** — Read Rust implementation, compare 3-5 key methods against Java module docs. Check parity traps (IndexMap, HALF_UP, null→Option). If a `logic-parity-audit` report is available in session memory or `tmp/logic-parity-audit/`, read it and incorporate its findings — pay particular attention to any NEEDS_REVIEW or FAILED rows.
+  - If the logic-parity-audit report contains an **Auto-Fix Manifest** section, review each entry:
+    - Verify that the pattern identification is accurate (for example, confirm the Java source genuinely uses `LinkedHashMap` at the cited location for an IndexMap swap).
+    - Confirm each entry matches one of the four allowed Phase 4 patterns.
+    - Flag any entry that does not match an allowed pattern or whose parity re-run result is not PASS/N/A.
+    - List each manifest entry reviewed in your Section 1 output — do not just note "N fixes reviewed."
   - For any mismatch fix included in this review: verify the fix modifies the logic that computed the wrong value, not a downstream wrapper or conversion. A fix that adds a new function to transform an already-computed result is treating the symptom — the `mismatch-repair` skill's anti-adapter rule explains why this leads to long-term accumulation of fragile shims. Flag such fixes for justification.
 2. **Code Quality** — Readability, safety (no unjustified unsafe), consistency with `rust.instructions.md`, traceability comments.
 3. **Performance Impact** — Use `change-impact-review` skill. Hot-path + algorithm change = HIGH risk. Run benchmarks if MEDIUM/HIGH.

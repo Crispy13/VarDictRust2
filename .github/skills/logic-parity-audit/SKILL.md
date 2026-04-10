@@ -124,16 +124,26 @@ Use the parity rules as the tie-breaker when you inspect type and collection dec
 
 This phase exists to remove obvious mechanical noise from the report, not to rewrite logic. Only auto-fix when the Java intent is clear from local context and the patch is small, mechanical, and low-risk.
 
-Allowed mechanical fixes:
+Split the allowed patterns into two risk categories and validate them differently.
+
+Non-behavioral auto-fixes:
+
+- Missing traceability comment on a non-trivial ported method: add a Ported from line with the Java file and line span
+- Missing pub on a POJO-style field that should mirror the Java data model: add pub
+
+Behavioral auto-fixes:
 
 - HashMap where Java clearly uses LinkedHashMap: change to IndexMap
-- Missing traceability comment on a non-trivial ported method: add a Ported from line with the Java file and line span
 - Raw format! or equivalent Rust float formatting in a parity-critical output path: switch to the shared Java-compatible formatter
-- Missing pub on a POJO-style field that should mirror the Java data model: add pub
 
 Why the allow list is short: structural review is valuable precisely because it stays honest about uncertainty. Once the change moves beyond a local mechanical correction, the audit should stop pretending it can repair the issue safely.
 
-After any auto-fix, validate the workspace with the project-standard development build rather than a release build. The goal is to confirm that the mechanical patch did not leave the module in a broken state before the report is handed off.
+After any auto-fix, validate the workspace before the report is handed off.
+
+- Non-behavioral fixes: run `cargo build --profile debug-release`
+- Behavioral fixes: run `cargo test --profile debug-release --test parity_{module} -- --include-ignored` inside Phase 4 after applying the fix
+
+Behavioral fixes require one extra guardrail: if the module's Tier 1 parity test regresses after the mechanical change, revert that auto-fix immediately and document the finding as `NEEDS_REVIEW` with a note that the mechanical fix caused a regression.
 
 ### Phase 5: Generate The Report
 
@@ -149,6 +159,8 @@ The report needs two levels of detail:
 
 - a class-level summary so a reviewer can decide whether the module is ready to advance
 - a method-level table so the next person can act on specific findings without redoing the audit
+
+If any auto-fixes were applied in Phase 4, include the Auto-Fix Manifest section in the report. List every auto-fix with its before/after diff and parity re-run result.
 
 ## Report Format
 
@@ -191,11 +203,19 @@ Use this template exactly enough that another agent or reviewer can skim it quic
 - Auto-fixed: {Yes / No}
 - Action: {patched mechanically | flagged for manual review}
 
+## Auto-Fix Manifest
+| # | Pattern | File | Lines | Old | New | Parity Re-Run |
+|---|---------|------|-------|-----|-----|---------------|
+| 1 | IndexMap swap | src/foo.rs | L42 | `HashMap<String, Vec<...>>` | `IndexMap<String, Vec<...>>` | PASS |
+| 2 | Traceability comment | src/foo.rs | L10 | (none) | `// Ported from Foo.java:15-30` | N/A |
+
 ## Outcome
 - Ready for Tier 2 sweep: {Yes / No}
 - Blocking items: {none or short list}
 - Suggested next skill: {tiered-config-test | faithful-port follow-up | manual review}
 ```
+
+Each manifest entry includes the pattern type, file path, line range, old text, new text, and parity re-run result. Use `PASS` for behavioral fixes and `N/A` for non-behavioral fixes.
 
 Why this format works:
 

@@ -6,7 +6,7 @@ description: >
   module implementation.
 name: Port Engineer
 tools: [vscode/memory, vscode/resolveMemoryFileUri, execute, read, edit, search, web]
-model: ['Claude Opus 4.6 (copilot)']
+model: ['GPT-5.4 (copilot)']
 user-invocable: false
 disable-model-invocation: false
 ---
@@ -26,13 +26,22 @@ You are the sole implementer. Read Java code, translate it to Rust with byte-ide
 
 ## Workflow
 
-Use the `faithful-port` skill for porting tasks. It provides:
+Use the `faithful-port` skill for porting tasks, and the `mismatch-repair` skill for fixing parity divergences routed from Orchestrator.
 
 1. **Orient** — Read task brief from the path provided by Orchestrator. If a design brief path is included, read it first: adopt its module classification and decomposition plan. Then read Java module docs parity traps section to validate traps and verify cross-module dependencies. If the design brief appears incomplete or contradicts the Java docs, escalate to Orchestrator — do not silently override the design phase.
 2. **Implement** — Faithful translation: line-by-line logic, IndexMap for LinkedHashMap, HALF_UP float formatting, traceability comments.
 3. **Structural Review** — Self-check: all methods ported, no todo!(), IndexMap where LinkedHashMap, floats use java_format_double().
 4. **Test** — `cargo build --profile debug-release && cargo test --profile debug-release -- --include-ignored`
 5. **Report** — Write implementation report. Save to session memory only.
+
+### Mismatch Repair
+
+When Orchestrator routes a mismatch-repair task (after shard-diagnosis):
+
+1. Read the task brief from the path provided by Orchestrator. It includes the shard-diagnosis output with the divergent field and root cause.
+2. Use the `mismatch-repair` skill to fix the divergence.
+3. Run `cargo build --profile debug-release && cargo test --profile debug-release -- --include-ignored`.
+4. Write a repair report to session memory.
 
 ## Implementation Report Template
 

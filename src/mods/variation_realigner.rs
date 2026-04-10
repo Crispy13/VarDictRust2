@@ -557,17 +557,10 @@ pub fn find35match(seq5: &str, seq3: &str) -> Match35 {
             while total_length + j <= seq3_len && i + total_length <= seq5_len {
                 // Java: VariationRealigner.java#L2227
                 // substr(seq3, -j - totalLength, 1) vs substr(seq5, i + totalLength, 1)
-                let ch3 = char_at(seq3_bytes, -j - total_length);
-                let ch5 = char_at(seq5_bytes, i + total_length);
-                match (ch3, ch5) {
-                    (Some(c3), Some(c5)) => {
-                        if c3 != c5 {
-                            number_of_mismatch += 1;
-                        }
-                    }
-                    _ => {
-                        number_of_mismatch += 1;
-                    }
+                let seq3_sub = substr_with_len(seq3_bytes, -j - total_length, 1);
+                let seq5_sub = substr_with_len(seq5_bytes, i + total_length, 1);
+                if seq3_sub != seq5_sub {
+                    number_of_mismatch += 1;
                 }
                 if number_of_mismatch > long_mismatch {
                     break;
@@ -1058,7 +1051,12 @@ pub fn findbp(
     let mut bp = 0i32;
     let mut score = 0i32;
     let instance = GlobalReadOnlyScope::instance();
-    let idx = instance.chr_lengths.get(chr).copied().unwrap_or(0);
+    let idx = instance
+        .chr_lengths
+        .get(chr)
+        .copied()
+        .or_else(|| ref_map.keys().copied().max())
+        .unwrap_or(0);
     let seq_bytes = sequence.as_bytes();
     let seq_len = seq_bytes.len() as i32;
 
@@ -2804,6 +2802,10 @@ fn get_sv(non_insertion_variants: &mut HashMap<i32, VariationMap>, pos: i32) -> 
     let vmap = non_insertion_variants.entry(pos).or_insert_with(VariationMap::default);
     if vmap.sv.is_none() {
         vmap.sv = Some(VariationMapSV::default());
+        vmap.entries.insert("SV".to_string(), Variation::default());
+    }
+    if !vmap.entries.contains_key("SV") {
+        vmap.entries.insert("SV".to_string(), Variation::default());
     }
     vmap.sv.as_mut().unwrap()
 }
@@ -2812,6 +2814,7 @@ fn get_sv(non_insertion_variants: &mut HashMap<i32, VariationMap>, pos: i32) -> 
 fn remove_sv(non_insertion_variants: &mut HashMap<i32, VariationMap>, pos: i32) {
     if let Some(vmap) = non_insertion_variants.get_mut(&pos) {
         vmap.sv = None;
+        vmap.entries.shift_remove("SV");
     }
 }
 
@@ -4183,7 +4186,8 @@ pub fn realignlgins(
         {
             let seq_data: Option<Vec<(i32, Vec<(String, Variation)>)>> = soft_clips_5_end
                 .get(&p)
-                .and_then(|sc| sc.seq.as_ref())
+                .filter(|sc| !sc.seq.is_empty())
+                .map(|sc| &sc.seq)
                 .map(|seq_map| {
                     let seq_len = seq_map.keys().last().map(|k| k + 1).unwrap_or(0);
                     let mut result = Vec::new();
@@ -4501,7 +4505,8 @@ pub fn realignlgins(
         {
             let seq_data: Option<Vec<(i32, Vec<(String, Variation)>)>> = soft_clips_3_end
                 .get(&p)
-                .and_then(|sc| sc.seq.as_ref())
+                .filter(|sc| !sc.seq.is_empty())
+                .map(|sc| &sc.seq)
                 .map(|seq_map| {
                     let len_seq = seq_map.keys().last().map(|k| k + 1).unwrap_or(0);
                     let mut result = Vec::new();
@@ -4868,7 +4873,7 @@ pub fn process(scope: Scope<VariationData>) -> Scope<RealignedVariationData> {
         duprate,
         curseg,
         softp2sv,
-        previous_scope: (),
+        previous_scope: None,
     };
 
     // Build output scope preserving non-data fields from input scope

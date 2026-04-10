@@ -4,10 +4,161 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use indexmap::IndexMap;
+use serde::de::Deserializer;
+use serde::ser::{SerializeSeq, Serializer};
 
 use crate::config::Configuration;
 use crate::patterns::ANY_SV;
 use crate::utils::{substr, substr_with_len};
+
+// ─── SortedStringMap: BTreeMap<String, V> with array-of-pairs serde ─────────
+
+/// Transparent newtype around `BTreeMap<String, V>` that serializes as
+/// `[["key", value], ...]` (sorted by key) to match Java's LinkedHashMap
+/// serialization in golden fixtures.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SortedStringMap<V>(pub BTreeMap<String, V>);
+
+impl<V> SortedStringMap<V> {
+    pub fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+}
+
+impl<V> std::ops::Deref for SortedStringMap<V> {
+    type Target = BTreeMap<String, V>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<V> std::ops::DerefMut for SortedStringMap<V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<V> From<BTreeMap<String, V>> for SortedStringMap<V> {
+    fn from(map: BTreeMap<String, V>) -> Self {
+        Self(map)
+    }
+}
+
+impl<V, const N: usize> From<[(String, V); N]> for SortedStringMap<V> {
+    fn from(arr: [(String, V); N]) -> Self {
+        Self(BTreeMap::from(arr))
+    }
+}
+
+impl<V> IntoIterator for SortedStringMap<V> {
+    type Item = (String, V);
+    type IntoIter = std::collections::btree_map::IntoIter<String, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, V> IntoIterator for &'a SortedStringMap<V> {
+    type Item = (&'a String, &'a V);
+    type IntoIter = std::collections::btree_map::Iter<'a, String, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<V: serde::Serialize> serde::Serialize for SortedStringMap<V> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for (key, value) in &self.0 {
+            seq.serialize_element(&(key, value))?;
+        }
+        seq.end()
+    }
+}
+
+impl<'de, V: serde::Deserialize<'de>> serde::Deserialize<'de> for SortedStringMap<V> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let entries = Vec::<(String, V)>::deserialize(deserializer)?;
+        Ok(SortedStringMap(entries.into_iter().collect()))
+    }
+}
+
+// ─── SortedIntMap: BTreeMap<i32, V> with array-of-pairs serde ───────────────
+
+/// Transparent newtype around `BTreeMap<i32, V>` that serializes as
+/// `[[key, value], ...]` (sorted by key) to match Java BTreeMap serialization.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SortedIntMap<V>(pub BTreeMap<i32, V>);
+
+impl<V> SortedIntMap<V> {
+    pub fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+}
+
+impl<V> std::ops::Deref for SortedIntMap<V> {
+    type Target = BTreeMap<i32, V>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<V> std::ops::DerefMut for SortedIntMap<V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<V> From<BTreeMap<i32, V>> for SortedIntMap<V> {
+    fn from(map: BTreeMap<i32, V>) -> Self {
+        Self(map)
+    }
+}
+
+impl<V, const N: usize> From<[(i32, V); N]> for SortedIntMap<V> {
+    fn from(arr: [(i32, V); N]) -> Self {
+        Self(BTreeMap::from(arr))
+    }
+}
+
+impl<V> IntoIterator for SortedIntMap<V> {
+    type Item = (i32, V);
+    type IntoIter = std::collections::btree_map::IntoIter<i32, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<V> std::iter::FromIterator<(i32, V)> for SortedIntMap<V> {
+    fn from_iter<I: IntoIterator<Item = (i32, V)>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl<'a, V> IntoIterator for &'a SortedIntMap<V> {
+    type Item = (&'a i32, &'a V);
+    type IntoIter = std::collections::btree_map::Iter<'a, i32, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<V: serde::Serialize> serde::Serialize for SortedIntMap<V> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for (key, value) in &self.0 {
+            seq.serialize_element(&(key, value))?;
+        }
+        seq.end()
+    }
+}
+
+impl<'de, V: serde::Deserialize<'de>> serde::Deserialize<'de> for SortedIntMap<V> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let entries = Vec::<(i32, V)>::deserialize(deserializer)?;
+        Ok(SortedIntMap(entries.into_iter().collect()))
+    }
+}
 
 // Java: Region L9-L106
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -261,8 +412,8 @@ impl fmt::Display for Cluster {
 pub struct Sclip {
     #[serde(flatten)]
     pub base: Variation,
-    pub nt: Option<BTreeMap<i32, BTreeMap<String, i32>>>,
-    pub seq: Option<BTreeMap<i32, BTreeMap<String, Variation>>>,
+    pub nt: SortedIntMap<SortedStringMap<i32>>,
+    pub seq: SortedIntMap<SortedStringMap<Variation>>,
     pub sequence: Option<String>,
     pub used: bool,
     pub start: i32,
@@ -272,6 +423,8 @@ pub struct Sclip {
     pub mlen: i32,
     pub disc: i32,
     pub softp: i32,
+    #[serde(serialize_with = "crate::parity::format::serialize_indexmap_as_pairs")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_indexmap_as_pairs")]
     pub soft: IndexMap<i32, i32>,
     pub mates: Vec<Mate>,
 }
@@ -294,6 +447,7 @@ pub struct VariationMapSV {
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VariationMap {
     #[serde(serialize_with = "crate::parity::format::serialize_indexmap_as_pairs")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_indexmap_as_pairs")]
     pub entries: IndexMap<String, Variation>,
 
     pub sv: Option<VariationMapSV>,
@@ -372,30 +526,37 @@ impl InitialData {
 pub struct VariationData {
     #[serde(rename = "nonInsertionVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub non_insertion_variants: HashMap<i32, VariationMap>,
 
     #[serde(rename = "insertionVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub insertion_variants: HashMap<i32, VariationMap>,
 
     #[serde(rename = "positionToInsertionCount")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
-    pub position_to_insertion_count: HashMap<i32, BTreeMap<String, i32>>,
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
+    pub position_to_insertion_count: HashMap<i32, SortedStringMap<i32>>,
 
     #[serde(rename = "positionToDeletionsCount")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
-    pub position_to_deletions_count: HashMap<i32, BTreeMap<String, i32>>,
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
+    pub position_to_deletions_count: HashMap<i32, SortedStringMap<i32>>,
 
     #[serde(rename = "refCoverage")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub ref_coverage: HashMap<i32, i32>,
 
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub soft_clips_5_end: HashMap<i32, Sclip>,
 
     #[serde(rename = "softClips3End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub soft_clips_3_end: HashMap<i32, Sclip>,
 
     #[serde(rename = "svStructures")]
@@ -409,10 +570,11 @@ pub struct VariationData {
     pub splice: Option<BTreeSet<String>>,
 
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
-    pub mnp: HashMap<i32, BTreeMap<String, i32>>,
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
+    pub mnp: HashMap<i32, SortedStringMap<i32>>,
 
     #[serde(rename = "spliceCount")]
-    pub splice_count: BTreeMap<String, Vec<i32>>,
+    pub splice_count: SortedStringMap<Vec<i32>>,
 }
 
 // Java: SortPositionSclip L8-L24
@@ -631,7 +793,7 @@ pub struct Variant {
     pub duprate: f64,
 
     #[serde(rename = "genotype")]
-    pub genotype: String,
+    pub genotype: Option<String>,
 
     #[serde(rename = "varallele")]
     pub varallele: String,
@@ -680,7 +842,7 @@ impl Default for Variant {
             ref_forward_coverage: 0,
             total_pos_coverage: 0,
             duprate: 0.0,
-            genotype: String::new(),
+            genotype: None,
             varallele: String::new(),
             refallele: String::new(),
             vartype: String::new(),
@@ -905,6 +1067,8 @@ pub struct Vars {
     pub variants: Vec<Variant>,
 
     #[serde(rename = "varDescriptionStringToVariants")]
+    #[serde(serialize_with = "crate::parity::format::serialize_btreemap_as_pairs")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_btreemap_as_pairs")]
     pub var_description_string_to_variants: BTreeMap<String, Variant>,
 
     #[serde(rename = "sv")]
@@ -916,22 +1080,27 @@ pub struct Vars {
 pub struct RealignedVariationData {
     #[serde(rename = "nonInsertionVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub non_insertion_variants: HashMap<i32, VariationMap>,
 
     #[serde(rename = "insertionVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub insertion_variants: HashMap<i32, VariationMap>,
 
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub soft_clips_5_end: HashMap<i32, Sclip>,
 
     #[serde(rename = "softClips3End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub soft_clips_3_end: HashMap<i32, Sclip>,
 
     #[serde(rename = "refCoverage")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub ref_coverage: HashMap<i32, i32>,
 
     #[serde(rename = "maxReadLength")]
@@ -947,10 +1116,12 @@ pub struct RealignedVariationData {
 
     #[serde(rename = "SOFTP2SV")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub softp2sv: HashMap<i32, Vec<Sclip>>,
 
-    #[serde(skip_serializing, default)]
-    pub previous_scope: (),
+    // Java: RealignerJsonl always emits "previousScope":null (hardcoded)
+    #[serde(rename = "previousScope")]
+    pub previous_scope: Option<()>,
 }
 
 // Java: AlignedVarsData (ToVarsBuilder output boundary type)
@@ -961,6 +1132,7 @@ pub struct AlignedVarsData {
 
     #[serde(rename = "alignedVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub aligned_variants: HashMap<i32, Vars>,
 }
 
@@ -1466,7 +1638,7 @@ mod tests {
             panic!("expected RealignedVariationData to serialize as a JSON object");
         };
 
-        assert_eq!(object.len(), 10);
+        assert_eq!(object.len(), 11);
         assert!(object.contains_key("nonInsertionVariants"));
         assert!(object.contains_key("insertionVariants"));
         assert!(object.contains_key("softClips5End"));
@@ -1477,7 +1649,9 @@ mod tests {
         assert!(object.contains_key("duprate"));
         assert!(object.contains_key("CURSEG"));
         assert!(object.contains_key("SOFTP2SV"));
-        assert!(!object.contains_key("previousScope"));
+        // Java always emits "previousScope":null (RealignerJsonl.java L57)
+        assert!(object.contains_key("previousScope"));
+        assert!(object["previousScope"].is_null());
     }
 
     #[test]

@@ -167,6 +167,14 @@ parse_args() {
     fi
 }
 
+check_dependencies() {
+    if ! command -v zstd &>/dev/null; then
+        echo "ERROR: zstd is required but not found in PATH." >&2
+        echo "       Activate the conda environment first: conda activate rust_build_env" >&2
+        exit 1
+    fi
+}
+
 ensure_vardict_bin() {
     if [[ -x "$VARDICT_BIN" ]]; then
         if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -275,9 +283,10 @@ run_vardict_for_bed() {
     fi
 
     mkdir -p "$log_dir"
+    # Stage to temporary directories; promote atomically after compression
     for idx in "${!MODULE_DIRS[@]}"; do
-        mkdir -p "$OUTPUT_ROOT/${MODULE_DIRS[$idx]}/$chrom"
-        env_assignments+=("${MODULE_ENVS[$idx]}=$OUTPUT_ROOT/${MODULE_DIRS[$idx]}/$chrom")
+        mkdir -p "$OUTPUT_ROOT/${MODULE_DIRS[$idx]}/$chrom.staging"
+        env_assignments+=("${MODULE_ENVS[$idx]}=$OUTPUT_ROOT/${MODULE_DIRS[$idx]}/$chrom.staging")
     done
 
     env "${env_assignments[@]}" \
@@ -289,12 +298,17 @@ run_vardict_for_bed() {
     local fixture_dir
     local count
     for fixture_dir in "${MODULE_DIRS[@]}"; do
-        count="$(count_jsonl_files "$OUTPUT_ROOT/$fixture_dir/$chrom")"
+        local staging_dir="$OUTPUT_ROOT/$fixture_dir/$chrom.staging"
+        local final_dir="$OUTPUT_ROOT/$fixture_dir/$chrom"
+        count="$(count_jsonl_files "$staging_dir")"
         generated_count=$((generated_count + count))
         if [[ "$count" -gt 0 ]]; then
-            find "$OUTPUT_ROOT/$fixture_dir/$chrom" -maxdepth 1 -type f -name '*.jsonl' -exec zstd --rm -q {} +
+            find "$staging_dir" -maxdepth 1 -type f -name '*.jsonl' -exec zstd --rm -q {} +
         fi
         compressed_count=$((compressed_count + count))
+        # Atomic promotion: staging → final
+        rm -rf "$final_dir"
+        mv "$staging_dir" "$final_dir"
     done
 
     generated_fixtures=$((generated_fixtures + generated_count))
@@ -430,6 +444,7 @@ main() {
     echo "Dry run:       $DRY_RUN"
     echo ""
 
+    check_dependencies
     ensure_vardict_bin
     prepare_output_root
 
