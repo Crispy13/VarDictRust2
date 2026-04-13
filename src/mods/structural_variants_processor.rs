@@ -20,10 +20,8 @@ use crate::utils::{
     reverse_sequence, substr_with_len,
 };
 use crate::variations::{
-    adj_cnt, adj_cnt_with_reference, find_conseq, get_variation,
-    inc_cnt, is_has_and_equals_base, is_has_and_equals_index,
-    is_has_and_not_equals_base, is_not_equals,
-    join_ref,
+    adj_cnt, adj_cnt_with_reference, find_conseq, get_variation, inc_cnt, is_has_and_equals_base,
+    is_has_and_equals_index, is_has_and_not_equals_base, is_not_equals, join_ref,
 };
 
 use super::variation_realigner::ismatchref_with_mm;
@@ -44,7 +42,13 @@ pub struct PairsData {
 impl PairsData {
     pub fn new(pairs: i32, pmean: f64, qmean: f64, q_mean: f64, nm: f64) -> Self {
         // Java: StructuralVariantsProcessor.java#L2099-L2106
-        Self { pairs, pmean, qmean, q_mean, nm }
+        Self {
+            pairs,
+            pmean,
+            qmean,
+            q_mean,
+            nm,
+        }
     }
 }
 
@@ -74,7 +78,10 @@ pub fn find_match(
     };
 
     if instance.conf.y {
-        eprintln!("    Working Match {} {} {} SEED: {}", _position, seq_owned, dir, seed_len);
+        eprintln!(
+            "    Working Match {} {} {} SEED: {}",
+            _position, seq_owned, dir, seed_len
+        );
     }
 
     let seq_bytes = seq_owned.as_bytes();
@@ -146,7 +153,11 @@ pub fn find_match(
                         // Java: StructuralVariantsProcessor.java#L1948-L1949
                         sseq = if dir == 1 {
                             // substr(sseq, 1) — trim first char
-                            if sseq.len() > 1 { sseq[1..].to_string() } else { String::new() }
+                            if sseq.len() > 1 {
+                                sseq[1..].to_string()
+                            } else {
+                                String::new()
+                            }
                         } else {
                             // substr(sseq, 0, -1) — trim last char
                             if sseq.len() > 1 {
@@ -192,7 +203,11 @@ pub fn find_match(
                             }
                             eqcnt += 1;
                             if let Some(ch_second_last) = char_at(sseq_bytes, -2) {
-                                if is_has_and_not_equals_base(ch_second_last, reference_sequences, bp - 1) {
+                                if is_has_and_not_equals_base(
+                                    ch_second_last,
+                                    reference_sequences,
+                                    bp - 1,
+                                ) {
                                     continue;
                                 }
                             } else {
@@ -316,7 +331,11 @@ pub fn find_match_rev(
                         bp -= dir;
                         sseq = if dir == -1 {
                             // Java: substr(sseq, 1)
-                            if sseq.len() > 1 { sseq[1..].to_string() } else { String::new() }
+                            if sseq.len() > 1 {
+                                sseq[1..].to_string()
+                            } else {
+                                String::new()
+                            }
                         } else {
                             // Java: substr(sseq, 0, -1)
                             if sseq.len() > 1 {
@@ -350,7 +369,8 @@ pub fn find_match_rev(
                             // Java: extra = substr(seq, 0, j)
                             // Note: seq here is the complemented seq_owned
                             let e_end = std::cmp::min(j as usize, seq_bytes.len());
-                            current_extra = String::from_utf8_lossy(&seq_bytes[..e_end]).to_string();
+                            current_extra =
+                                String::from_utf8_lossy(&seq_bytes[..e_end]).to_string();
                         } else {
                             // dir == 1
                             // Java: StructuralVariantsProcessor.java#L1861-L1869
@@ -363,7 +383,8 @@ pub fn find_match_rev(
                             }
                             eqcnt += 1;
                             if let Some(ch_last2) = char_at(sseq_bytes, -2) {
-                                if is_has_and_not_equals_base(ch_last2, reference_sequences, bp - 1) {
+                                if is_has_and_not_equals_base(ch_last2, reference_sequences, bp - 1)
+                                {
                                     continue;
                                 }
                             } else {
@@ -375,7 +396,8 @@ pub fn find_match_rev(
                             } else {
                                 seq_bytes.len() - j as usize
                             };
-                            current_extra = String::from_utf8_lossy(&seq_bytes[start..]).to_string();
+                            current_extra =
+                                String::from_utf8_lossy(&seq_bytes[start..]).to_string();
                         }
                         // Java: StructuralVariantsProcessor.java#L1871
                         if eqcnt >= 3 && (eqcnt as f64) / (j as f64) > 0.5 {
@@ -651,7 +673,11 @@ pub fn fill_and_sort_tmp_sv(
         if position < curseg.start || position > curseg.end {
             continue;
         }
-        tmp.push(SortPositionSclip::new(position, sclip.clone(), sclip.base.vars_count));
+        tmp.push(SortPositionSclip::new(
+            position,
+            sclip.clone(),
+            sclip.base.vars_count,
+        ));
     }
 
     // Java: StructuralVariantsProcessor.java#L986-L987
@@ -668,8 +694,13 @@ pub fn fill_and_sort_tmp_sv(
 /// Get-or-create SV metadata for a position in non_insertion_variants.
 /// Java: VariationMap.getSV()
 /// Duplicate of variation_realigner's private get_sv — needed for cross-module access.
-fn get_sv(non_insertion_variants: &mut HashMap<i32, VariationMap>, pos: i32) -> &mut VariationMapSV {
-    let vmap = non_insertion_variants.entry(pos).or_insert_with(VariationMap::default);
+fn get_sv(
+    non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    pos: i32,
+) -> &mut VariationMapSV {
+    let vmap = non_insertion_variants
+        .entry(pos)
+        .or_insert_with(VariationMap::default);
     if vmap.sv.is_none() {
         vmap.sv = Some(VariationMapSV::default());
         vmap.entries.insert("SV".to_string(), Variation::default());
@@ -707,7 +738,8 @@ fn extend_reference_if_needed(
     if !ReferenceResource::is_loaded(chr, mstart, mend, reference) {
         let modified_region = Region::new_modified_region(region, mstart, mend);
         let old_ref = std::mem::take(reference);
-        match reference_resource.get_reference_with_extension(&modified_region, extension, old_ref) {
+        match reference_resource.get_reference_with_extension(&modified_region, extension, old_ref)
+        {
             Ok(new_ref) => *reference = new_ref,
             Err(e) => {
                 eprintln!("Warning: get_reference failed: {}", e);
@@ -749,11 +781,18 @@ pub fn find_del(
         // Java: StructuralVariantsProcessor.java#L159-L162 — sort soft by value descending
         let mut soft_entries: Vec<(i32, i32)> = del.soft.iter().map(|(&k, &v)| (k, v)).collect();
         soft_entries.sort_by(|a, b| b.1.cmp(&a.1));
-        let softp_initial = if soft_entries.is_empty() { 0 } else { soft_entries[0].0 };
+        let softp_initial = if soft_entries.is_empty() {
+            0
+        } else {
+            soft_entries[0].0
+        };
 
         // Java: StructuralVariantsProcessor.java#L164
         if instance.conf.y {
-            eprintln!("\n\nWorking DEL 5' {} mate cluster cnt: {}", softp_initial, del.base.vars_count);
+            eprintln!(
+                "\n\nWorking DEL 5' {} mate cluster cnt: {}",
+                softp_initial, del.base.vars_count
+            );
         }
 
         // Capture del fields before mutable borrow
@@ -783,7 +822,15 @@ pub fn find_del(
             }
 
             // Java: StructuralVariantsProcessor.java#L178-L182 — extend reference
-            extend_reference_if_needed(&region.chr, del_mstart, del_mend, 300, reference, reference_resource, region);
+            extend_reference_if_needed(
+                &region.chr,
+                del_mstart,
+                del_mend,
+                300,
+                reference,
+                reference_resource,
+                region,
+            );
             partial_pipeline_stub();
 
             // Java: StructuralVariantsProcessor.java#L184-L188
@@ -802,7 +849,8 @@ pub fn find_del(
             let dellen = bp - softp + 1;
             let ref_seqs = &reference.reference_sequences;
             // Java: StructuralVariantsProcessor.java#L197-L201 — left-alignment
-            while ref_seqs.contains_key(&bp) && ref_seqs.contains_key(&(softp - 1))
+            while ref_seqs.contains_key(&bp)
+                && ref_seqs.contains_key(&(softp - 1))
                 && ref_seqs.get(&bp) == ref_seqs.get(&(softp - 1))
             {
                 bp -= 1;
@@ -820,15 +868,21 @@ pub fn find_del(
             let sv = get_sv(non_insertion_variants, softp);
             sv.type_ = Some("DEL".to_string());
             sv.pairs += del_vars_count;
-            let scv_vars_count = soft_clips_3_end.get(&softp_initial).map_or(0, |s| s.base.vars_count);
+            let scv_vars_count = soft_clips_3_end
+                .get(&softp_initial)
+                .map_or(0, |s| s.base.vars_count);
             sv.splits += scv_vars_count;
             sv.clusters += 1;
 
             // Java: StructuralVariantsProcessor.java#L212-L216
-            if !(ref_coverage.contains_key(&softp) && *ref_coverage.get(&softp).unwrap() > del_vars_count) {
+            if !(ref_coverage.contains_key(&softp)
+                && *ref_coverage.get(&softp).unwrap() > del_vars_count)
+            {
                 ref_coverage.insert(softp, del_vars_count);
             }
-            if ref_coverage.contains_key(&bp) && ref_coverage.get(&softp).unwrap_or(&0) < ref_coverage.get(&bp).unwrap_or(&0) {
+            if ref_coverage.contains_key(&bp)
+                && ref_coverage.get(&softp).unwrap_or(&0) < ref_coverage.get(&bp).unwrap_or(&0)
+            {
                 ref_coverage.insert(softp, *ref_coverage.get(&bp).unwrap());
             }
 
@@ -839,7 +893,8 @@ pub fn find_del(
             // Get reference variant if exists
             let ref_var: Option<Variation> = ref_base.and_then(|rb| {
                 let rb_str = char::from(rb).to_string();
-                non_insertion_variants.get(&softp)
+                non_insertion_variants
+                    .get(&softp)
                     .and_then(|m| m.entries.get(&rb_str).cloned())
             });
 
@@ -876,8 +931,10 @@ pub fn find_del(
             tv.vars_count_on_reverse = mcnt - mcnt / 2;
             tv.mean_quality = del_mean_quality * (mcnt as f64) / (del_vars_count as f64);
             tv.mean_position = del_mean_position * (mcnt as f64) / (del_vars_count as f64);
-            tv.mean_mapping_quality = del_mean_mapping_quality * (mcnt as f64) / (del_vars_count as f64);
-            tv.number_of_mismatches = del_number_of_mismatches * (mcnt as f64) / (del_vars_count as f64);
+            tv.mean_mapping_quality =
+                del_mean_mapping_quality * (mcnt as f64) / (del_vars_count as f64);
+            tv.number_of_mismatches =
+                del_number_of_mismatches * (mcnt as f64) / (del_vars_count as f64);
 
             let variation = get_variation(non_insertion_variants, softp, &vn);
             adj_cnt(variation, &tv);
@@ -889,21 +946,37 @@ pub fn find_del(
             mark_sv(softp, bp, &mut [&mut sv_structures.svrdel], max_read_length);
 
             if instance.conf.y {
-                eprintln!("    Found DEL SV from 5' softclip unhappy reads: {} -{} Cnt: {} AdjCnt: {}", bp, dellen, del_vars_count, mcnt);
+                eprintln!(
+                    "    Found DEL SV from 5' softclip unhappy reads: {} -{} Cnt: {} AdjCnt: {}",
+                    bp, dellen, del_vars_count, mcnt
+                );
             }
         } else {
             // Java: StructuralVariantsProcessor.java#L237-L314 — no softp, scan softClips3End
             if instance.conf.y {
-                eprintln!("\n\nWorking DEL 5' no softp mate cluster cnt: {}", del_vars_count);
+                eprintln!(
+                    "\n\nWorking DEL 5' no softp mate cluster cnt: {}",
+                    del_vars_count
+                );
             }
 
-            extend_reference_if_needed(&region.chr, del_mstart, del_mend, 300, reference, reference_resource, region);
+            extend_reference_if_needed(
+                &region.chr,
+                del_mstart,
+                del_mend,
+                300,
+                reference,
+                reference_resource,
+                region,
+            );
 
             // Java: StructuralVariantsProcessor.java#L244 — iterate softClips3End
             let sc3_keys: Vec<i32> = soft_clips_3_end.keys().cloned().collect();
             let mut found = false;
             for &i in &sc3_keys {
-                if found { break; }
+                if found {
+                    break;
+                }
                 let scv = match soft_clips_3_end.get_mut(&i) {
                     Some(s) => s,
                     None => continue,
@@ -933,7 +1006,9 @@ pub fn find_del(
                     continue;
                 }
                 // Java: StructuralVariantsProcessor.java#L272
-                if !(bp - softp_now > 30 && is_overlap(softp_now, bp, del_end, del_mstart, max_read_length)) {
+                if !(bp - softp_now > 30
+                    && is_overlap(softp_now, bp, del_end, del_mstart, max_read_length))
+                {
                     continue;
                 }
                 bp -= 1;
@@ -953,10 +1028,14 @@ pub fn find_del(
                 sv.clusters += 1;
 
                 // Java: StructuralVariantsProcessor.java#L289-L292
-                if !(ref_coverage.contains_key(&softp) && *ref_coverage.get(&softp).unwrap() > del_vars_count) {
+                if !(ref_coverage.contains_key(&softp)
+                    && *ref_coverage.get(&softp).unwrap() > del_vars_count)
+                {
                     ref_coverage.insert(softp, del_vars_count);
                 }
-                if ref_coverage.contains_key(&bp) && ref_coverage.get(&softp).unwrap_or(&0) < ref_coverage.get(&bp).unwrap_or(&0) {
+                if ref_coverage.contains_key(&bp)
+                    && ref_coverage.get(&softp).unwrap_or(&0) < ref_coverage.get(&bp).unwrap_or(&0)
+                {
                     ref_coverage.insert(softp, *ref_coverage.get(&bp).unwrap());
                 }
                 // Java: StructuralVariantsProcessor.java#L293 — adjCnt (no reference var)
@@ -973,8 +1052,10 @@ pub fn find_del(
                 tv.vars_count_on_reverse = mcnt - mcnt / 2;
                 tv.mean_quality = del_mean_quality * (mcnt as f64) / (del_vars_count as f64);
                 tv.mean_position = del_mean_position * (mcnt as f64) / (del_vars_count as f64);
-                tv.mean_mapping_quality = del_mean_mapping_quality * (mcnt as f64) / (del_vars_count as f64);
-                tv.number_of_mismatches = del_number_of_mismatches * (mcnt as f64) / (del_vars_count as f64);
+                tv.mean_mapping_quality =
+                    del_mean_mapping_quality * (mcnt as f64) / (del_vars_count as f64);
+                tv.number_of_mismatches =
+                    del_number_of_mismatches * (mcnt as f64) / (del_vars_count as f64);
                 let variation = get_variation(non_insertion_variants, softp, &vn);
                 adj_cnt(variation, &tv);
 
@@ -982,7 +1063,10 @@ pub fn find_del(
                 mark_sv(softp, bp, &mut [&mut sv_structures.svrdel], max_read_length);
 
                 if instance.conf.y {
-                    eprintln!("    Found DEL SV from 5' softclip happy reads: {} -{} Cnt: {} AdjCnt: {}", bp, dellen, del_vars_count, mcnt);
+                    eprintln!(
+                        "    Found DEL SV from 5' softclip happy reads: {} -{} Cnt: {} AdjCnt: {}",
+                        bp, dellen, del_vars_count, mcnt
+                    );
                 }
                 // Java: StructuralVariantsProcessor.java#L314 — break after first match
                 found = true;
@@ -1004,7 +1088,11 @@ pub fn find_del(
         // Java: StructuralVariantsProcessor.java#L329-L332 — sort soft by value descending
         let mut soft_entries: Vec<(i32, i32)> = del.soft.iter().map(|(&k, &v)| (k, v)).collect();
         soft_entries.sort_by(|a, b| b.1.cmp(&a.1));
-        let softp_initial = if soft_entries.is_empty() { 0 } else { soft_entries[0].0 };
+        let softp_initial = if soft_entries.is_empty() {
+            0
+        } else {
+            soft_entries[0].0
+        };
 
         // Capture fields before mutable borrows
         let del_start = del.start;
@@ -1020,7 +1108,10 @@ pub fn find_del(
             // Java: StructuralVariantsProcessor.java#L336-L413 — happy path
             let mut softp = softp_initial;
             if instance.conf.y {
-                eprintln!("\n\nWorking DEL 3' {} mate cluster cnt: {}", softp, del_vars_count);
+                eprintln!(
+                    "\n\nWorking DEL 3' {} mate cluster cnt: {}",
+                    softp, del_vars_count
+                );
             }
             if !soft_clips_5_end.contains_key(&softp) {
                 continue;
@@ -1034,7 +1125,15 @@ pub fn find_del(
                 continue;
             }
 
-            extend_reference_if_needed(&region.chr, del_mstart, del_mend, 300, reference, reference_resource, region);
+            extend_reference_if_needed(
+                &region.chr,
+                del_mstart,
+                del_mend,
+                300,
+                reference,
+                reference_resource,
+                region,
+            );
             partial_pipeline_stub();
 
             // Java: StructuralVariantsProcessor.java#L359-L368
@@ -1065,7 +1164,9 @@ pub fn find_del(
             let sv = get_sv(non_insertion_variants, bp);
             sv.type_ = Some("DEL".to_string());
             sv.pairs += del_vars_count;
-            let scv_vars_count = soft_clips_5_end.get(&softp_initial).map_or(0, |s| s.base.vars_count);
+            let scv_vars_count = soft_clips_5_end
+                .get(&softp_initial)
+                .map_or(0, |s| s.base.vars_count);
             sv.splits += scv_vars_count;
             sv.clusters += 1;
 
@@ -1075,10 +1176,13 @@ pub fn find_del(
             adj_cnt(variation, &scv_clone);
 
             // Java: StructuralVariantsProcessor.java#L387-L391
-            if !(ref_coverage.contains_key(&bp) && *ref_coverage.get(&bp).unwrap() > del_vars_count) {
+            if !(ref_coverage.contains_key(&bp) && *ref_coverage.get(&bp).unwrap() > del_vars_count)
+            {
                 ref_coverage.insert(bp, del_vars_count);
             }
-            if ref_coverage.contains_key(&softp) && ref_coverage.get(&softp).unwrap_or(&0) > ref_coverage.get(&bp).unwrap_or(&0) {
+            if ref_coverage.contains_key(&softp)
+                && ref_coverage.get(&softp).unwrap_or(&0) > ref_coverage.get(&bp).unwrap_or(&0)
+            {
                 ref_coverage.insert(bp, *ref_coverage.get(&softp).unwrap());
             }
 
@@ -1091,8 +1195,10 @@ pub fn find_del(
             tv.vars_count_on_reverse = mcnt - mcnt / 2;
             tv.mean_quality = del_mean_quality * (mcnt as f64) / (del_vars_count as f64);
             tv.mean_position = del_mean_position * (mcnt as f64) / (del_vars_count as f64);
-            tv.mean_mapping_quality = del_mean_mapping_quality * (mcnt as f64) / (del_vars_count as f64);
-            tv.number_of_mismatches = del_number_of_mismatches * (mcnt as f64) / (del_vars_count as f64);
+            tv.mean_mapping_quality =
+                del_mean_mapping_quality * (mcnt as f64) / (del_vars_count as f64);
+            tv.number_of_mismatches =
+                del_number_of_mismatches * (mcnt as f64) / (del_vars_count as f64);
             let variation = get_variation(non_insertion_variants, bp, &vn);
             adj_cnt(variation, &tv);
 
@@ -1100,20 +1206,36 @@ pub fn find_del(
             mark_sv(bp, softp, &mut [&mut sv_structures.svfdel], max_read_length);
 
             if instance.conf.y {
-                eprintln!("    Found DEL SV from 3' softclip unhappy reads: {} -+{} Cnt: {} AdjCnt: {}", bp, dellen, del_vars_count, mcnt);
+                eprintln!(
+                    "    Found DEL SV from 3' softclip unhappy reads: {} -+{} Cnt: {} AdjCnt: {}",
+                    bp, dellen, del_vars_count, mcnt
+                );
             }
         } else {
             // Java: StructuralVariantsProcessor.java#L416-L510 — no softp, scan softClips5End
             if instance.conf.y {
-                eprintln!("\n\nWorking DEL 3' no softp mate cluster {} {} {} cnt: {}", region.chr, del_mstart, del_mend, del_vars_count);
+                eprintln!(
+                    "\n\nWorking DEL 3' no softp mate cluster {} {} {} cnt: {}",
+                    region.chr, del_mstart, del_mend, del_vars_count
+                );
             }
 
-            extend_reference_if_needed(&region.chr, del_mstart, del_mend, 300, reference, reference_resource, region);
+            extend_reference_if_needed(
+                &region.chr,
+                del_mstart,
+                del_mend,
+                300,
+                reference,
+                reference_resource,
+                region,
+            );
 
             let sc5_keys: Vec<i32> = soft_clips_5_end.keys().cloned().collect();
             let mut found = false;
             for &i in &sc5_keys {
-                if found { break; }
+                if found {
+                    break;
+                }
                 let scv = match soft_clips_5_end.get_mut(&i) {
                     Some(s) => s,
                     None => continue,
@@ -1142,7 +1264,8 @@ pub fn find_del(
                 if bp == 0 {
                     continue;
                 }
-                if !(softp - bp > 30 && is_overlap(bp, softp, del_mend, del_start, max_read_length)) {
+                if !(softp - bp > 30 && is_overlap(bp, softp, del_mend, del_start, max_read_length))
+                {
                     continue;
                 }
                 bp += 1;
@@ -1170,7 +1293,9 @@ pub fn find_del(
                 if !ref_coverage.contains_key(&bp) {
                     ref_coverage.insert(bp, del_vars_count);
                 }
-                if ref_coverage.contains_key(&softp) && ref_coverage.get(&softp).unwrap_or(&0) > ref_coverage.get(&bp).unwrap_or(&0) {
+                if ref_coverage.contains_key(&softp)
+                    && ref_coverage.get(&softp).unwrap_or(&0) > ref_coverage.get(&bp).unwrap_or(&0)
+                {
                     ref_coverage.insert(bp, *ref_coverage.get(&softp).unwrap());
                 }
                 // Java: StructuralVariantsProcessor.java#L482 — 3' no-softp calls incCnt (asymmetry!)
@@ -1185,8 +1310,10 @@ pub fn find_del(
                 tv.vars_count_on_reverse = mcnt - mcnt / 2;
                 tv.mean_quality = del_mean_quality * (mcnt as f64) / (del_vars_count as f64);
                 tv.mean_position = del_mean_position * (mcnt as f64) / (del_vars_count as f64);
-                tv.mean_mapping_quality = del_mean_mapping_quality * (mcnt as f64) / (del_vars_count as f64);
-                tv.number_of_mismatches = del_number_of_mismatches * (mcnt as f64) / (del_vars_count as f64);
+                tv.mean_mapping_quality =
+                    del_mean_mapping_quality * (mcnt as f64) / (del_vars_count as f64);
+                tv.number_of_mismatches =
+                    del_number_of_mismatches * (mcnt as f64) / (del_vars_count as f64);
                 let variation = get_variation(non_insertion_variants, bp, &vn);
                 adj_cnt(variation, &tv);
 
@@ -1194,7 +1321,10 @@ pub fn find_del(
                 mark_sv(bp, softp, &mut [&mut sv_structures.svfdel], max_read_length);
 
                 if instance.conf.y {
-                    eprintln!("    Found DEL SV from 3' softclip happy reads: {} -{} Cnt: {} AdjCnt: {}", bp, dellen, del_vars_count, mcnt);
+                    eprintln!(
+                        "    Found DEL SV from 3' softclip happy reads: {} -{} Cnt: {} AdjCnt: {}",
+                        bp, dellen, del_vars_count, mcnt
+                    );
                 }
                 // Java: StructuralVariantsProcessor.java#L508 — break after first match
                 found = true;
@@ -1230,39 +1360,91 @@ pub fn find_inv(
 ) {
     // Java: StructuralVariantsProcessor.java#L687
     find_inv_sub(
-        &mut sv_structures.svfinv5, 1, Side::Five,
-        non_insertion_variants, ref_coverage, soft_clips_3_end, soft_clips_5_end,
-        reference, reference_resource, region, max_read_length, bams,
-        previous_scope_non_insertion_variants, previous_scope_ref_coverage,
-        previous_scope_soft_clips_3_end, previous_scope_soft_clips_5_end,
-        previous_scope_reference_sequences, previous_scope_chr, previous_scope_max_read_length,
+        &mut sv_structures.svfinv5,
+        1,
+        Side::Five,
+        non_insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        reference,
+        reference_resource,
+        region,
+        max_read_length,
+        bams,
+        previous_scope_non_insertion_variants,
+        previous_scope_ref_coverage,
+        previous_scope_soft_clips_3_end,
+        previous_scope_soft_clips_5_end,
+        previous_scope_reference_sequences,
+        previous_scope_chr,
+        previous_scope_max_read_length,
     );
     // Java: StructuralVariantsProcessor.java#L688
     find_inv_sub(
-        &mut sv_structures.svrinv5, -1, Side::Five,
-        non_insertion_variants, ref_coverage, soft_clips_3_end, soft_clips_5_end,
-        reference, reference_resource, region, max_read_length, bams,
-        previous_scope_non_insertion_variants, previous_scope_ref_coverage,
-        previous_scope_soft_clips_3_end, previous_scope_soft_clips_5_end,
-        previous_scope_reference_sequences, previous_scope_chr, previous_scope_max_read_length,
+        &mut sv_structures.svrinv5,
+        -1,
+        Side::Five,
+        non_insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        reference,
+        reference_resource,
+        region,
+        max_read_length,
+        bams,
+        previous_scope_non_insertion_variants,
+        previous_scope_ref_coverage,
+        previous_scope_soft_clips_3_end,
+        previous_scope_soft_clips_5_end,
+        previous_scope_reference_sequences,
+        previous_scope_chr,
+        previous_scope_max_read_length,
     );
     // Java: StructuralVariantsProcessor.java#L689
     find_inv_sub(
-        &mut sv_structures.svfinv3, 1, Side::Three,
-        non_insertion_variants, ref_coverage, soft_clips_3_end, soft_clips_5_end,
-        reference, reference_resource, region, max_read_length, bams,
-        previous_scope_non_insertion_variants, previous_scope_ref_coverage,
-        previous_scope_soft_clips_3_end, previous_scope_soft_clips_5_end,
-        previous_scope_reference_sequences, previous_scope_chr, previous_scope_max_read_length,
+        &mut sv_structures.svfinv3,
+        1,
+        Side::Three,
+        non_insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        reference,
+        reference_resource,
+        region,
+        max_read_length,
+        bams,
+        previous_scope_non_insertion_variants,
+        previous_scope_ref_coverage,
+        previous_scope_soft_clips_3_end,
+        previous_scope_soft_clips_5_end,
+        previous_scope_reference_sequences,
+        previous_scope_chr,
+        previous_scope_max_read_length,
     );
     // Java: StructuralVariantsProcessor.java#L690
     find_inv_sub(
-        &mut sv_structures.svrinv3, -1, Side::Three,
-        non_insertion_variants, ref_coverage, soft_clips_3_end, soft_clips_5_end,
-        reference, reference_resource, region, max_read_length, bams,
-        previous_scope_non_insertion_variants, previous_scope_ref_coverage,
-        previous_scope_soft_clips_3_end, previous_scope_soft_clips_5_end,
-        previous_scope_reference_sequences, previous_scope_chr, previous_scope_max_read_length,
+        &mut sv_structures.svrinv3,
+        -1,
+        Side::Three,
+        non_insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        reference,
+        reference_resource,
+        region,
+        max_read_length,
+        bams,
+        previous_scope_non_insertion_variants,
+        previous_scope_ref_coverage,
+        previous_scope_soft_clips_3_end,
+        previous_scope_soft_clips_5_end,
+        previous_scope_reference_sequences,
+        previous_scope_chr,
+        previous_scope_max_read_length,
     );
 }
 
@@ -1310,12 +1492,21 @@ pub fn find_inv_sub(
             }
 
             // Java: StructuralVariantsProcessor.java#L711-L714 — sort soft
-            let mut soft_entries: Vec<(i32, i32)> = inv.soft.iter().map(|(&k, &v)| (k, v)).collect();
+            let mut soft_entries: Vec<(i32, i32)> =
+                inv.soft.iter().map(|(&k, &v)| (k, v)).collect();
             soft_entries.sort_by(|a, b| b.1.cmp(&a.1));
-            let mut softp: i32 = if soft_entries.is_empty() { 0 } else { soft_entries[0].0 };
+            let mut softp: i32 = if soft_entries.is_empty() {
+                0
+            } else {
+                soft_entries[0].0
+            };
 
             // Java: StructuralVariantsProcessor.java#L715
-            let sclip: &mut HashMap<i32, Sclip> = if dir == 1 { soft_clips_3_end } else { soft_clips_5_end };
+            let sclip: &mut HashMap<i32, Sclip> = if dir == 1 {
+                soft_clips_3_end
+            } else {
+                soft_clips_5_end
+            };
 
             let inv = &svref[inv_idx];
             let inv_mstart = inv.mstart;
@@ -1326,11 +1517,22 @@ pub fn find_inv_sub(
             let inv_vars_count = inv.base.vars_count;
 
             if instance.conf.y {
-                eprintln!("\n\nWorking INV {} {} {:?} pair_cnt: {}", softp, dir, side, inv_vars_count);
+                eprintln!(
+                    "\n\nWorking INV {} {} {:?} pair_cnt: {}",
+                    softp, dir, side, inv_vars_count
+                );
             }
 
             // Java: StructuralVariantsProcessor.java#L720-L726 — extend reference
-            extend_reference_if_needed(&region.chr, inv_mstart, inv_mend, 500, reference, reference_resource, region);
+            extend_reference_if_needed(
+                &region.chr,
+                inv_mstart,
+                inv_mend,
+                500,
+                reference,
+                reference_resource,
+                region,
+            );
             partial_pipeline_stub();
 
             let mut bp: i32 = 0;
@@ -1398,8 +1600,11 @@ pub fn find_inv_sub(
                     softp = cp;
                     scv_sclip_key = cp;
                     // Java: StructuralVariantsProcessor.java#L772-L774
-                    if (dir == 1 && ((bp - inv_mend).abs() as f64) < MINSVCDIST * (max_read_length as f64))
-                        || (dir == -1 && ((bp - inv_mstart).abs() as f64) < MINSVCDIST * (max_read_length as f64))
+                    if (dir == 1
+                        && ((bp - inv_mend).abs() as f64) < MINSVCDIST * (max_read_length as f64))
+                        || (dir == -1
+                            && ((bp - inv_mstart).abs() as f64)
+                                < MINSVCDIST * (max_read_length as f64))
                     {
                         break;
                     }
@@ -1410,7 +1615,10 @@ pub fn find_inv_sub(
             }
 
             if instance.conf.y {
-                eprintln!("    {} {} {} {:?} {} pair_cnt: {} soft_cnt: {}", softp, bp, dir, side, seq, inv_vars_count, scv_vars_count);
+                eprintln!(
+                    "    {} {} {} {:?} {} pair_cnt: {} soft_cnt: {}",
+                    softp, bp, dir, side, seq, inv_vars_count, scv_vars_count
+                );
             }
 
             // Java: StructuralVariantsProcessor.java#L782-L795 — position adjustment
@@ -1440,8 +1648,10 @@ pub fn find_inv_sub(
 
             // Java: StructuralVariantsProcessor.java#L802-L809 — complement-based left-alignment
             if (dir == -1 && side == Side::Five) || (dir == 1 && side == Side::Three) {
-                while ref_seqs.contains_key(&softp) && ref_seqs.contains_key(&bp)
-                    && ref_seqs.get(&softp).copied() == Some(complement_base(*ref_seqs.get(&bp).unwrap_or(&0)))
+                while ref_seqs.contains_key(&softp)
+                    && ref_seqs.contains_key(&bp)
+                    && ref_seqs.get(&softp).copied()
+                        == Some(complement_base(*ref_seqs.get(&bp).unwrap_or(&0)))
                 {
                     softp += 1;
                     if softp != 0 {
@@ -1450,8 +1660,10 @@ pub fn find_inv_sub(
                 }
             }
             // Java: StructuralVariantsProcessor.java#L810-L815
-            while ref_seqs.contains_key(&(softp - 1)) && ref_seqs.contains_key(&(bp + 1))
-                && ref_seqs.get(&(softp - 1)).copied() == Some(complement_base(*ref_seqs.get(&(bp + 1)).unwrap_or(&0)))
+            while ref_seqs.contains_key(&(softp - 1))
+                && ref_seqs.contains_key(&(bp + 1))
+                && ref_seqs.get(&(softp - 1)).copied()
+                    == Some(complement_base(*ref_seqs.get(&(bp + 1)).unwrap_or(&0)))
             {
                 softp -= 1;
                 if softp != 0 {
@@ -1460,7 +1672,10 @@ pub fn find_inv_sub(
             }
 
             // Java: StructuralVariantsProcessor.java#L816
-            if bp > softp && bp - softp > 150 && ((bp - softp) as f64) / (inv_mlen.abs() as f64) < 1.5 {
+            if bp > softp
+                && bp - softp > 150
+                && ((bp - softp) as f64) / (inv_mlen.abs() as f64) < 1.5
+            {
                 let len = bp - softp + 1;
                 // Java: StructuralVariantsProcessor.java#L818-L819
                 let ins5 = reverse_complement_str(&join_ref(ref_seqs, bp - SVFLANK + 1, bp));
@@ -1496,7 +1711,11 @@ pub fn find_inv_sub(
 
                 // Java: StructuralVariantsProcessor.java#L841-L843 — adjCnt with optional ref var
                 let scv_base_clone = {
-                    let sclip_map: &HashMap<i32, Sclip> = if dir == 1 { soft_clips_3_end } else { soft_clips_5_end };
+                    let sclip_map: &HashMap<i32, Sclip> = if dir == 1 {
+                        soft_clips_3_end
+                    } else {
+                        soft_clips_5_end
+                    };
                     // Use scv_sclip_key to get the correct scv base
                     if let Some(scv_entry) = sclip_map.get(&scv_sclip_key) {
                         scv_entry.base.clone()
@@ -1514,7 +1733,8 @@ pub fn find_inv_sub(
                     let ref_base = ref_seqs.get(&softp).copied();
                     let ref_var_clone: Option<Variation> = ref_base.and_then(|rb| {
                         let rb_str = char::from(rb).to_string();
-                        non_insertion_variants.get(&softp)
+                        non_insertion_variants
+                            .get(&softp)
                             .and_then(|m| m.entries.get(&rb_str).cloned())
                     });
 
@@ -1528,14 +1748,20 @@ pub fn find_inv_sub(
                             if let Some(vmap) = non_insertion_variants.get_mut(&softp) {
                                 if let Some(rvar) = vmap.entries.get_mut(&rb_str) {
                                     rvar.vars_count -= scv_base_clone.vars_count;
-                                    rvar.high_quality_reads_count -= scv_base_clone.high_quality_reads_count;
-                                    rvar.low_quality_reads_count -= scv_base_clone.low_quality_reads_count;
+                                    rvar.high_quality_reads_count -=
+                                        scv_base_clone.high_quality_reads_count;
+                                    rvar.low_quality_reads_count -=
+                                        scv_base_clone.low_quality_reads_count;
                                     rvar.mean_position -= scv_base_clone.mean_position;
                                     rvar.mean_quality -= scv_base_clone.mean_quality;
-                                    rvar.mean_mapping_quality -= scv_base_clone.mean_mapping_quality;
-                                    rvar.number_of_mismatches -= scv_base_clone.number_of_mismatches;
-                                    rvar.vars_count_on_forward -= scv_base_clone.vars_count_on_forward;
-                                    rvar.vars_count_on_reverse -= scv_base_clone.vars_count_on_reverse;
+                                    rvar.mean_mapping_quality -=
+                                        scv_base_clone.mean_mapping_quality;
+                                    rvar.number_of_mismatches -=
+                                        scv_base_clone.number_of_mismatches;
+                                    rvar.vars_count_on_forward -=
+                                        scv_base_clone.vars_count_on_forward;
+                                    rvar.vars_count_on_reverse -=
+                                        scv_base_clone.vars_count_on_reverse;
                                     crate::variations::correct_cnt(rvar);
                                 }
                             }
@@ -1553,11 +1779,18 @@ pub fn find_inv_sub(
                 dels5.insert(softp, map_inner);
 
                 // Java: StructuralVariantsProcessor.java#L848
-                let ref_cov_val = ref_coverage.get(&(softp - 1)).copied().unwrap_or(inv_vars_count);
+                let ref_cov_val = ref_coverage
+                    .get(&(softp - 1))
+                    .copied()
+                    .unwrap_or(inv_vars_count);
                 ref_coverage.insert(softp, ref_cov_val);
 
                 // Java: StructuralVariantsProcessor.java#L849 — mark scv.used
-                let sclip_map_mut: &mut HashMap<i32, Sclip> = if dir == 1 { soft_clips_3_end } else { soft_clips_5_end };
+                let sclip_map_mut: &mut HashMap<i32, Sclip> = if dir == 1 {
+                    soft_clips_3_end
+                } else {
+                    soft_clips_5_end
+                };
                 // Use scv_sclip_key to mark the exact scv entry from the search phase
                 if let Some(scv_entry) = sclip_map_mut.get_mut(&scv_sclip_key) {
                     scv_entry.used = true;
@@ -1580,10 +1813,27 @@ pub fn find_inv_sub(
 
                 if instance.conf.y {
                     let refcov = ref_coverage.get(&softp).copied().unwrap_or(0);
-                    let ratio = if inv_mlen.abs() > 0 { (bp - softp) / inv_mlen.abs() } else { 0 };
+                    let ratio = if inv_mlen.abs() > 0 {
+                        (bp - softp) / inv_mlen.abs()
+                    } else {
+                        0
+                    };
                     eprintln!(
                         "  Found INV SV: {} {} {} BP: {} cov: {} Cnt: {} EXTRA: {} {} {} {} cnt: {} {}\t DIR: {} Side: {:?}",
-                        seq, softp, gt, bp, refcov, inv_vars_count, extra, inv_mstart, inv_mend, inv_mlen, scv_vars_count, ratio, dir, side
+                        seq,
+                        softp,
+                        gt,
+                        bp,
+                        refcov,
+                        inv_vars_count,
+                        extra,
+                        inv_mstart,
+                        inv_mend,
+                        inv_mlen,
+                        scv_vars_count,
+                        ratio,
+                        dir,
+                        side
                     );
                 }
                 return Ok(true); // Java: return vref — we return early on first found
@@ -1668,7 +1918,9 @@ pub fn findsv(
                 if bp < p5_orig {
                     // Java: StructuralVariantsProcessor.java#L732-L739
                     let pairs_data = check_pairs(
-                        &region.chr, bp, p5_orig,
+                        &region.chr,
+                        bp,
+                        p5_orig,
                         &mut [&mut sv_structures.svfdel, &mut sv_structures.svrdel],
                         max_read_length,
                     );
@@ -1699,9 +1951,19 @@ pub fn findsv(
 
                     // Java: StructuralVariantsProcessor.java#L754-L757
                     if !ref_coverage.contains_key(&bp) {
-                        ref_coverage.insert(bp, pairs + { soft_clips_5_end.get(&p5_orig).map_or(0, |s| s.base.vars_count) });
+                        ref_coverage.insert(
+                            bp,
+                            pairs + {
+                                soft_clips_5_end
+                                    .get(&p5_orig)
+                                    .map_or(0, |s| s.base.vars_count)
+                            },
+                        );
                     }
-                    if ref_coverage.contains_key(&(p5 + 1)) && ref_coverage.get(&bp).unwrap_or(&0) < ref_coverage.get(&(p5 + 1)).unwrap_or(&0) {
+                    if ref_coverage.contains_key(&(p5 + 1))
+                        && ref_coverage.get(&bp).unwrap_or(&0)
+                            < ref_coverage.get(&(p5 + 1)).unwrap_or(&0)
+                    {
                         ref_coverage.insert(bp, *ref_coverage.get(&(p5 + 1)).unwrap());
                     }
                     // Java: StructuralVariantsProcessor.java#L758
@@ -1754,7 +2016,11 @@ pub fn findsv(
                 let ref_seqs = &reference.reference_sequences;
                 // Java: StructuralVariantsProcessor.java#L791-L796
                 while ref_seqs.contains_key(&(bp + 1))
-                    && is_has_and_equals_base(complement_base(*ref_seqs.get(&(bp + 1)).unwrap_or(&0)), ref_seqs, p5 - 1)
+                    && is_has_and_equals_base(
+                        complement_base(*ref_seqs.get(&(bp + 1)).unwrap_or(&0)),
+                        ref_seqs,
+                        p5 - 1,
+                    )
                 {
                     p5 -= 1;
                     if p5 != 0 {
@@ -1790,7 +2056,9 @@ pub fn findsv(
                 adj_cnt(vref, &sc5v_clone);
                 inc_cnt(ref_coverage, p5, cnt5);
                 // Java: StructuralVariantsProcessor.java#L817-L818
-                if ref_coverage.contains_key(&bp) && ref_coverage.get(&p5).unwrap_or(&0) < ref_coverage.get(&bp).unwrap_or(&0) {
+                if ref_coverage.contains_key(&bp)
+                    && ref_coverage.get(&p5).unwrap_or(&0) < ref_coverage.get(&bp).unwrap_or(&0)
+                {
                     ref_coverage.insert(p5, *ref_coverage.get(&bp).unwrap());
                 }
                 if instance.conf.y {
@@ -1848,7 +2116,9 @@ pub fn findsv(
                 if bp > p3_orig {
                     // Java: StructuralVariantsProcessor.java#L857 — candidate deletion
                     let pairs_data = check_pairs(
-                        &region.chr, p3_orig, bp,
+                        &region.chr,
+                        p3_orig,
+                        bp,
                         &mut [&mut sv_structures.svfdel, &mut sv_structures.svrdel],
                         max_read_length,
                     );
@@ -1888,9 +2158,18 @@ pub fn findsv(
 
                     // Java: StructuralVariantsProcessor.java#L884-L887
                     if !ref_coverage.contains_key(&p3) {
-                        ref_coverage.insert(p3, pairs + { soft_clips_3_end.get(&p3_orig).map_or(0, |s| s.base.vars_count) });
+                        ref_coverage.insert(
+                            p3,
+                            pairs + {
+                                soft_clips_3_end
+                                    .get(&p3_orig)
+                                    .map_or(0, |s| s.base.vars_count)
+                            },
+                        );
                     }
-                    if ref_coverage.contains_key(&bp) && ref_coverage.get(&bp).unwrap_or(&0) < ref_coverage.get(&p3).unwrap_or(&0) {
+                    if ref_coverage.contains_key(&bp)
+                        && ref_coverage.get(&bp).unwrap_or(&0) < ref_coverage.get(&p3).unwrap_or(&0)
+                    {
                         ref_coverage.insert(bp, *ref_coverage.get(&p3).unwrap());
                     }
 
@@ -1945,7 +2224,11 @@ pub fn findsv(
                 let ref_seqs = &reference.reference_sequences;
                 // Java: StructuralVariantsProcessor.java#L926-L932
                 while ref_seqs.contains_key(&(bp + 1))
-                    && is_has_and_equals_base(complement_base(*ref_seqs.get(&(bp + 1)).unwrap_or(&0)), ref_seqs, p3 - 1)
+                    && is_has_and_equals_base(
+                        complement_base(*ref_seqs.get(&(bp + 1)).unwrap_or(&0)),
+                        ref_seqs,
+                        p3 - 1,
+                    )
                 {
                     p3 -= 1;
                     if p3 != 0 {
@@ -1983,16 +2266,21 @@ pub fn findsv(
                 inc_cnt(ref_coverage, p3, cnt3);
 
                 // Java: StructuralVariantsProcessor.java#L954-L955
-                if ref_coverage.contains_key(&bp) && ref_coverage.get(&p3).unwrap_or(&0) < ref_coverage.get(&bp).unwrap_or(&0) {
+                if ref_coverage.contains_key(&bp)
+                    && ref_coverage.get(&p3).unwrap_or(&0) < ref_coverage.get(&bp).unwrap_or(&0)
+                {
                     ref_coverage.insert(p3, *ref_coverage.get(&bp).unwrap());
                 }
                 if instance.conf.y {
                     eprintln!(
                         "    Found INV: {} BP: {} Cov: {} {} {} EXTRA: {} Cnt: {}",
-                        p3, bp,
+                        p3,
+                        bp,
                         ref_coverage.get(&p3).unwrap_or(&0),
                         ref_coverage.get(&bp).unwrap_or(&0),
-                        vn, extra, cnt3
+                        vn,
+                        extra,
+                        cnt3
                     );
                 }
             }
@@ -2031,20 +2319,30 @@ pub fn find_del_disc(
     for del_idx in 0..sv_structures.svfdel.len() {
         let result: Result<(), String> = (|| {
             let del = &sv_structures.svfdel[del_idx];
-            if del.used { return Ok(()); }
+            if del.used {
+                return Ok(());
+            }
             // Java: StructuralVariantsProcessor.java#L1008
             if let Some(sp) = splice {
                 if !sp.is_empty() && del.mlen.abs() < 250000 {
                     return Ok(());
                 }
             }
-            if del.base.vars_count < instance.conf.minr + 5 { return Ok(()); }
-            if del.mstart <= del.end + mindist { return Ok(()); }
-            if del.base.mean_mapping_quality / (del.base.vars_count as f64) <= DISCPAIRQUAL as f64 { return Ok(()); }
+            if del.base.vars_count < instance.conf.minr + 5 {
+                return Ok(());
+            }
+            if del.mstart <= del.end + mindist {
+                return Ok(());
+            }
+            if del.base.mean_mapping_quality / (del.base.vars_count as f64) <= DISCPAIRQUAL as f64 {
+                return Ok(());
+            }
 
             // Java: StructuralVariantsProcessor.java#L1019
             let mlen = del.mstart - del.end - max_read_length / (del.base.vars_count + 1);
-            if !(mlen > 0 && mlen > mindist) { return Ok(()); }
+            if !(mlen > 0 && mlen > mindist) {
+                return Ok(());
+            }
 
             // Java: StructuralVariantsProcessor.java#L1023-L1025
             let mut bp = del.end + (max_read_length / (del.base.vars_count + 1)) / 2;
@@ -2067,7 +2365,11 @@ pub fn find_del_disc(
                 let ext = if mlen < 1000 { mlen } else { 1000 };
                 let modified_region = Region::new_modified_region(region, bp - 150, bp + 150);
                 let old_ref = std::mem::take(reference);
-                match reference_resource.get_reference_with_extension(&modified_region, ext, old_ref) {
+                match reference_resource.get_reference_with_extension(
+                    &modified_region,
+                    ext,
+                    old_ref,
+                ) {
                     Ok(new_ref) => *reference = new_ref,
                     Err(e) => eprintln!("Warning: get_reference failed: {}", e),
                 }
@@ -2080,8 +2382,12 @@ pub fn find_del_disc(
             // Java: StructuralVariantsProcessor.java#L1034-L1040
             let sv = get_sv(non_insertion_variants, bp);
             sv.type_ = Some("DEL".to_string());
-            sv.splits += soft_clips_3_end.get(&(del_end + 1)).map_or(0, |s| s.base.vars_count);
-            sv.splits += soft_clips_5_end.get(&del_mstart).map_or(0, |s| s.base.vars_count);
+            sv.splits += soft_clips_3_end
+                .get(&(del_end + 1))
+                .map_or(0, |s| s.base.vars_count);
+            sv.splits += soft_clips_5_end
+                .get(&del_mstart)
+                .map_or(0, |s| s.base.vars_count);
             sv.pairs += del_vars_count;
             sv.clusters += 1;
 
@@ -2112,7 +2418,12 @@ pub fn find_del_disc(
             // Java: StructuralVariantsProcessor.java#L1062
             sv_structures.svfdel[del_idx].used = true;
             // Java: StructuralVariantsProcessor.java#L1063
-            mark_sv(del_end, del_mstart, &mut [&mut sv_structures.svrdel], max_read_length);
+            mark_sv(
+                del_end,
+                del_mstart,
+                &mut [&mut sv_structures.svrdel],
+                max_read_length,
+            );
 
             Ok(())
         })();
@@ -2126,20 +2437,30 @@ pub fn find_del_disc(
     for del_idx in 0..sv_structures.svrdel.len() {
         let result: Result<(), String> = (|| {
             let del = &sv_structures.svrdel[del_idx];
-            if del.used { return Ok(()); }
+            if del.used {
+                return Ok(());
+            }
             if let Some(sp) = splice {
                 if !sp.is_empty() && del.mlen.abs() < 250000 {
                     return Ok(());
                 }
             }
-            if del.base.vars_count < instance.conf.minr + 5 { return Ok(()); }
+            if del.base.vars_count < instance.conf.minr + 5 {
+                return Ok(());
+            }
             // Java: StructuralVariantsProcessor.java#L1084
-            if del.start <= del.mend + mindist { return Ok(()); }
-            if del.base.mean_mapping_quality / (del.base.vars_count as f64) <= DISCPAIRQUAL as f64 { return Ok(()); }
+            if del.start <= del.mend + mindist {
+                return Ok(());
+            }
+            if del.base.mean_mapping_quality / (del.base.vars_count as f64) <= DISCPAIRQUAL as f64 {
+                return Ok(());
+            }
 
             // Java: StructuralVariantsProcessor.java#L1089
             let mlen = del.start - del.mend - max_read_length / (del.base.vars_count + 1);
-            if !(mlen > 0 && mlen > mindist) { return Ok(()); }
+            if !(mlen > 0 && mlen > mindist) {
+                return Ok(());
+            }
 
             // Java: StructuralVariantsProcessor.java#L1093
             let bp = del.mend + ((max_read_length / (del.base.vars_count + 1)) / 2);
@@ -2160,7 +2481,11 @@ pub fn find_del_disc(
                 let ext = if mlen < 1000 { mlen } else { 1000 };
                 let modified_region = Region::new_modified_region(region, bp - 150, bp + 150);
                 let old_ref = std::mem::take(reference);
-                match reference_resource.get_reference_with_extension(&modified_region, ext, old_ref) {
+                match reference_resource.get_reference_with_extension(
+                    &modified_region,
+                    ext,
+                    old_ref,
+                ) {
                     Ok(new_ref) => *reference = new_ref,
                     Err(e) => eprintln!("Warning: get_reference failed: {}", e),
                 }
@@ -2173,8 +2498,12 @@ pub fn find_del_disc(
             // Java: StructuralVariantsProcessor.java#L1102-L1108
             let sv = get_sv(non_insertion_variants, bp);
             sv.type_ = Some("DEL".to_string());
-            sv.splits += soft_clips_3_end.get(&(del_mend + 1)).map_or(0, |s| s.base.vars_count);
-            sv.splits += soft_clips_5_end.get(&del_start).map_or(0, |s| s.base.vars_count);
+            sv.splits += soft_clips_3_end
+                .get(&(del_mend + 1))
+                .map_or(0, |s| s.base.vars_count);
+            sv.splits += soft_clips_5_end
+                .get(&del_start)
+                .map_or(0, |s| s.base.vars_count);
             sv.pairs += del_vars_count;
             sv.clusters += 1;
 
@@ -2210,15 +2539,30 @@ pub fn find_del_disc(
                 ref_coverage.insert(bp, 2 * del_vars_count);
             }
             // Java: StructuralVariantsProcessor.java#L1133-L1135
-            if ref_coverage.contains_key(&del_start) && ref_coverage.get(&bp).unwrap_or(&0) < ref_coverage.get(&del_start).unwrap_or(&0) {
+            if ref_coverage.contains_key(&del_start)
+                && ref_coverage.get(&bp).unwrap_or(&0) < ref_coverage.get(&del_start).unwrap_or(&0)
+            {
                 ref_coverage.insert(bp, *ref_coverage.get(&del_start).unwrap());
             }
             // Java: StructuralVariantsProcessor.java#L1136
             sv_structures.svrdel[del_idx].used = true;
             // Java: StructuralVariantsProcessor.java#L1137
-            extend_reference_if_needed(&region.chr, del_mstart - 100, del_mend + 100, 200, reference, reference_resource, region);
+            extend_reference_if_needed(
+                &region.chr,
+                del_mstart - 100,
+                del_mend + 100,
+                200,
+                reference,
+                reference_resource,
+                region,
+            );
             // Java: StructuralVariantsProcessor.java#L1138
-            mark_sv(del_mend, del_start, &mut [&mut sv_structures.svfdel], max_read_length);
+            mark_sv(
+                del_mend,
+                del_start,
+                &mut [&mut sv_structures.svfdel],
+                max_read_length,
+            );
 
             Ok(())
         })();
@@ -2250,7 +2594,9 @@ pub fn find_inv_disc(
     // ── Loop 1: svfinv5 × svrinv5 ──
     // Java: StructuralVariantsProcessor.java#L1170-L1263
     for fi in 0..sv_structures.svfinv5.len() {
-        if sv_structures.svfinv5[fi].used { continue; }
+        if sv_structures.svfinv5[fi].used {
+            continue;
+        }
         let cnt = sv_structures.svfinv5[fi].base.vars_count;
         let me = sv_structures.svfinv5[fi].mend;
         let ms = sv_structures.svfinv5[fi].mstart;
@@ -2261,11 +2607,15 @@ pub fn find_inv_disc(
         let qmean = sv_structures.svfinv5[fi].base.mean_quality;
         let q_mean = sv_structures.svfinv5[fi].base.mean_mapping_quality;
         // Java: StructuralVariantsProcessor.java#L1183
-        if !(q_mean / (cnt as f64) > DISCPAIRQUAL as f64) { continue; }
+        if !(q_mean / (cnt as f64) > DISCPAIRQUAL as f64) {
+            continue;
+        }
 
         for ri in 0..sv_structures.svrinv5.len() {
             let result: Result<(), String> = (|| {
-                if sv_structures.svrinv5[ri].used { return Ok(()); }
+                if sv_structures.svrinv5[ri].used {
+                    return Ok(());
+                }
                 let rcnt = sv_structures.svrinv5[ri].base.vars_count;
                 let rstart = sv_structures.svrinv5[ri].start;
                 let rms = sv_structures.svrinv5[ri].mstart;
@@ -2274,8 +2624,12 @@ pub fn find_inv_disc(
                 let rqmean = sv_structures.svrinv5[ri].base.mean_quality;
                 let rq_mean = sv_structures.svrinv5[ri].base.mean_mapping_quality;
                 // Java: StructuralVariantsProcessor.java#L1195
-                if !(rq_mean / (rcnt as f64) > DISCPAIRQUAL as f64) { return Ok(()); }
-                if !(cnt + rcnt > instance.conf.minr + 5) { return Ok(()); }
+                if !(rq_mean / (rcnt as f64) > DISCPAIRQUAL as f64) {
+                    return Ok(());
+                }
+                if !(cnt + rcnt > instance.conf.minr + 5) {
+                    return Ok(());
+                }
 
                 if is_overlap(end, me, rstart, rms, max_read_length) {
                     // Java: StructuralVariantsProcessor.java#L1201
@@ -2283,9 +2637,14 @@ pub fn find_inv_disc(
                     let pe = ((me + rms) / 2).abs();
                     // Java: StructuralVariantsProcessor.java#L1203-L1205
                     if !reference.reference_sequences.contains_key(&pe) {
-                        let modified_region = Region::new_modified_region(region, pe - 150, pe + 150);
+                        let modified_region =
+                            Region::new_modified_region(region, pe - 150, pe + 150);
                         let old_ref = std::mem::take(reference);
-                        match reference_resource.get_reference_with_extension(&modified_region, 300, old_ref) {
+                        match reference_resource.get_reference_with_extension(
+                            &modified_region,
+                            300,
+                            old_ref,
+                        ) {
                             Ok(new_ref) => *reference = new_ref,
                             Err(e) => eprintln!("Warning: get_reference failed: {}", e),
                         }
@@ -2306,7 +2665,8 @@ pub fn find_inv_disc(
                         );
                     }
                     // Java: StructuralVariantsProcessor.java#L1218
-                    let vref = get_variation(non_insertion_variants, bp, &format!("-{}^{}", len, ins));
+                    let vref =
+                        get_variation(non_insertion_variants, bp, &format!("-{}^{}", len, ins));
                     // Java: StructuralVariantsProcessor.java#L1220-L1221
                     sv_structures.svfinv5[fi].used = true;
                     sv_structures.svrinv5[ri].used = true;
@@ -2323,14 +2683,17 @@ pub fn find_inv_disc(
                     tmp.mean_position = pmean + rpmean;
                     tmp.mean_mapping_quality = q_mean + rq_mean;
                     tmp.number_of_mismatches = nm + rnm;
-                    let vref = get_variation(non_insertion_variants, bp, &format!("-{}^{}", len, ins));
+                    let vref =
+                        get_variation(non_insertion_variants, bp, &format!("-{}^{}", len, ins));
                     adj_cnt(vref, &tmp);
 
                     // Java: StructuralVariantsProcessor.java#L1234-L1238
                     let sv = get_sv(non_insertion_variants, bp);
                     sv.type_ = Some("INV".to_string());
                     sv.pairs += cnt;
-                    sv.splits += soft_clips_5_end.get(&start).map_or(0, |s| s.base.vars_count);
+                    sv.splits += soft_clips_5_end
+                        .get(&start)
+                        .map_or(0, |s| s.base.vars_count);
                     sv.splits += soft_clips_5_end.get(&ms).map_or(0, |s| s.base.vars_count);
                     sv.clusters += 1;
 
@@ -2339,7 +2702,12 @@ pub fn find_inv_disc(
                         ref_coverage.insert(bp, 2 * cnt);
                     }
                     // Java: StructuralVariantsProcessor.java#L1243
-                    mark_sv(bp, pe, &mut [&mut sv_structures.svfinv3, &mut sv_structures.svrinv3], max_read_length);
+                    mark_sv(
+                        bp,
+                        pe,
+                        &mut [&mut sv_structures.svfinv3, &mut sv_structures.svrinv3],
+                        max_read_length,
+                    );
                 }
                 Ok(())
             })();
@@ -2352,7 +2720,9 @@ pub fn find_inv_disc(
     // ── Loop 2: svfinv3 × svrinv3 ──
     // Java: StructuralVariantsProcessor.java#L1268-L1390
     for fi in 0..sv_structures.svfinv3.len() {
-        if sv_structures.svfinv3[fi].used { continue; }
+        if sv_structures.svfinv3[fi].used {
+            continue;
+        }
         let cnt = sv_structures.svfinv3[fi].base.vars_count;
         let me = sv_structures.svfinv3[fi].mend;
         let end = sv_structures.svfinv3[fi].end;
@@ -2363,7 +2733,9 @@ pub fn find_inv_disc(
 
         for ri in 0..sv_structures.svrinv3.len() {
             let result: Result<(), String> = (|| {
-                if sv_structures.svrinv3[ri].used { return Ok(()); }
+                if sv_structures.svrinv3[ri].used {
+                    return Ok(());
+                }
                 let rcnt = sv_structures.svrinv3[ri].base.vars_count;
                 let rstart = sv_structures.svrinv3[ri].start;
                 let rms = sv_structures.svrinv3[ri].mstart;
@@ -2372,8 +2744,12 @@ pub fn find_inv_disc(
                 let rqmean = sv_structures.svrinv3[ri].base.mean_quality;
                 let rq_mean = sv_structures.svrinv3[ri].base.mean_mapping_quality;
                 // Java: StructuralVariantsProcessor.java#L1291
-                if !(rq_mean / (rcnt as f64) > DISCPAIRQUAL as f64) { return Ok(()); }
-                if !(cnt + rcnt > instance.conf.minr + 5) { return Ok(()); }
+                if !(rq_mean / (rcnt as f64) > DISCPAIRQUAL as f64) {
+                    return Ok(());
+                }
+                if !(cnt + rcnt > instance.conf.minr + 5) {
+                    return Ok(());
+                }
 
                 // Java: StructuralVariantsProcessor.java#L1295 — note: isOverlap args differ from 5'
                 if is_overlap(me, end, rms, rstart, max_read_length) {
@@ -2382,9 +2758,14 @@ pub fn find_inv_disc(
                     let bp = ((me + rms) / 2).abs();
 
                     if !reference.reference_sequences.contains_key(&bp) {
-                        let modified_region = Region::new_modified_region(region, bp - 150, bp + 150);
+                        let modified_region =
+                            Region::new_modified_region(region, bp - 150, bp + 150);
                         let old_ref = std::mem::take(reference);
-                        match reference_resource.get_reference_with_extension(&modified_region, 300, old_ref) {
+                        match reference_resource.get_reference_with_extension(
+                            &modified_region,
+                            300,
+                            old_ref,
+                        ) {
                             Ok(new_ref) => *reference = new_ref,
                             Err(e) => eprintln!("Warning: get_reference failed: {}", e),
                         }
@@ -2405,7 +2786,8 @@ pub fn find_inv_disc(
                         );
                     }
                     // Java: StructuralVariantsProcessor.java#L1316
-                    let vref = get_variation(non_insertion_variants, bp, &format!("-{}^{}", len, ins));
+                    let vref =
+                        get_variation(non_insertion_variants, bp, &format!("-{}^{}", len, ins));
                     sv_structures.svfinv3[fi].used = true;
                     sv_structures.svrinv3[ri].used = true;
                     vref.pstd = true;
@@ -2421,15 +2803,20 @@ pub fn find_inv_disc(
                     tmp.mean_position = pmean + rpmean;
                     tmp.mean_mapping_quality = q_mean + rq_mean;
                     tmp.number_of_mismatches = nm + rnm;
-                    let vref = get_variation(non_insertion_variants, bp, &format!("-{}^{}", len, ins));
+                    let vref =
+                        get_variation(non_insertion_variants, bp, &format!("-{}^{}", len, ins));
                     adj_cnt(vref, &tmp);
 
                     // Java: StructuralVariantsProcessor.java#L1334-L1340
                     let sv = get_sv(non_insertion_variants, bp);
                     sv.type_ = Some("INV".to_string());
                     sv.pairs += cnt;
-                    sv.splits += soft_clips_3_end.get(&(end + 1)).map_or(0, |s| s.base.vars_count);
-                    sv.splits += soft_clips_3_end.get(&(me + 1)).map_or(0, |s| s.base.vars_count);
+                    sv.splits += soft_clips_3_end
+                        .get(&(end + 1))
+                        .map_or(0, |s| s.base.vars_count);
+                    sv.splits += soft_clips_3_end
+                        .get(&(me + 1))
+                        .map_or(0, |s| s.base.vars_count);
                     sv.clusters += 1;
 
                     // Java: StructuralVariantsProcessor.java#L1342-L1344
@@ -2437,7 +2824,12 @@ pub fn find_inv_disc(
                         ref_coverage.insert(bp, 2 * cnt);
                     }
                     // Java: StructuralVariantsProcessor.java#L1345
-                    mark_sv(bp, pe, &mut [&mut sv_structures.svfinv5, &mut sv_structures.svrinv5], max_read_length);
+                    mark_sv(
+                        bp,
+                        pe,
+                        &mut [&mut sv_structures.svfinv5, &mut sv_structures.svrinv5],
+                        max_read_length,
+                    );
                 }
                 Ok(())
             })();
@@ -2473,7 +2865,9 @@ pub fn find_dup_disc(
     for dup_idx in 0..sv_structures.svfdup.len() {
         let result: Result<(), String> = (|| {
             let dup = &sv_structures.svfdup[dup_idx];
-            if dup.used { return Ok(()); }
+            if dup.used {
+                return Ok(());
+            }
             let ms = dup.mstart;
             let me = dup.mend;
             let cnt = dup.base.vars_count;
@@ -2486,8 +2880,12 @@ pub fn find_dup_disc(
             let softp_val = dup.softp;
 
             // Java: StructuralVariantsProcessor.java#L1412
-            if !(cnt >= instance.conf.minr + 5) { return Ok(()); }
-            if !(q_mean / (cnt as f64) > DISCPAIRQUAL as f64) { return Ok(()); }
+            if !(cnt >= instance.conf.minr + 5) {
+                return Ok(());
+            }
+            if !(q_mean / (cnt as f64) > DISCPAIRQUAL as f64) {
+                return Ok(());
+            }
 
             let mut mlen = end - ms + max_read_length / cnt;
             let mut bp = ms - (max_read_length / cnt) / 2;
@@ -2498,7 +2896,11 @@ pub fn find_dup_disc(
                 if !reference.reference_sequences.contains_key(&bp) {
                     let modified_region = Region::new_modified_region(region, bp - 150, bp + 150);
                     let old_ref = std::mem::take(reference);
-                    match reference_resource.get_reference_with_extension(&modified_region, 300, old_ref) {
+                    match reference_resource.get_reference_with_extension(
+                        &modified_region,
+                        300,
+                        old_ref,
+                    ) {
                         Ok(new_ref) => *reference = new_ref,
                         Err(e) => eprintln!("Warning: get_reference failed: {}", e),
                     }
@@ -2522,14 +2924,19 @@ pub fn find_dup_disc(
             let dup_soft = sv_structures.svfdup[dup_idx].soft.clone();
             if !dup_soft.is_empty() {
                 // Java: StructuralVariantsProcessor.java#L1441-L1444
-                let mut soft_entries: Vec<(i32, i32)> = dup_soft.iter().map(|(&k, &v)| (k, v)).collect();
+                let mut soft_entries: Vec<(i32, i32)> =
+                    dup_soft.iter().map(|(&k, &v)| (k, v)).collect();
                 soft_entries.sort_by(|a, b| b.1.cmp(&a.1));
                 if !soft_entries.is_empty() {
                     pe = soft_entries[0].0;
                 }
                 // Java: StructuralVariantsProcessor.java#L1448-L1451
-                if !soft_clips_3_end.contains_key(&pe) { return Ok(()); }
-                if soft_clips_3_end.get(&pe).unwrap().used { return Ok(()); }
+                if !soft_clips_3_end.contains_key(&pe) {
+                    return Ok(());
+                }
+                if soft_clips_3_end.get(&pe).unwrap().used {
+                    return Ok(());
+                }
 
                 let current_sclip3 = soft_clips_3_end.get_mut(&pe).unwrap();
                 cntf = current_sclip3.base.vars_count;
@@ -2585,7 +2992,13 @@ pub fn find_dup_disc(
             let sv = get_sv(non_insertion_variants, bp);
             sv.type_ = Some("DUP".to_string());
             sv.pairs += cnt;
-            sv.splits += if softp_val != 0 { soft_clips_3_end.get(&softp_val).map_or(0, |s| s.base.vars_count) } else { 0 };
+            sv.splits += if softp_val != 0 {
+                soft_clips_3_end
+                    .get(&softp_val)
+                    .map_or(0, |s| s.base.vars_count)
+            } else {
+                0
+            };
             sv.clusters += 1;
 
             if instance.conf.y {
@@ -2616,12 +3029,15 @@ pub fn find_dup_disc(
             if !ref_coverage.contains_key(&bp) {
                 ref_coverage.insert(bp, tcnt);
             }
-            if ref_coverage.contains_key(&end) && ref_coverage.get(&bp).unwrap_or(&0) < ref_coverage.get(&end).unwrap_or(&0) {
+            if ref_coverage.contains_key(&end)
+                && ref_coverage.get(&bp).unwrap_or(&0) < ref_coverage.get(&end).unwrap_or(&0)
+            {
                 ref_coverage.insert(bp, *ref_coverage.get(&end).unwrap());
             }
 
             // Java: StructuralVariantsProcessor.java#L1478
-            let (clusters, _pairs) = mark_dup_sv(bp, pe, &mut [&mut sv_structures.svrdup], max_read_length);
+            let (clusters, _pairs) =
+                mark_dup_sv(bp, pe, &mut [&mut sv_structures.svrdup], max_read_length);
             let sv = get_sv(non_insertion_variants, bp);
             sv.clusters += clusters;
 
@@ -2637,7 +3053,9 @@ pub fn find_dup_disc(
     for dup_idx in 0..sv_structures.svrdup.len() {
         let result: Result<(), String> = (|| {
             let dup = &sv_structures.svrdup[dup_idx];
-            if dup.used { return Ok(()); }
+            if dup.used {
+                return Ok(());
+            }
             let ms = dup.mstart;
             let me = dup.mend;
             let cnt = dup.base.vars_count;
@@ -2649,8 +3067,12 @@ pub fn find_dup_disc(
             let nm = dup.base.number_of_mismatches;
 
             // Java: StructuralVariantsProcessor.java#L1516
-            if cnt < instance.conf.minr + 5 { return Ok(()); }
-            if !(q_mean / (cnt as f64) > DISCPAIRQUAL as f64) { return Ok(()); }
+            if cnt < instance.conf.minr + 5 {
+                return Ok(());
+            }
+            if !(q_mean / (cnt as f64) > DISCPAIRQUAL as f64) {
+                return Ok(());
+            }
 
             let mut mlen = me - start + max_read_length / cnt;
             let mut bp = start - (max_read_length / cnt) / 2;
@@ -2662,7 +3084,11 @@ pub fn find_dup_disc(
                 if !reference.reference_sequences.contains_key(&pe) {
                     let modified_region = Region::new_modified_region(region, pe - 150, pe + 150);
                     let old_ref = std::mem::take(reference);
-                    match reference_resource.get_reference_with_extension(&modified_region, 300, old_ref) {
+                    match reference_resource.get_reference_with_extension(
+                        &modified_region,
+                        300,
+                        old_ref,
+                    ) {
                         Ok(new_ref) => *reference = new_ref,
                         Err(e) => eprintln!("Warning: get_reference failed: {}", e),
                     }
@@ -2684,15 +3110,20 @@ pub fn find_dup_disc(
             // Java: StructuralVariantsProcessor.java#L1542
             let dup_soft = sv_structures.svrdup[dup_idx].soft.clone();
             if !dup_soft.is_empty() {
-                let mut soft_entries: Vec<(i32, i32)> = dup_soft.iter().map(|(&k, &v)| (k, v)).collect();
+                let mut soft_entries: Vec<(i32, i32)> =
+                    dup_soft.iter().map(|(&k, &v)| (k, v)).collect();
                 soft_entries.sort_by(|a, b| b.1.cmp(&a.1));
                 if !soft_entries.is_empty() {
                     bp = soft_entries[0].0;
                 }
                 // Java: StructuralVariantsProcessor.java#L1549-L1551
-                if !soft_clips_5_end.contains_key(&bp) { return Ok(()); }
+                if !soft_clips_5_end.contains_key(&bp) {
+                    return Ok(());
+                }
                 let current_sclip5 = soft_clips_5_end.get_mut(&bp).unwrap();
-                if current_sclip5.used { return Ok(()); }
+                if current_sclip5.used {
+                    return Ok(());
+                }
 
                 cntr = current_sclip5.base.vars_count;
                 qmeanr = current_sclip5.base.mean_quality;
@@ -2773,12 +3204,15 @@ pub fn find_dup_disc(
             if !ref_coverage.contains_key(&bp) {
                 ref_coverage.insert(bp, tcnt);
             }
-            if ref_coverage.contains_key(&me) && ref_coverage.get(&bp).unwrap_or(&0) < ref_coverage.get(&me).unwrap_or(&0) {
+            if ref_coverage.contains_key(&me)
+                && ref_coverage.get(&bp).unwrap_or(&0) < ref_coverage.get(&me).unwrap_or(&0)
+            {
                 ref_coverage.insert(bp, *ref_coverage.get(&me).unwrap());
             }
 
             // Java: StructuralVariantsProcessor.java#L1620
-            let (clusters, _pairs) = mark_dup_sv(bp, pe, &mut [&mut sv_structures.svfdup], max_read_length);
+            let (clusters, _pairs) =
+                mark_dup_sv(bp, pe, &mut [&mut sv_structures.svfdup], max_read_length);
             let sv = get_sv(non_insertion_variants, bp);
             sv.clusters += clusters;
 
@@ -2827,9 +3261,15 @@ pub fn find_all_svs(
         eprintln!("Start Structural Variants: DEL\n");
     }
     find_del(
-        sv_structures, non_insertion_variants, ref_coverage,
-        soft_clips_3_end, soft_clips_5_end, reference, reference_resource,
-        region, max_read_length,
+        sv_structures,
+        non_insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        reference,
+        reference_resource,
+        region,
+        max_read_length,
     );
 
     // Java: StructuralVariantsProcessor.java#L122-L124
@@ -2837,12 +3277,23 @@ pub fn find_all_svs(
         eprintln!("Start Structural Variants: INV\n");
     }
     find_inv(
-        sv_structures, non_insertion_variants, ref_coverage,
-        soft_clips_3_end, soft_clips_5_end, reference, reference_resource,
-        region, max_read_length, bams,
-        prev_non_insertion_variants, prev_ref_coverage,
-        prev_soft_clips_3_end, prev_soft_clips_5_end,
-        prev_reference_sequences, prev_chr, prev_max_read_length,
+        sv_structures,
+        non_insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        reference,
+        reference_resource,
+        region,
+        max_read_length,
+        bams,
+        prev_non_insertion_variants,
+        prev_ref_coverage,
+        prev_soft_clips_3_end,
+        prev_soft_clips_5_end,
+        prev_reference_sequences,
+        prev_chr,
+        prev_max_read_length,
     );
 
     // Java: StructuralVariantsProcessor.java#L126-L128
@@ -2850,9 +3301,16 @@ pub fn find_all_svs(
         eprintln!("Start Structural Variants\n");
     }
     findsv(
-        non_insertion_variants, ref_coverage,
-        soft_clips_3_end, soft_clips_5_end, reference,
-        sv_structures, softp2sv, curseg, region, max_read_length,
+        non_insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        reference,
+        sv_structures,
+        softp2sv,
+        curseg,
+        region,
+        max_read_length,
     );
 
     // Java: StructuralVariantsProcessor.java#L130-L132
@@ -2860,9 +3318,16 @@ pub fn find_all_svs(
         eprintln!("Start Structural Variants: DEL discordant pairs only\n");
     }
     find_del_disc(
-        sv_structures, non_insertion_variants, ref_coverage,
-        soft_clips_3_end, soft_clips_5_end, reference, reference_resource,
-        region, max_read_length, splice,
+        sv_structures,
+        non_insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        reference,
+        reference_resource,
+        region,
+        max_read_length,
+        splice,
     );
 
     // Java: StructuralVariantsProcessor.java#L134-L136
@@ -2870,9 +3335,15 @@ pub fn find_all_svs(
         eprintln!("Start Structural Variants: INV discordant pairs only\n");
     }
     find_inv_disc(
-        sv_structures, non_insertion_variants, ref_coverage,
-        soft_clips_3_end, soft_clips_5_end, reference, reference_resource,
-        region, max_read_length,
+        sv_structures,
+        non_insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        reference,
+        reference_resource,
+        region,
+        max_read_length,
     );
 
     // Java: StructuralVariantsProcessor.java#L138-L140
@@ -2880,9 +3351,16 @@ pub fn find_all_svs(
         eprintln!("Start Structural Variants: DUP discordant pairs only\n");
     }
     find_dup_disc(
-        sv_structures, non_insertion_variants, insertion_variants, ref_coverage,
-        soft_clips_3_end, soft_clips_5_end, reference, reference_resource,
-        region, max_read_length,
+        sv_structures,
+        non_insertion_variants,
+        insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        reference,
+        reference_resource,
+        region,
+        max_read_length,
     );
 }
 
@@ -2918,7 +3396,8 @@ pub fn adj_snv(
         // Java: StructuralVariantsProcessor.java#L2001
         let previous_position = position - 1;
         // Java: StructuralVariantsProcessor.java#L2002-L2003
-        let has_key = non_insertion_variants.get(&previous_position)
+        let has_key = non_insertion_variants
+            .get(&previous_position)
             .map_or(false, |vm| vm.entries.contains_key(&bp));
         if has_key {
             // Java: StructuralVariantsProcessor.java#L2004-L2007
@@ -2933,8 +3412,11 @@ pub fn adj_snv(
             // Java: StructuralVariantsProcessor.java#L2009 — adjCnt
             let sclip_base = soft_clips_5_end.get(&position).unwrap().base.clone();
             let variation = non_insertion_variants
-                .get_mut(&previous_position).unwrap()
-                .entries.get_mut(&bp).unwrap();
+                .get_mut(&previous_position)
+                .unwrap()
+                .entries
+                .get_mut(&bp)
+                .unwrap();
             adj_cnt(variation, &sclip_base);
             // Java: StructuralVariantsProcessor.java#L2010 — incCnt
             inc_cnt(ref_coverage, previous_position, sclip_base.vars_count);
@@ -2958,7 +3440,8 @@ pub fn adj_snv(
         // Java: StructuralVariantsProcessor.java#L2026 — substr(seq, 0, 1)
         let bp = String::from_utf8_lossy(&substr_with_len(seq.as_bytes(), 0, 1)).into_owned();
         // Java: StructuralVariantsProcessor.java#L2027-L2028
-        let has_key = non_insertion_variants.get(&position)
+        let has_key = non_insertion_variants
+            .get(&position)
             .map_or(false, |vm| vm.entries.contains_key(&bp));
         if has_key {
             // Java: StructuralVariantsProcessor.java#L2029-L2032
@@ -2973,8 +3456,11 @@ pub fn adj_snv(
             // Java: StructuralVariantsProcessor.java#L2034 — adjCnt
             let sclip_base = soft_clips_3_end.get(&position).unwrap().base.clone();
             let variation = non_insertion_variants
-                .get_mut(&position).unwrap()
-                .entries.get_mut(&bp).unwrap();
+                .get_mut(&position)
+                .unwrap()
+                .entries
+                .get_mut(&bp)
+                .unwrap();
             adj_cnt(variation, &sclip_base);
             // Java: StructuralVariantsProcessor.java#L2035 — incCnt
             inc_cnt(ref_coverage, position, sclip_base.vars_count);
@@ -3101,10 +3587,7 @@ pub fn process(
 
     // Java: StructuralVariantsProcessor.java#L97-L99
     if instance.conf.y {
-        output_clipping(
-            &mut data.soft_clips_5_end,
-            &mut data.soft_clips_3_end,
-        );
+        output_clipping(&mut data.soft_clips_5_end, &mut data.soft_clips_3_end);
         eprintln!("TIME: Finish realign");
     }
 
@@ -3114,8 +3597,8 @@ pub fn process(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::config::Configuration;
+    use std::collections::HashMap;
 
     fn init_test_scope() {
         GlobalReadOnlyScope::clear();

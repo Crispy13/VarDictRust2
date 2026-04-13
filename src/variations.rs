@@ -525,7 +525,9 @@ pub fn get_variation_from_seq(
 ) -> &mut Variation {
     let base = base.into();
     let sequence_map = &mut soft_clip.seq;
-    let base_map = sequence_map.entry(idx).or_insert_with(crate::data::SortedStringMap::new);
+    let base_map = sequence_map
+        .entry(idx)
+        .or_insert_with(crate::data::SortedStringMap::new);
     base_map.entry(base).or_default()
 }
 
@@ -1027,21 +1029,20 @@ mod tests {
             (11, SortedStringMap::from([(String::from("A"), 2)])),
             (12, SortedStringMap::from([(String::from("A"), 2)])),
         ]);
-        sclip.seq =
-            (0..=12)
-                .map(|index| {
-                    (
-                        index,
-                        SortedStringMap::from([(
-                            String::from("A"),
-                            Variation {
-                                mean_quality: 50.0,
-                                ..Variation::default()
-                            },
-                        )]),
-                    )
-                })
-                .collect::<SortedIntMap<_>>();
+        sclip.seq = (0..=12)
+            .map(|index| {
+                (
+                    index,
+                    SortedStringMap::from([(
+                        String::from("A"),
+                        Variation {
+                            mean_quality: 50.0,
+                            ..Variation::default()
+                        },
+                    )]),
+                )
+            })
+            .collect::<SortedIntMap<_>>();
 
         assert_eq!(find_conseq(&mut sclip, 0), "AAAAAAAAAAAAA");
         assert!(sclip.used);
@@ -1297,25 +1298,23 @@ mod tests {
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 2;
-        sclip.nt =
-            (0..=12)
-                .map(|index| (index, SortedStringMap::from([(String::from("T"), 2)])))
-                .collect::<SortedIntMap<_>>();
-        sclip.seq =
-            (0..=12)
-                .map(|index| {
-                    (
-                        index,
-                        SortedStringMap::from([(
-                            String::from("T"),
-                            Variation {
-                                mean_quality: 40.0,
-                                ..Variation::default()
-                            },
-                        )]),
-                    )
-                })
-                .collect::<SortedIntMap<_>>();
+        sclip.nt = (0..=12)
+            .map(|index| (index, SortedStringMap::from([(String::from("T"), 2)])))
+            .collect::<SortedIntMap<_>>();
+        sclip.seq = (0..=12)
+            .map(|index| {
+                (
+                    index,
+                    SortedStringMap::from([(
+                        String::from("T"),
+                        Variation {
+                            mean_quality: 40.0,
+                            ..Variation::default()
+                        },
+                    )]),
+                )
+            })
+            .collect::<SortedIntMap<_>>();
 
         assert_eq!(find_conseq(&mut sclip, 0), "TTTTTTTTTTTTT");
         assert!(sclip.used);

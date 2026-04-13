@@ -62,6 +62,41 @@ pub fn load_golden_data(module: &str, region: &str) -> String {
     lines[1].to_string()
 }
 
+/// Load a single region's golden data from a v2 archive.
+/// The archive format is: {chrom}\t{start}\t{end}\t{data}\n per line, zstd-compressed.
+/// Scans line-by-line until it finds the matching region.
+#[allow(dead_code)]
+pub fn load_v2_archive_region(archive_path: &std::path::Path, target_region: &str) -> String {
+    let (chrom, range) = target_region
+        .split_once(':')
+        .unwrap_or_else(|| panic!("Invalid region format: {target_region}"));
+    let (start, end) = range
+        .split_once('-')
+        .unwrap_or_else(|| panic!("Invalid region range: {target_region}"));
+    let target_key = format!("{chrom}\t{start}\t{end}\t");
+
+    let file = File::open(archive_path)
+        .unwrap_or_else(|error| panic!("Failed to open {}: {error}", archive_path.display()));
+    let decoder = zstd::stream::read::Decoder::new(file)
+        .unwrap_or_else(|error| panic!("Failed to decode {}: {error}", archive_path.display()));
+    let reader = std::io::BufReader::new(decoder);
+
+    use std::io::BufRead;
+
+    for line in reader.lines() {
+        let line = line
+            .unwrap_or_else(|error| panic!("Failed to read {}: {error}", archive_path.display()));
+        if line.starts_with(&target_key) {
+            return line[target_key.len()..].to_string();
+        }
+    }
+
+    panic!(
+        "Region {target_region} not found in archive {}",
+        archive_path.display()
+    );
+}
+
 #[allow(dead_code)]
 pub fn sweep_fixture_base() -> PathBuf {
     let base = std::env::var_os("VARDICT_SWEEP_FIXTURE_DIR")
@@ -115,6 +150,8 @@ pub fn check_sweep_manifest() {
 }
 
 #[allow(dead_code)]
+#[allow(deprecated)]
+#[deprecated(note = "Use v2 archive functions instead")]
 pub fn load_sweep_region_config() -> Vec<(String, PathBuf, PathBuf)> {
     let base = sweep_fixture_base();
     let tsv_path = base.join("regions.tsv");
@@ -145,6 +182,8 @@ pub fn load_sweep_region_config() -> Vec<(String, PathBuf, PathBuf)> {
 }
 
 #[allow(dead_code)]
+#[allow(deprecated)]
+#[deprecated(note = "Use v2 archive functions instead")]
 pub fn sweep_fixture_path(module: &str, region: &str) -> PathBuf {
     let (chrom, range) = region
         .split_once(':')
@@ -158,6 +197,8 @@ pub fn sweep_fixture_path(module: &str, region: &str) -> PathBuf {
 }
 
 #[allow(dead_code)]
+#[allow(deprecated)]
+#[deprecated(note = "Use v2 archive functions instead")]
 pub fn load_sweep_golden_data(module: &str, region: &str) -> String {
     let path = sweep_fixture_path(module, region);
     let file = File::open(&path)
@@ -212,6 +253,8 @@ pub fn assert_module_parity(module: &str, region: &str, actual_json: &str) {
 }
 
 #[allow(dead_code)]
+#[allow(deprecated)]
+#[deprecated(note = "Use v2 archive functions instead")]
 pub fn assert_sweep_module_parity(module: &str, region: &str, actual_json: &str) -> Option<String> {
     let golden = load_sweep_golden_data(module, region);
     if actual_json == golden {
@@ -324,4 +367,252 @@ pub fn parse_region(region_str: &str) -> Region {
         .parse()
         .unwrap_or_else(|e| panic!("Invalid end in region {region_str}: {e}"));
     Region::new(chr, start, end, "")
+}
+
+#[allow(dead_code)]
+pub const BAM_TAG_MAP: &[(&str, &str, &str)] = &[
+    (
+        "na12878_exome",
+        "testdata/NA12878.chrom20.ILLUMINA.bwa.CEU.exome.20121211.bam",
+        "testdata/hs37d5.fa",
+    ),
+    (
+        "hg002",
+        "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam",
+        "testdata/hs37d5.fa",
+    ),
+    (
+        "na12878_lowcov",
+        "testdata/NA12878.mapped.ILLUMINA.bwa.CEU.low_coverage.20121211.bam",
+        "testdata/hs37d5.fa",
+    ),
+];
+
+#[allow(dead_code)]
+pub fn bam_tag_lookup(tag: &str) -> (&'static str, &'static str) {
+    BAM_TAG_MAP
+        .iter()
+        .find_map(|(candidate, bam_path, ref_path)| {
+            (*candidate == tag).then_some((*bam_path, *ref_path))
+        })
+        .unwrap_or_else(|| panic!("Unknown BAM tag: {tag}"))
+}
+
+fn v2_chrom_sort_key(chrom: &str) -> (u8, i32, &str) {
+    match chrom.parse::<i32>() {
+        Ok(number) => (0, number, ""),
+        Err(_) => (1, 0, chrom),
+    }
+}
+
+#[allow(dead_code)]
+pub fn discover_v2_archives(
+    base: &std::path::Path,
+    module: &str,
+) -> Vec<(String, String, PathBuf)> {
+    let module_root = base.join("v2").join(module);
+    assert!(
+        module_root.is_dir(),
+        "V2 archive directory not found: {}",
+        module_root.display()
+    );
+
+    let mut archives = Vec::new();
+    let entries = std::fs::read_dir(&module_root)
+        .unwrap_or_else(|error| panic!("Failed to read {}: {error}", module_root.display()));
+
+    for entry in entries {
+        let entry = entry
+            .unwrap_or_else(|error| panic!("Failed to read {}: {error}", module_root.display()));
+        let tag_path = entry.path();
+        if !tag_path.is_dir() {
+            continue;
+        }
+
+        let bam_tag = entry
+            .file_name()
+            .to_str()
+            .unwrap_or_else(|| panic!("Invalid BAM tag directory: {}", tag_path.display()))
+            .to_string();
+        let tag_entries = std::fs::read_dir(&tag_path)
+            .unwrap_or_else(|error| panic!("Failed to read {}: {error}", tag_path.display()));
+
+        for archive_entry in tag_entries {
+            let archive_entry = archive_entry
+                .unwrap_or_else(|error| panic!("Failed to read {}: {error}", tag_path.display()));
+            let archive_path = archive_entry.path();
+            if !archive_path.is_file() {
+                continue;
+            }
+
+            let file_name = archive_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_else(|| panic!("Invalid archive name: {}", archive_path.display()));
+            let chrom = match file_name.strip_suffix(".jsonl.zst") {
+                Some(chrom) => chrom,
+                None => continue,
+            };
+
+            archives.push((bam_tag.clone(), chrom.to_string(), archive_path));
+        }
+    }
+
+    archives.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| v2_chrom_sort_key(&left.1).cmp(&v2_chrom_sort_key(&right.1)))
+    });
+    archives
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V2ArchiveLine {
+    pub chrom: String,
+    pub start: i32,
+    pub end: i32,
+    pub data: String,
+}
+
+impl V2ArchiveLine {
+    #[allow(dead_code)]
+    pub fn region_str(&self) -> String {
+        format!("{}:{}-{}", self.chrom, self.start, self.end)
+    }
+}
+
+#[allow(dead_code)]
+pub struct V2ArchiveReader {
+    archive_path: PathBuf,
+    reader: std::io::BufReader<zstd::stream::read::Decoder<'static, std::io::BufReader<File>>>,
+    line_buf: String,
+    line_number: usize,
+}
+
+impl V2ArchiveReader {
+    #[allow(dead_code)]
+    pub fn new(archive_path: &std::path::Path) -> Self {
+        let file = File::open(archive_path)
+            .unwrap_or_else(|error| panic!("Failed to open {}: {error}", archive_path.display()));
+        let decoder = zstd::stream::read::Decoder::new(file)
+            .unwrap_or_else(|error| panic!("Failed to decode {}: {error}", archive_path.display()));
+
+        Self {
+            archive_path: archive_path.to_path_buf(),
+            reader: std::io::BufReader::new(decoder),
+            line_buf: String::new(),
+            line_number: 0,
+        }
+    }
+}
+
+impl Iterator for V2ArchiveReader {
+    type Item = V2ArchiveLine;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.line_buf.clear();
+        let next_line_number = self.line_number + 1;
+        let bytes_read = std::io::BufRead::read_line(&mut self.reader, &mut self.line_buf)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "Failed to read {} at line {}: {error}",
+                    self.archive_path.display(),
+                    next_line_number
+                )
+            });
+        if bytes_read == 0 {
+            return None;
+        }
+        self.line_number = next_line_number;
+
+        let line = self.line_buf.trim_end_matches('\n').trim_end_matches('\r');
+        let mut fields = line.splitn(4, '\t');
+        let chrom = fields.next().unwrap_or_else(|| {
+            panic!(
+                "Failed to parse {} line {}: missing chrom",
+                self.archive_path.display(),
+                self.line_number
+            )
+        });
+        let start_str = fields.next().unwrap_or_else(|| {
+            panic!(
+                "Failed to parse {} line {}: missing start",
+                self.archive_path.display(),
+                self.line_number
+            )
+        });
+        let end_str = fields.next().unwrap_or_else(|| {
+            panic!(
+                "Failed to parse {} line {}: missing end",
+                self.archive_path.display(),
+                self.line_number
+            )
+        });
+        let data = fields.next().unwrap_or_else(|| {
+            panic!(
+                "Failed to parse {} line {}: missing data",
+                self.archive_path.display(),
+                self.line_number
+            )
+        });
+
+        let start = start_str.parse::<i32>().unwrap_or_else(|error| {
+            panic!(
+                "Failed to parse {} line {}: invalid start {:?}: {error}",
+                self.archive_path.display(),
+                self.line_number,
+                start_str
+            )
+        });
+        let end = end_str.parse::<i32>().unwrap_or_else(|error| {
+            panic!(
+                "Failed to parse {} line {}: invalid end {:?}: {error}",
+                self.archive_path.display(),
+                self.line_number,
+                end_str
+            )
+        });
+
+        Some(V2ArchiveLine {
+            chrom: chrom.to_string(),
+            start,
+            end,
+            data: data.to_string(),
+        })
+    }
+}
+
+#[allow(dead_code)]
+pub fn assert_v2_module_parity(
+    module: &str,
+    region_str: &str,
+    actual_json: &str,
+    golden_json: &str,
+) -> Option<String> {
+    if actual_json == golden_json {
+        return None;
+    }
+
+    let offset = actual_json
+        .bytes()
+        .zip(golden_json.bytes())
+        .position(|(actual, golden)| actual != golden)
+        .unwrap_or(actual_json.len().min(golden_json.len()));
+
+    let window = 80usize;
+    let half = window / 2;
+    let golden_start = offset.saturating_sub(half);
+    let golden_end = (offset + half).min(golden_json.len());
+    let actual_start = offset.saturating_sub(half);
+    let actual_end = (offset + half).min(actual_json.len());
+
+    Some(format!(
+        "module={module}, region={region_str}\n\
+         First divergence at byte offset {offset}\n\
+         Golden[{golden_start}..{golden_end}]: {:?}\n\
+         Actual[{actual_start}..{actual_end}]: {:?}",
+        &golden_json[golden_start..golden_end],
+        &actual_json[actual_start..actual_end],
+    ))
 }

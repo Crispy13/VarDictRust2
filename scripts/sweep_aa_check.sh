@@ -146,8 +146,15 @@ seed = int(sys.argv[1])
 path = sys.argv[2]
 rng = random.Random(seed)
 
+# Generate 128MB of deterministic random bytes efficiently using getrandbits in bulk
+total = 128 * 1024 * 1024
+chunk = 65536  # generate 64KB of random bits at once
 with open(path, "wb") as handle:
-    handle.write(bytes(rng.randrange(256) for _ in range(8 * 1024 * 1024)))
+    remaining = total
+    while remaining > 0:
+        n = min(chunk, remaining)
+        handle.write(rng.getrandbits(n * 8).to_bytes(n, 'big'))
+        remaining -= n
 PY
 }
 

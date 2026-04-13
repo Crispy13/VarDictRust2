@@ -235,15 +235,14 @@ record_bed_regions() {
     local tag="$1"
     local bed_file="$2"
     local bam_rel="${BAM_MAP[$tag]}"
-    local bed_chrom
-    local start
-    local end
 
-    while IFS=$'\t' read -r bed_chrom start end _rest; do
-        [[ -z "${bed_chrom:-}" ]] && continue
-        printf '%s:%d-%d\t%s\n' "$bed_chrom" "$((start + 1))" "$end" "$bam_rel" >> "$REGION_BAM_FILE"
-        printf '%d\n' "$((end - start))" >> "$WINDOW_SIZES_FILE"
-    done < "$bed_file"
+    awk -F '\t' -v bam_rel="$bam_rel" '
+        NF >= 3 && $1 != "" {
+            printf "%s:%d-%d\t%s\n", $1, $2 + 1, $3, bam_rel
+        }
+    ' "$bed_file" >> "$REGION_BAM_FILE"
+
+    awk -F '\t' 'NF >= 3 && $1 != "" { print $3 - $2 }' "$bed_file" >> "$WINDOW_SIZES_FILE"
 }
 
 prepare_output_root() {

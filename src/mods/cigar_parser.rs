@@ -9,7 +9,8 @@ use rust_htslib::bam::{self, HeaderView, record::Aux};
 
 use crate::config::{MINMAPBASE, MINSVCDIST, MINSVPOS, SEED_1};
 use crate::data::{
-    BaseInsertion, Mate, Region, SVStructures, Sclip, SortedStringMap, Variation, VariationData, VariationMap,
+    BaseInsertion, Mate, Region, SVStructures, Sclip, SortedStringMap, Variation, VariationData,
+    VariationMap,
 };
 use crate::mods::cigar_modifier::modify_cigar;
 use crate::mods::sam_file_parser::get_mate_reference_name;
@@ -18,9 +19,8 @@ use crate::reference::Reference;
 use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{get_reverse_complemented_sequence, global_find, substr_with_len};
 use crate::variations::{
-    get_variation, get_variation_from_seq, inc_cnt, is_equals,
-    is_has_and_equals_base, is_has_and_equals_str, is_has_and_not_equals_base,
-    is_has_and_not_equals_str, is_not_equals,
+    get_variation, get_variation_from_seq, inc_cnt, is_equals, is_has_and_equals_base,
+    is_has_and_equals_str, is_has_and_not_equals_base, is_has_and_not_equals_str, is_not_equals,
 };
 
 // ─── CIGAR representation ─────────────────────────────────────────────────────
@@ -1393,9 +1393,15 @@ impl CigarParser {
 
             // Java: CigarParser.java#L703-L704
             self.append_segments(
-                query_sequence, query_quality, ci,
-                &mut desc_string, &mut quality_of_segment,
-                m_len, indel_len, begin, false,
+                query_sequence,
+                query_quality,
+                ci,
+                &mut desc_string,
+                &mut quality_of_segment,
+                m_len,
+                indel_len,
+                begin,
+                false,
             );
 
             // Java: CigarParser.java#L709-L710
@@ -1442,12 +1448,16 @@ impl CigarParser {
                 }
                 // Java: CigarParser.java#L736-L739
                 if self.offset != 0 {
-                    seq_to_append.push_str(&String::from_utf8_lossy(
-                        &substr_with_len(qs_bytes, tn, self.offset),
-                    ));
-                    quality_of_segment.push_str(&String::from_utf8_lossy(
-                        &substr_with_len(qq_bytes, tn, self.offset),
-                    ));
+                    seq_to_append.push_str(&String::from_utf8_lossy(&substr_with_len(
+                        qs_bytes,
+                        tn,
+                        self.offset,
+                    )));
+                    quality_of_segment.push_str(&String::from_utf8_lossy(&substr_with_len(
+                        qq_bytes,
+                        tn,
+                        self.offset,
+                    )));
                 }
             }
             // Java: CigarParser.java#L742 — skip next 2 CIGAR segments
@@ -1508,12 +1518,16 @@ impl CigarParser {
                 }
                 // Java: CigarParser.java#L782-L785
                 if self.offset != 0 {
-                    seq_to_append.push_str(&String::from_utf8_lossy(
-                        &substr_with_len(qs_bytes, tn, self.offset),
-                    ));
-                    quality_of_segment.push_str(&String::from_utf8_lossy(
-                        &substr_with_len(qq_bytes, tn, self.offset),
-                    ));
+                    seq_to_append.push_str(&String::from_utf8_lossy(&substr_with_len(
+                        qs_bytes,
+                        tn,
+                        self.offset,
+                    )));
+                    quality_of_segment.push_str(&String::from_utf8_lossy(&substr_with_len(
+                        qq_bytes,
+                        tn,
+                        self.offset,
+                    )));
                 }
             }
             // Java: CigarParser.java#L788
@@ -1531,8 +1545,7 @@ impl CigarParser {
                     if n_vi >= qs_bytes.len() || qs_bytes[n_vi] == b'N' {
                         break;
                     }
-                    if n_vi >= qq_bytes.len()
-                        || ((qq_bytes[n_vi] as i32 - 33) as f64) < conf.goodq
+                    if n_vi >= qq_bytes.len() || ((qq_bytes[n_vi] as i32 - 33) as f64) < conf.goodq
                     {
                         break;
                     }
@@ -1669,9 +1682,15 @@ impl CigarParser {
 
             // Java: CigarParser.java#L966-L967
             self.append_segments(
-                query_sequence, query_quality, ci,
-                &mut desc_string, &mut quality_string,
-                m_len, indel_len, begin, true,
+                query_sequence,
+                query_quality,
+                ci,
+                &mut desc_string,
+                &mut quality_string,
+                m_len,
+                indel_len,
+                begin,
+                true,
             );
 
             // Java: CigarParser.java#L971-L972
@@ -1687,9 +1706,7 @@ impl CigarParser {
             };
 
             // Java: CigarParser.java#L976-L983
-            if ci6 != 0
-                && self.cigar.get_cigar_element(ci + 3).operator == CigarOp::M
-            {
+            if ci6 != 0 && self.cigar.get_cigar_element(ci + 3).operator == CigarOp::M {
                 let tpl = Self::find_offset(
                     self.start + multoffs,
                     self.read_position_including_soft_clipped
@@ -1724,8 +1741,7 @@ impl CigarParser {
                         break;
                     }
                     // Java: CigarParser.java#L999
-                    if n_vi >= qq_bytes.len()
-                        || ((qq_bytes[n_vi] as i32 - 33) as f64) < conf.goodq
+                    if n_vi >= qq_bytes.len() || ((qq_bytes[n_vi] as i32 - 33) as f64) < conf.goodq
                     {
                         break;
                     }
@@ -1747,14 +1763,12 @@ impl CigarParser {
                 if self.offset != 0 {
                     ss.push_str(&String::from_utf8_lossy(&substr_with_len(
                         qs_bytes,
-                        self.read_position_including_soft_clipped
-                            + self.cigar_element_length,
+                        self.read_position_including_soft_clipped + self.cigar_element_length,
                         self.offset,
                     )));
                     quality_string.push_str(&String::from_utf8_lossy(&substr_with_len(
                         qq_bytes,
-                        self.read_position_including_soft_clipped
-                            + self.cigar_element_length,
+                        self.read_position_including_soft_clipped + self.cigar_element_length,
                         self.offset,
                     )));
                     // Java: CigarParser.java#L1016 — increase coverage
@@ -1785,9 +1799,8 @@ impl CigarParser {
                 let adjusted_desc = tpl.insertion_sequence;
 
                 // Java: CigarParser.java#L1036
-                let check_idx = self.read_position_including_soft_clipped
-                    - 1
-                    - (self.start - 1 - adjusted_pos);
+                let check_idx =
+                    self.read_position_including_soft_clipped - 1 - (self.start - 1 - adjusted_pos);
                 if check_idx > 0 {
                     insertion_position = adjusted_pos;
                     desc_string = adjusted_desc;
@@ -1805,11 +1818,7 @@ impl CigarParser {
             }
 
             // Java: CigarParser.java#L1045 — add variation to insertion variants
-            let hv = get_variation(
-                &mut self.insertion_variants,
-                insertion_position,
-                &ins_desc,
-            );
+            let hv = get_variation(&mut self.insertion_variants, insertion_position, &ins_desc);
             hv.inc_dir(direction);
             // Java: CigarParser.java#L1048
             hv.vars_count += 1;
@@ -1955,13 +1964,10 @@ impl CigarParser {
             // ── 5' soft clip ──────────────────────────────────────────────
             // Java: CigarParser.java#L1120-L1155 — chimeric detection
             if !conf.chimeric {
-                let sa_tag_string: Option<String> = record
-                    .aux(b"SA")
-                    .ok()
-                    .and_then(|a| match a {
-                        Aux::String(s) => Some(s.to_string()),
-                        _ => None,
-                    });
+                let sa_tag_string: Option<String> = record.aux(b"SA").ok().and_then(|a| match a {
+                    Aux::String(s) => Some(s.to_string()),
+                    _ => None,
+                });
 
                 if self.cigar_element_length >= 20 && sa_tag_string.is_some() {
                     // Java: CigarParser.java#L1125
@@ -2013,11 +2019,7 @@ impl CigarParser {
             // Java: CigarParser.java#L1158-L1173 — match-back loop (5')
             while self.cigar_element_length - 1 >= 0
                 && self.start - 1 > 0
-                && self.start - 1
-                    <= *instance
-                        .chr_lengths
-                        .get(chr_name)
-                        .unwrap_or(&i32::MAX)
+                && self.start - 1 <= *instance.chr_lengths.get(chr_name).unwrap_or(&i32::MAX)
                 && is_has_and_equals_str(
                     ref_map,
                     self.start - 1,
@@ -2098,13 +2100,10 @@ impl CigarParser {
             // ── 3' soft clip ──────────────────────────────────────────────
             // Java: CigarParser.java#L1204-L1243 — chimeric detection (3')
             if !conf.chimeric {
-                let sa_tag_string: Option<String> = record
-                    .aux(b"SA")
-                    .ok()
-                    .and_then(|a| match a {
-                        Aux::String(s) => Some(s.to_string()),
-                        _ => None,
-                    });
+                let sa_tag_string: Option<String> = record.aux(b"SA").ok().and_then(|a| match a {
+                    Aux::String(s) => Some(s.to_string()),
+                    _ => None,
+                });
 
                 if self.cigar_element_length >= 20 && sa_tag_string.is_some() {
                     // Java: CigarParser.java#L1209
@@ -2135,12 +2134,10 @@ impl CigarParser {
                         } else {
                             0
                         };
-                        let rc_seed =
-                            String::from_utf8_lossy(&seq[start_idx..]).to_string();
+                        let rc_seed = String::from_utf8_lossy(&seq[start_idx..]).to_string();
                         if let Some(positions) = self.reference.seed.get(&rc_seed) {
                             if positions.len() == 1
-                                && (self.start - positions[0]).abs()
-                                    < 2 * self.max_read_length
+                                && (self.start - positions[0]).abs() < 2 * self.max_read_length
                             {
                                 self.read_position_including_soft_clipped +=
                                     self.cigar_element_length;
@@ -2174,17 +2171,13 @@ impl CigarParser {
                 // Java: CigarParser.java#L1253
                 let ref_base = ref_map.get(&self.start).unwrap();
                 let ref_base_str = (*ref_base as char).to_string();
-                let variation = get_variation(
-                    &mut self.non_insertion_variants,
-                    self.start,
-                    &ref_base_str,
-                );
+                let variation =
+                    get_variation(&mut self.non_insertion_variants, self.start, &ref_base_str);
                 // Java: CigarParser.java#L1255
                 Self::add_cnt(
                     variation,
                     direction,
-                    total_length_including_soft_clipped
-                        - self.read_position_excluding_soft_clipped,
+                    total_length_including_soft_clipped - self.read_position_excluding_soft_clipped,
                     (qq_bytes[self.read_position_including_soft_clipped as usize] as i32 - 33)
                         as f64,
                     mapping_quality,
@@ -2317,13 +2310,10 @@ impl CigarParser {
             let mut mlen = record.insert_size() as i32;
 
             // Java: CigarParser.java#L2029-L2032 — filter MC soft-clipped mates
-            let mc_tag: Option<String> = record
-                .aux(b"MC")
-                .ok()
-                .and_then(|a| match a {
-                    Aux::String(s) => Some(s.to_string()),
-                    _ => None,
-                });
+            let mc_tag: Option<String> = record.aux(b"MC").ok().and_then(|a| match a {
+                Aux::String(s) => Some(s.to_string()),
+                _ => None,
+            });
             if let Some(ref mc) = mc_tag {
                 if MC_Z_NUM_S_ANY_NUM_S.is_match(mc) {
                     return;
@@ -2348,9 +2338,7 @@ impl CigarParser {
                 } else {
                     end - mate_start
                 };
-                if mlen.abs()
-                    > conf.inssize + conf.insstdamt * conf.insstd
-                {
+                if mlen.abs() > conf.inssize + conf.insstdamt * conf.insstd {
                     if read_dir_num == 1 {
                         // Java: CigarParser.java#L2043-L2048
                         if self.sv_structures.svfdel.is_empty()
@@ -2364,9 +2352,14 @@ impl CigarParser {
                         let svref = Self::get_last_sv_structure(&mut self.sv_structures.svfdel);
                         Self::add_sv_to(
                             svref,
-                            position, end, mate_start, mend,
-                            read_dir_num, total_length_including_soft_clipped,
-                            mlen, soft3,
+                            position,
+                            end,
+                            mate_start,
+                            mend,
+                            read_dir_num,
+                            total_length_including_soft_clipped,
+                            mlen,
+                            soft3,
                             self.max_read_length as f64 / 2.0,
                             qq_bytes[MINMAPBASE as usize] as i32 - 33,
                             record.mapq() as i32,
@@ -2386,9 +2379,14 @@ impl CigarParser {
                         let svref = Self::get_last_sv_structure(&mut self.sv_structures.svrdel);
                         Self::add_sv_to(
                             svref,
-                            position, end, mate_start, mend,
-                            read_dir_num, total_length_including_soft_clipped,
-                            mlen, soft5,
+                            position,
+                            end,
+                            mate_start,
+                            mend,
+                            read_dir_num,
+                            total_length_including_soft_clipped,
+                            mlen,
+                            soft5,
                             self.max_read_length as f64 / 2.0,
                             qq_bytes[MINMAPBASE as usize] as i32 - 33,
                             record.mapq() as i32,
@@ -2475,9 +2473,14 @@ impl CigarParser {
                     let svref = Self::get_last_sv_structure(&mut self.sv_structures.svfdup);
                     Self::add_sv_to(
                         svref,
-                        position, end, mate_start, mend,
-                        read_dir_num, total_length_including_soft_clipped,
-                        mlen, soft3,
+                        position,
+                        end,
+                        mate_start,
+                        mend,
+                        read_dir_num,
+                        total_length_including_soft_clipped,
+                        mlen,
+                        soft3,
                         self.max_read_length as f64 / 2.0,
                         qq_bytes[MINMAPBASE as usize] as i32 - 33,
                         record.mapq() as i32,
@@ -2496,9 +2499,14 @@ impl CigarParser {
                     let svref = Self::get_last_sv_structure(&mut self.sv_structures.svrdup);
                     Self::add_sv_to(
                         svref,
-                        position, end, mate_start, mend,
-                        read_dir_num, total_length_including_soft_clipped,
-                        mlen, soft5,
+                        position,
+                        end,
+                        mate_start,
+                        mend,
+                        read_dir_num,
+                        total_length_including_soft_clipped,
+                        mlen,
+                        soft5,
                         self.max_read_length as f64 / 2.0,
                         qq_bytes[MINMAPBASE as usize] as i32 - 33,
                         record.mapq() as i32,
@@ -2522,16 +2530,12 @@ impl CigarParser {
                 if !self.sv_structures.svfdel.is_empty()
                     && (position - self.sv_structures.svdelfend).abs() <= min_d
                 {
-                    Self::add_disc_cnt(Self::get_last_sv_structure(
-                        &mut self.sv_structures.svfdel,
-                    ));
+                    Self::add_disc_cnt(Self::get_last_sv_structure(&mut self.sv_structures.svfdel));
                 }
                 if !self.sv_structures.svrdel.is_empty()
                     && (position - self.sv_structures.svdelrend).abs() <= min_d
                 {
-                    Self::add_disc_cnt(Self::get_last_sv_structure(
-                        &mut self.sv_structures.svrdel,
-                    ));
+                    Self::add_disc_cnt(Self::get_last_sv_structure(&mut self.sv_structures.svrdel));
                 }
                 if !self.sv_structures.svfinv5.is_empty()
                     && (position - self.sv_structures.svinvfend5).abs() <= min_d
@@ -2561,9 +2565,7 @@ impl CigarParser {
                         &mut self.sv_structures.svrinv3,
                     ));
                 }
-            } else if read_dir_num * mate_dir_num == 1
-                && qq_bytes.len() as i32 > MINMAPBASE
-            {
+            } else if read_dir_num * mate_dir_num == 1 && qq_bytes.len() as i32 > MINMAPBASE {
                 // ── Inversion candidate ──
                 // Java: CigarParser.java#L2143-L2198
                 if read_dir_num == 1 && mlen != 0 {
@@ -2580,9 +2582,14 @@ impl CigarParser {
                         let svref = Self::get_last_sv_structure(&mut self.sv_structures.svfinv3);
                         Self::add_sv_to(
                             svref,
-                            position, end, mate_start, mend,
-                            read_dir_num, total_length_including_soft_clipped,
-                            mlen, soft3,
+                            position,
+                            end,
+                            mate_start,
+                            mend,
+                            read_dir_num,
+                            total_length_including_soft_clipped,
+                            mlen,
+                            soft3,
                             self.max_read_length as f64 / 2.0,
                             qq_bytes[MINMAPBASE as usize] as i32 - 33,
                             record.mapq() as i32,
@@ -2603,9 +2610,14 @@ impl CigarParser {
                         let svref = Self::get_last_sv_structure(&mut self.sv_structures.svfinv5);
                         Self::add_sv_to(
                             svref,
-                            position, end, mate_start, mend,
-                            read_dir_num, total_length_including_soft_clipped,
-                            mlen, soft3,
+                            position,
+                            end,
+                            mate_start,
+                            mend,
+                            read_dir_num,
+                            total_length_including_soft_clipped,
+                            mlen,
+                            soft3,
                             self.max_read_length as f64 / 2.0,
                             qq_bytes[MINMAPBASE as usize] as i32 - 33,
                             record.mapq() as i32,
@@ -2628,9 +2640,14 @@ impl CigarParser {
                         let svref = Self::get_last_sv_structure(&mut self.sv_structures.svrinv3);
                         Self::add_sv_to(
                             svref,
-                            position, end, mate_start, mend,
-                            read_dir_num, total_length_including_soft_clipped,
-                            mlen, soft5,
+                            position,
+                            end,
+                            mate_start,
+                            mend,
+                            read_dir_num,
+                            total_length_including_soft_clipped,
+                            mlen,
+                            soft5,
                             self.max_read_length as f64 / 2.0,
                             qq_bytes[MINMAPBASE as usize] as i32 - 33,
                             record.mapq() as i32,
@@ -2651,9 +2668,14 @@ impl CigarParser {
                         let svref = Self::get_last_sv_structure(&mut self.sv_structures.svrinv5);
                         Self::add_sv_to(
                             svref,
-                            position, end, mate_start, mend,
-                            read_dir_num, total_length_including_soft_clipped,
-                            mlen, soft5,
+                            position,
+                            end,
+                            mate_start,
+                            mend,
+                            read_dir_num,
+                            total_length_including_soft_clipped,
+                            mlen,
+                            soft5,
                             self.max_read_length as f64 / 2.0,
                             qq_bytes[MINMAPBASE as usize] as i32 - 33,
                             record.mapq() as i32,
@@ -2701,13 +2723,10 @@ impl CigarParser {
             let mchr = get_mate_reference_name(record, header);
 
             // Filter MC soft-clipped
-            let mc_tag: Option<String> = record
-                .aux(b"MC")
-                .ok()
-                .and_then(|a| match a {
-                    Aux::String(s) => Some(s.to_string()),
-                    _ => None,
-                });
+            let mc_tag: Option<String> = record.aux(b"MC").ok().and_then(|a| match a {
+                Aux::String(s) => Some(s.to_string()),
+                _ => None,
+            });
             if let Some(ref mc) = mc_tag {
                 if MC_Z_NUM_S_ANY_NUM_S.is_match(mc) {
                     return;
@@ -2724,9 +2743,7 @@ impl CigarParser {
             if read_dir_num == 1 {
                 // Java: CigarParser.java#L2221-L2234
                 let need_new = self.sv_structures.svffus.get(&mchr).is_none()
-                    || (position
-                        - *self.sv_structures.svfusfend.get(&mchr).unwrap_or(&0))
-                        as f64
+                    || (position - *self.sv_structures.svfusfend.get(&mchr).unwrap_or(&0)) as f64
                         > MINSVCDIST * self.max_read_length as f64;
                 if need_new {
                     let sclips = self.sv_structures.svffus.entry(mchr.clone()).or_default();
@@ -2738,9 +2755,14 @@ impl CigarParser {
                 let svref = &mut self.sv_structures.svffus.get_mut(&mchr).unwrap()[svn];
                 Self::add_sv_to(
                     svref,
-                    position, end, mate_start, mend,
-                    read_dir_num, total_length_including_soft_clipped,
-                    0, soft3,
+                    position,
+                    end,
+                    mate_start,
+                    mend,
+                    read_dir_num,
+                    total_length_including_soft_clipped,
+                    0,
+                    soft3,
                     self.max_read_length as f64 / 2.0,
                     qq_bytes[MINMAPBASE as usize] as i32 - 33,
                     record.mapq() as i32,
@@ -2751,9 +2773,7 @@ impl CigarParser {
             } else {
                 // Java: CigarParser.java#L2237-L2250
                 let need_new = self.sv_structures.svrfus.get(&mchr).is_none()
-                    || (position
-                        - *self.sv_structures.svfusrend.get(&mchr).unwrap_or(&0))
-                        as f64
+                    || (position - *self.sv_structures.svfusrend.get(&mchr).unwrap_or(&0)) as f64
                         > MINSVCDIST * self.max_read_length as f64;
                 if need_new {
                     let sclips = self.sv_structures.svrfus.entry(mchr.clone()).or_default();
@@ -2765,9 +2785,14 @@ impl CigarParser {
                 let svref = &mut self.sv_structures.svrfus.get_mut(&mchr).unwrap()[svn];
                 Self::add_sv_to(
                     svref,
-                    position, end, mate_start, mend,
-                    read_dir_num, total_length_including_soft_clipped,
-                    0, soft5,
+                    position,
+                    end,
+                    mate_start,
+                    mend,
+                    read_dir_num,
+                    total_length_including_soft_clipped,
+                    0,
+                    soft5,
                     self.max_read_length as f64 / 2.0,
                     qq_bytes[MINMAPBASE as usize] as i32 - 33,
                     record.mapq() as i32,
@@ -2963,7 +2988,11 @@ impl CigarParser {
         // Java: CigarParser.java#L1786 — add variant structure for deletion
         let hv = get_variation(&mut self.non_insertion_variants, self.start, desc_string);
         // Java: CigarParser.java#L1788 — add record for deletion in deletions map
-        Self::increment(&mut self.position_to_deletion_count, self.start, desc_string);
+        Self::increment(
+            &mut self.position_to_deletion_count,
+            self.start,
+            desc_string,
+        );
         // Java: CigarParser.java#L1789
         hv.inc_dir(direction);
         // Java: CigarParser.java#L1791
@@ -3045,7 +3074,8 @@ impl CigarParser {
                 break;
             }
             // Java: CigarParser.java#L1519
-            if rp < query_qual_bytes.len() && ((query_qual_bytes[rp] as i32 - 33) as f64) < conf.goodq
+            if rp < query_qual_bytes.len()
+                && ((query_qual_bytes[rp] as i32 - 33) as f64) < conf.goodq
             {
                 break;
             }
@@ -3166,8 +3196,14 @@ impl CigarParser {
         };
         let split: Vec<&str> = amp_str.split(':').collect();
         let (distance_to_amplicon, overlap_fraction) = {
-            let d = split.get(0).and_then(|s| s.parse::<i32>().ok()).unwrap_or(10);
-            let o = split.get(1).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.95);
+            let d = split
+                .get(0)
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(10);
+            let o = split
+                .get(1)
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.95);
             (d, o)
         };
 
@@ -3180,18 +3216,36 @@ impl CigarParser {
         // Java: CigarParser.java#L1338-L1370
         if num_elems > 0 && self.cigar.get_cigar_element(0).operator == CigarOp::S {
             // Java: CigarParser.java#L1340-L1344
-            let ts1 = if segstart_init > self.region.start { segstart_init } else { self.region.start };
-            let te1 = if segend_init < self.region.end { segend_init } else { self.region.end };
-            if !((ts1 - te1).abs() as f64 / (segend_init - segstart_init) as f64 > overlap_fraction) {
+            let ts1 = if segstart_init > self.region.start {
+                segstart_init
+            } else {
+                self.region.start
+            };
+            let te1 = if segend_init < self.region.end {
+                segend_init
+            } else {
+                self.region.end
+            };
+            if !((ts1 - te1).abs() as f64 / (segend_init - segstart_init) as f64 > overlap_fraction)
+            {
                 return true;
             }
         } else if num_elems > 0
             && self.cigar.get_cigar_element(num_elems - 1).operator == CigarOp::S
         {
             // Java: CigarParser.java#L1347-L1351
-            let ts1 = if segstart_init > self.region.start { segstart_init } else { self.region.start };
-            let te1 = if segend_init < self.region.end { segend_init } else { self.region.end };
-            if !((te1 - ts1).abs() as f64 / (segend_init - segstart_init) as f64 > overlap_fraction) {
+            let ts1 = if segstart_init > self.region.start {
+                segstart_init
+            } else {
+                self.region.start
+            };
+            let te1 = if segend_init < self.region.end {
+                segend_init
+            } else {
+                self.region.end
+            };
+            if !((te1 - ts1).abs() as f64 / (segend_init - segstart_init) as f64 > overlap_fraction)
+            {
                 return true;
             }
         } else {
@@ -3206,8 +3260,16 @@ impl CigarParser {
                     segend = (record.mpos() as i32 + 1) - record.insert_size() as i32 - 1;
                 }
             }
-            let ts1 = if segstart > self.region.start { segstart } else { self.region.start };
-            let te1 = if segend < self.region.end { segend } else { self.region.end };
+            let ts1 = if segstart > self.region.start {
+                segstart
+            } else {
+                self.region.start
+            };
+            let te1 = if segend < self.region.end {
+                segend
+            } else {
+                self.region.end
+            };
             if ((segstart - self.region.start).abs() > distance_to_amplicon
                 || (segend - self.region.end).abs() > distance_to_amplicon)
                 || ((ts1 - te1) as f64 / (segend - segstart) as f64).abs() <= overlap_fraction
@@ -3298,7 +3360,10 @@ impl CigarParser {
             && self.start <= self.region.end
         {
             // Java: CigarParser.java#L1965-L1968
-            let sclip = self.soft_clips_5_end.entry(self.start).or_insert_with(Sclip::default);
+            let sclip = self
+                .soft_clips_5_end
+                .entry(self.start)
+                .or_insert_with(Sclip::default);
 
             let qs_bytes = query_sequence.as_bytes();
             let qq_bytes = query_quality.as_bytes();
@@ -3372,7 +3437,10 @@ impl CigarParser {
             && self.start <= self.region.end
         {
             // Java: CigarParser.java#L1931-L1934
-            let sclip = self.soft_clips_3_end.entry(self.start).or_insert_with(Sclip::default);
+            let sclip = self
+                .soft_clips_3_end
+                .entry(self.start)
+                .or_insert_with(Sclip::default);
 
             let qs_bytes = query_sequence.as_bytes();
             let qq_bytes = query_quality.as_bytes();
@@ -3576,15 +3644,23 @@ impl CigarParser {
 
         // Java: CigarParser.java#L1885 — append '#' + matched segment
         desc_string.push('#');
-        desc_string.push_str(&String::from_utf8_lossy(&substr_with_len(qs_bytes, begin, m_len)));
+        desc_string.push_str(&String::from_utf8_lossy(&substr_with_len(
+            qs_bytes, begin, m_len,
+        )));
         // Java: CigarParser.java#L1887 — append quality of matched segment
-        quality_segment.push_str(&String::from_utf8_lossy(&substr_with_len(qq_bytes, begin, m_len)));
+        quality_segment.push_str(&String::from_utf8_lossy(&substr_with_len(
+            qq_bytes, begin, m_len,
+        )));
 
         // Java: CigarParser.java#L1891-L1893 — append '^' + indel description
         let ci2_op = self.cigar.get_cigar_element(ci + 2).operator;
         desc_string.push('^');
         if ci2_op == CigarOp::I {
-            desc_string.push_str(&String::from_utf8_lossy(&substr_with_len(qs_bytes, begin + m_len, indel_len)));
+            desc_string.push_str(&String::from_utf8_lossy(&substr_with_len(
+                qs_bytes,
+                begin + m_len,
+                indel_len,
+            )));
         } else {
             desc_string.push_str(&indel_len.to_string());
         }
@@ -3592,7 +3668,11 @@ impl CigarParser {
         // Java: CigarParser.java#L1897-L1904 — append quality for indel
         if is_insertion {
             if ci2_op == CigarOp::I {
-                quality_segment.push_str(&String::from_utf8_lossy(&substr_with_len(qq_bytes, begin + m_len, indel_len)));
+                quality_segment.push_str(&String::from_utf8_lossy(&substr_with_len(
+                    qq_bytes,
+                    begin + m_len,
+                    indel_len,
+                )));
             } else {
                 // Java: queryQuality.charAt(begin + mLen)
                 let idx = (begin + m_len) as usize;
@@ -3603,7 +3683,11 @@ impl CigarParser {
         } else {
             // Deletion case
             if ci2_op == CigarOp::I {
-                quality_segment.push_str(&String::from_utf8_lossy(&substr_with_len(qq_bytes, begin + m_len, indel_len)));
+                quality_segment.push_str(&String::from_utf8_lossy(&substr_with_len(
+                    qq_bytes,
+                    begin + m_len,
+                    indel_len,
+                )));
             }
             // else: append "" (nothing) for deletion case — Java: ""
         }

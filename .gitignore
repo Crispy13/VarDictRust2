@@ -2,6 +2,8 @@
 tmp/
 testdata/
 .vscode/
+**/__pycache__/
+
 copilot-office/missions
 # copilot-office/missions/*/*.md
 # copilot-office/missions/*/copilot-desk/completed-reports

@@ -51,8 +51,9 @@ fn parity_realigner_all_regions() {
 
         // Load CigarParser golden as input
         let cp_golden = common::load_golden_data("cigar_parser", region_str);
-        let variation_data: VariationData = serde_json::from_str(&cp_golden)
-            .unwrap_or_else(|e| panic!("Failed to deserialize cigar_parser golden for {region_str}: {e}"));
+        let variation_data: VariationData = serde_json::from_str(&cp_golden).unwrap_or_else(|e| {
+            panic!("Failed to deserialize cigar_parser golden for {region_str}: {e}")
+        });
 
         let bam_str = bam_path.to_str().unwrap();
         let scope = Scope::new(
@@ -68,8 +69,9 @@ fn parity_realigner_all_regions() {
 
         let result_scope = variation_realigner::process(scope);
 
-        let result_json = serde_json::to_string(&result_scope.data)
-            .unwrap_or_else(|e| panic!("Failed to serialize realigner output for {region_str}: {e}"));
+        let result_json = serde_json::to_string(&result_scope.data).unwrap_or_else(|e| {
+            panic!("Failed to serialize realigner output for {region_str}: {e}")
+        });
 
         common::assert_module_parity("realigner", region_str, &result_json);
     }

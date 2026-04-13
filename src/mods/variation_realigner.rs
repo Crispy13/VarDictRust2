@@ -10,20 +10,23 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::config::{EXTENSION, MINSVCDIST, SEED_1, SVFLANK, SVMAXLEN};
-use crate::data::{BaseInsertion, Cluster, CurrentSegment, Match, Match35, RealignedVariationData, Sclip, SortPositionSclip, Variation, VariationData, VariationMap, VariationMapSV};
-use crate::reference::Reference;
+use crate::data::{
+    BaseInsertion, Cluster, CurrentSegment, Match, Match35, RealignedVariationData, Sclip,
+    SortPositionSclip, Variation, VariationData, VariationMap, VariationMapSV,
+};
 use crate::patterns::{
     AMP_ATGC, ATGSs_AMP_ATGSs_END, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_ANY, BEGIN_PLUS_ATGC,
-    CARET_ATGC_END, CARET_ATGNC, DUP_NUM_ATGC, HASH_ATGC,
-    MINUS_NUMBER_AMP_ATGCs_END, MINUS_NUMBER_ATGNC_SV_ATGNC_END, UP_NUMBER_END,
+    CARET_ATGC_END, CARET_ATGNC, DUP_NUM_ATGC, HASH_ATGC, MINUS_NUMBER_AMP_ATGCs_END,
+    MINUS_NUMBER_ATGNC_SV_ATGNC_END, UP_NUMBER_END,
 };
+use crate::reference::Reference;
 use crate::scope::{GlobalReadOnlyScope, Scope};
 use crate::utils::{char_at, substr, substr_with_len};
 use crate::variations::{
     adj_cnt, adj_cnt_with_reference, correct_cnt, find_conseq, get_dir, get_variation,
     get_variation_maybe, get_variation_maybe_mut, inc_cnt, is_equals, is_has_and_equals_base,
-    is_has_and_not_equals_base, is_not_equals, join_ref, join_ref_f64,
-    join_ref_for_3_lgins, join_ref_for_5_lgins, sub_dir,
+    is_has_and_not_equals_base, is_not_equals, join_ref, join_ref_f64, join_ref_for_3_lgins,
+    join_ref_for_5_lgins, sub_dir,
 };
 
 // ─── Supporting types ────────────────────────────────────────────────
@@ -432,12 +435,7 @@ pub fn rm_cnt(vref: &mut Variation, tv: &Variation) {
 /// Java: VariationRealigner.java#L2890-L2901
 ///
 /// Check if sequence matches reference with default 3 mismatches.
-pub fn ismatchref(
-    sequence: &str,
-    ref_map: &HashMap<i32, u8>,
-    position: i32,
-    dir: i32,
-) -> bool {
+pub fn ismatchref(sequence: &str, ref_map: &HashMap<i32, u8>, position: i32, dir: i32) -> bool {
     // Java: VariationRealigner.java#L2895
     ismatchref_with_mm(sequence, ref_map, position, dir, 3)
 }
@@ -992,9 +990,8 @@ pub fn findbi(
                     if s < -1 {
                         // Java: String tins = substr(insert.toString(), s + 1, 1 - s)
                         let ins_b = insert_str.as_bytes();
-                        let tins =
-                            String::from_utf8_lossy(&substr_with_len(ins_b, s + 1, 1 - s))
-                                .to_string();
+                        let tins = String::from_utf8_lossy(&substr_with_len(ins_b, s + 1, 1 - s))
+                            .to_string();
                         // Java: insert.delete(insert.length() + s + 1, insert.length())
                         let del_start = (insert_str.len() as i32 + s + 1) as usize;
                         insert_str.truncate(del_start);
@@ -1102,8 +1099,7 @@ pub fn findbp(
             && i >= 8 + n / 10
             && (mm as f64 / i as f64) < 0.12
         {
-            let lbp =
-                start_position + direction * n - if direction < 0 { direction } else { 0 };
+            let lbp = start_position + direction * n - if direction < 0 { direction } else { 0 };
             // Java: VariationRealigner.java#L2579
             if mm == 0 && i == seq_len {
                 if instance.conf.y {
@@ -1250,21 +1246,16 @@ pub fn filter_sv(
 
         // Java: VariationRealigner.java#L403
         // Too many unhappy mates are false positive
-        if sv.disc != 0
-            && (sv.base.vars_count as f64 / sv.disc as f64) < 0.5
-        {
+        if sv.disc != 0 && (sv.base.vars_count as f64 / sv.disc as f64) < 0.5 {
             // Java: if (!(sv.varsCount / (double) sv.disc >= 0.35 && sv.varsCount >= 5))
-            if !((sv.base.vars_count as f64 / sv.disc as f64) >= 0.35
-                && sv.base.vars_count >= 5)
-            {
+            if !((sv.base.vars_count as f64 / sv.disc as f64) >= 0.35 && sv.base.vars_count >= 5) {
                 sv.used = true;
             }
         }
 
         // Java: VariationRealigner.java#L409-L413
         // Sort sv.soft entries by descending value
-        let mut soft_entries: Vec<(i32, i32)> =
-            sv.soft.iter().map(|(&k, &v)| (k, v)).collect();
+        let mut soft_entries: Vec<(i32, i32)> = sv.soft.iter().map(|(&k, &v)| (k, v)).collect();
         soft_entries.sort_by(|a, b| b.1.cmp(&a.1));
 
         // Java: sv.softp = soft.size() > 0 ? soft.get(0).getKey() : 0
@@ -1304,10 +1295,7 @@ pub fn filter_sv(
 ///
 /// Cluster mates by position proximity, return dominant cluster.
 /// **Parity critical**: First mate BOTH initializes cluster 0 AND is processed in the loop.
-pub fn check_cluster(
-    mates: &mut Vec<crate::data::Mate>,
-    rlen: i32,
-) -> Cluster {
+pub fn check_cluster(mates: &mut Vec<crate::data::Mate>, rlen: i32) -> Cluster {
     // Java: VariationRealigner.java#L433
     mates.sort_by(|a, b| a.mate_start_ms.cmp(&b.mate_start_ms));
 
@@ -1526,8 +1514,7 @@ pub fn adjust_mnp(
                         .map(|v| v.vars_count)
                         .unwrap_or(0);
                     if tref_clone.vars_count < vref_vars_count
-                        && tref_clone.mean_position / tref_clone.vars_count as f64
-                            <= (i + 1) as f64
+                        && tref_clone.mean_position / tref_clone.vars_count as f64 <= (i + 1) as f64
                     {
                         if GlobalReadOnlyScope::instance().conf.y {
                             eprintln!(
@@ -1752,11 +1739,7 @@ pub fn realigndel(
 
         // Java: VariationRealigner.java#L634-L636
         let wustart = if p - 200 > 1 { p - 200 } else { 1 };
-        let mut wupseq = format!(
-            "{}{}",
-            join_ref(reference_sequences, wustart, p - 1),
-            extra
-        );
+        let mut wupseq = format!("{}{}", join_ref(reference_sequences, wustart, p - 1), extra);
         if !inv3.is_empty() {
             wupseq = inv3.clone();
         }
@@ -1843,9 +1826,7 @@ pub fn realigndel(
                 continue;
             }
             // Java: VariationRealigner.java#L684 — quality check
-            if tv_clone.mean_quality / (tv_clone.vars_count as f64)
-                < instance.conf.goodq as f64
-            {
+            if tv_clone.mean_quality / (tv_clone.vars_count as f64) < instance.conf.goodq as f64 {
                 continue;
             }
             // Java: VariationRealigner.java#L688 — position check
@@ -1883,8 +1864,11 @@ pub fn realigndel(
                 let f = if f > 1.0 { 1.0 } else { f };
                 inc_cnt(ref_coverage, p, (tv_clone.vars_count as f64 * f) as i32);
                 // Java: adjRefCnt(tv, getVariationMaybe(nonInsertionVariants, p, ref.get(p)), dellen)
-                let ref_var =
-                    get_variation_maybe_mut(non_insertion_variants, p, reference_sequences.get(&p).copied());
+                let ref_var = get_variation_maybe_mut(
+                    non_insertion_variants,
+                    p,
+                    reference_sequences.get(&p).copied(),
+                );
                 adj_ref_cnt(&tv_clone, ref_var, dellen);
             }
 
@@ -1990,7 +1974,14 @@ pub fn realigndel(
                     let wupseq_rev: String = wupseq.chars().rev().collect();
                     eprintln!(
                         "  Realigndel 5: {} {} seq: '{}' Wuseq: {} cnt: {} {} {} {} cov: {:?}",
-                        p, sc5pp, seq, wupseq_rev, tv.base.vars_count, dcnt, vn, p,
+                        p,
+                        sc5pp,
+                        seq,
+                        wupseq_rev,
+                        tv.base.vars_count,
+                        dcnt,
+                        vn,
+                        p,
                         ref_coverage.get(&p)
                     );
                 }
@@ -2003,7 +1994,14 @@ pub fn realigndel(
                         let wupseq_rev: String = wupseq.chars().rev().collect();
                         eprintln!(
                             "  Realigndel 5: {} {} {} {} {} {} {} {} used cov: {:?}",
-                            p, sc5pp, seq, wupseq_rev, vars_count, dcnt, vn, p,
+                            p,
+                            sc5pp,
+                            seq,
+                            wupseq_rev,
+                            vars_count,
+                            dcnt,
+                            vn,
+                            p,
                             ref_coverage.get(&p)
                         );
                     }
@@ -2037,11 +2035,21 @@ pub fn realigndel(
                     return None;
                 }
                 // Java: VariationRealigner.java#L766
-                let sanpseq_sub = String::from_utf8_lossy(&substr(sanpseq.as_bytes(), sc3pp - p)).to_string();
+                let sanpseq_sub =
+                    String::from_utf8_lossy(&substr(sanpseq.as_bytes(), sc3pp - p)).to_string();
                 if instance.conf.y {
                     eprintln!(
                         "  Realigndel 3: {} {} seq '{}' Sanseq: {} cnt: {} {} {} {} {} {}",
-                        p, sc3pp, seq, sanpseq, tv.base.vars_count, dcnt, vn, p, dellen, sanpseq_sub
+                        p,
+                        sc3pp,
+                        seq,
+                        sanpseq,
+                        tv.base.vars_count,
+                        dcnt,
+                        vn,
+                        p,
+                        dellen,
+                        sanpseq_sub
                     );
                 }
                 if !seq.is_empty() && ismatch(&seq, &sanpseq_sub, 1) {
@@ -2067,8 +2075,12 @@ pub fn realigndel(
                 }
                 // Java: Variation lref = sc3pp <= p ? null : getVariationMaybe(...)
                 let mut lref_clone: Option<Variation> = if need_lref {
-                    get_variation_maybe(non_insertion_variants, p, reference_sequences.get(&p).copied())
-                        .cloned()
+                    get_variation_maybe(
+                        non_insertion_variants,
+                        p,
+                        reference_sequences.get(&p).copied(),
+                    )
+                    .cloned()
                 } else {
                     None
                 };
@@ -2105,10 +2117,7 @@ pub fn realigndel(
         )
         .cloned();
         if let Some(bams_ref) = bams {
-            if !bams_ref.is_empty()
-                && pe - p >= 5
-                && pe - p < max_read_length - 10
-            {
+            if !bams_ref.is_empty() && pe - p >= 5 && pe - p < max_read_length - 10 {
                 if let Some(ref h) = h_clone {
                     if h.vars_count != 0 && no_passing_reads(chr, p, pe, bams_ref) {
                         let vref_vc = non_insertion_variants
@@ -2270,12 +2279,12 @@ pub fn realignins(
         let tn = build_tn(&vn);
 
         // Java: VariationRealigner.java#L914-L915
-        let wustart = if position - 150 > 1 { position - 150 } else { 1 };
-        let wupseq = format!(
-            "{}{}",
-            join_ref(reference_sequences, wustart, position),
-            tn
-        );
+        let wustart = if position - 150 > 1 {
+            position - 150
+        } else {
+            1
+        };
+        let wupseq = format!("{}{}", join_ref(reference_sequences, wustart, position), tn);
 
         // Java: VariationRealigner.java#L921-L922
         let chr_len = instance.chr_lengths.get(chr).copied();
@@ -2293,10 +2302,7 @@ pub fn realignins(
             let p3 = position + inslen - ins3.len() as i32 + crate::config::SVFLANK;
             let mut sp = String::new();
             if ins3.len() as i32 > crate::config::SVFLANK {
-                let sub = substr(
-                    ins3.as_bytes(),
-                    crate::config::SVFLANK - ins3.len() as i32,
-                );
+                let sub = substr(ins3.as_bytes(), crate::config::SVFLANK - ins3.len() as i32);
                 sp = String::from_utf8_lossy(&sub).to_string();
             }
             sp += &join_ref(reference_sequences, position + 1, position + 101);
@@ -2312,7 +2318,12 @@ pub fn realignins(
                     sanend
                 )
             );
-            find_mm3_result = find_mm3(reference_sequences, position + 1, &sanpseq, soft_clips_3_end);
+            find_mm3_result = find_mm3(
+                reference_sequences,
+                position + 1,
+                &sanpseq,
+                soft_clips_3_end,
+            );
         }
 
         // Java: VariationRealigner.java#L946
@@ -2388,9 +2399,17 @@ pub fn realignins(
             if instance.conf.y {
                 eprintln!(
                     "    insMM: {}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}",
-                    mismatch_bases, mismatch_position, mismatch_end, nm3, nm5, vn,
-                    insertion_count, variation_clone.vars_count, variation_clone.mean_quality,
-                    variation_clone.mean_position, ref_coverage.get(&position)
+                    mismatch_bases,
+                    mismatch_position,
+                    mismatch_end,
+                    nm3,
+                    nm5,
+                    vn,
+                    insertion_count,
+                    variation_clone.vars_count,
+                    variation_clone.mean_quality,
+                    variation_clone.mean_position,
+                    ref_coverage.get(&position)
                 );
             }
 
@@ -2474,7 +2493,10 @@ pub fn realignins(
         // Java: VariationRealigner.java#L1024-L1049 — 5' soft clip absorption
         for &sc5pp in sc5p {
             if instance.conf.y {
-                eprintln!("    55: {} {} VN: '{}'  5' seq: ^{}^", position, sc5pp, vn, wupseq);
+                eprintln!(
+                    "    55: {} {} VN: '{}'  5' seq: ^{}^",
+                    position, sc5pp, vn, wupseq
+                );
             }
             let sc5_info = soft_clips_5_end.get_mut(&sc5pp).and_then(|tv| {
                 if tv.used {
@@ -2520,7 +2542,10 @@ pub fn realignins(
         // Java: VariationRealigner.java#L1050-L1117 — 3' soft clip absorption
         for &sc3pp in sc3p {
             if instance.conf.y {
-                eprintln!("    33: {} {} VN: '{}'  3' seq: ^{}^", position, sc3pp, vn, sanpseq);
+                eprintln!(
+                    "    33: {} {} VN: '{}'  3' seq: ^{}^",
+                    position, sc3pp, vn, sanpseq
+                );
             }
             let sc3_info = soft_clips_3_end.get_mut(&sc3pp).and_then(|tv| {
                 if tv.used {
@@ -2550,11 +2575,10 @@ pub fn realignins(
                     let base_clone = tv.base.clone();
                     let vars_count = tv.base.vars_count;
                     let mean_pos = tv.base.mean_position;
-                    let should_inc_ref = sc3pp <= position
-                        || insert.len() as f64 > mean_pos / vars_count as f64;
+                    let should_inc_ref =
+                        sc3pp <= position || insert.len() as f64 > mean_pos / vars_count as f64;
                     let need_lref = sc3pp > position;
-                    let null_lref_if_insert_gt =
-                        insert.len() as f64 > mean_pos / vars_count as f64;
+                    let null_lref_if_insert_gt = insert.len() as f64 > mean_pos / vars_count as f64;
                     tv.used = true;
 
                     // Java: VariationRealigner.java#L1086-L1117 — NEWINS mutation
@@ -2798,8 +2822,13 @@ fn build_tn(vn: &str) -> String {
 
 /// Get-or-create SV metadata for a position in non_insertion_variants.
 /// Java: VariationMap.getSV()
-fn get_sv(non_insertion_variants: &mut HashMap<i32, VariationMap>, pos: i32) -> &mut VariationMapSV {
-    let vmap = non_insertion_variants.entry(pos).or_insert_with(VariationMap::default);
+fn get_sv(
+    non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    pos: i32,
+) -> &mut VariationMapSV {
+    let vmap = non_insertion_variants
+        .entry(pos)
+        .or_insert_with(VariationMap::default);
     if vmap.sv.is_none() {
         vmap.sv = Some(VariationMapSV::default());
         vmap.entries.insert("SV".to_string(), Variation::default());
@@ -2913,7 +2942,8 @@ pub fn realignlgdel(
                 continue;
             }
             // Java: VariationRealigner.java#L1026 — findMatch
-            let match_result = super::structural_variants_processor::find_match(&seq, reference, p, -1, SEED_1, 1);
+            let match_result =
+                super::structural_variants_processor::find_match(&seq, reference, p, -1, SEED_1, 1);
             bp = match_result.base_position;
             extra_upper = match_result.matched_sequence;
             // Java: VariationRealigner.java#L1029
@@ -2922,7 +2952,12 @@ pub fn realignlgdel(
             }
             bp += 1; // Java: VariationRealigner.java#L1033
             // Java: VariationRealigner.java#L1034 — markSV
-            let sv_mark = super::structural_variants_processor::mark_sv(bp, p, &mut [&mut svfdel.to_vec(), &mut svrdel.to_vec()], max_read_length);
+            let sv_mark = super::structural_variants_processor::mark_sv(
+                bp,
+                p,
+                &mut [&mut svfdel.to_vec(), &mut svrdel.to_vec()],
+                max_read_length,
+            );
             svcov = sv_mark.0;
             clusters = sv_mark.1;
             pairs = sv_mark.2;
@@ -2982,7 +3017,10 @@ pub fn realignlgdel(
         }
 
         if instance.conf.y {
-            eprintln!("  Found Realignlgdel: {} {} 5' {} {} {}", bp, gt, p, seq, cnt);
+            eprintln!(
+                "  Found Realignlgdel: {} {} 5' {} {} {}",
+                bp, gt, p, seq, cnt
+            );
         }
 
         // Java: VariationRealigner.java#L1091-L1098 — Find matching 3' clip position
@@ -3078,7 +3116,10 @@ pub fn realignlgdel(
         }
 
         // Java: VariationRealigner.java#L1144-L1148 — incCnt for short dels
-        let sc5v_vars_count = soft_clips_5_end.get(&p).map(|s| s.base.vars_count).unwrap_or(0);
+        let sc5v_vars_count = soft_clips_5_end
+            .get(&p)
+            .map(|s| s.base.vars_count)
+            .unwrap_or(0);
         if dellen < instance.conf.indelsize {
             for tp in bp..(bp + dellen) {
                 inc_cnt(ref_coverage, tp, sc5v_vars_count);
@@ -3099,13 +3140,20 @@ pub fn realignlgdel(
 
             // Java: VariationRealigner.java#L1153-L1158
             if sc3p_gt_bp {
-                let lref = get_variation_maybe(non_insertion_variants, bp, reference_sequences.get(&bp).copied()).cloned();
+                let lref = get_variation_maybe(
+                    non_insertion_variants,
+                    bp,
+                    reference_sequences.get(&bp).copied(),
+                )
+                .cloned();
                 let tv_ref = get_variation(non_insertion_variants, bp, &gt);
                 let mut lref_opt = lref;
                 adj_cnt_with_reference(tv_ref, &sclip_base_clone, lref_opt.as_mut());
                 // Write lref back if modified
                 if let Some(lref_val) = lref_opt {
-                    let ref_base_str = reference_sequences.get(&bp).map(|b| (*b as char).to_string());
+                    let ref_base_str = reference_sequences
+                        .get(&bp)
+                        .map(|b| (*b as char).to_string());
                     if let Some(rbs) = ref_base_str {
                         if let Some(entry) = non_insertion_variants
                             .get_mut(&bp)
@@ -3131,7 +3179,9 @@ pub fn realignlgdel(
 
             // Java: VariationRealigner.java#L1167-L1175 — rmCnt for intermediate positions
             for ip in (bp + 1)..sc3p {
-                let ref_ch = reference_sequences.get(&(dellen + ip)).map(|b| (*b as char).to_string());
+                let ref_ch = reference_sequences
+                    .get(&(dellen + ip))
+                    .map(|b| (*b as char).to_string());
                 if let Some(ref ref_ch_str) = ref_ch {
                     let sclip_base_for_rm = sclip_base_clone.clone();
                     let vv = get_variation(non_insertion_variants, ip, ref_ch_str);
@@ -3185,7 +3235,11 @@ pub fn realignlgdel(
         );
 
         // Java: VariationRealigner.java#L1181-L1183 — SV splits update
-        let new_gt_vc = dels5.get(&bp).and_then(|m| m.get(&gt)).copied().unwrap_or(tv_vc);
+        let new_gt_vc = dels5
+            .get(&bp)
+            .and_then(|m| m.get(&gt))
+            .copied()
+            .unwrap_or(tv_vc);
         if let Some(sv) = non_insertion_variants
             .get_mut(&bp)
             .and_then(|m| m.sv.as_mut())
@@ -3278,7 +3332,8 @@ pub fn realignlgdel(
                 continue;
             }
             // Java: VariationRealigner.java#L1248 — findMatch
-            let match_result = super::structural_variants_processor::find_match(&seq, reference, p, 1, SEED_1, 1);
+            let match_result =
+                super::structural_variants_processor::find_match(&seq, reference, p, 1, SEED_1, 1);
             bp = match_result.base_position;
             extra_upper = match_result.matched_sequence;
             // Java: VariationRealigner.java#L1251
@@ -3287,7 +3342,12 @@ pub fn realignlgdel(
             }
 
             // Java: VariationRealigner.java#L1255 — markSV
-            let sv_mark = super::structural_variants_processor::mark_sv(p, bp, &mut [&mut svfdel.to_vec(), &mut svrdel.to_vec()], max_read_length);
+            let sv_mark = super::structural_variants_processor::mark_sv(
+                p,
+                bp,
+                &mut [&mut svfdel.to_vec(), &mut svrdel.to_vec()],
+                max_read_length,
+            );
             svcov = sv_mark.0;
             clusters = sv_mark.1;
             pairs = sv_mark.2;
@@ -3359,9 +3419,7 @@ pub fn realignlgdel(
             }
             // Java: VariationRealigner.java#L1313-L1321 — SV copy on left-shift
             if bp != p {
-                let sv_from = non_insertion_variants
-                    .get(&p)
-                    .and_then(|m| m.sv.clone());
+                let sv_from = non_insertion_variants.get(&p).and_then(|m| m.sv.clone());
                 if let Some(sv_data) = sv_from {
                     let sv_to = get_sv(non_insertion_variants, bp);
                     sv_to.clusters = sv_data.clusters;
@@ -3398,7 +3456,10 @@ pub fn realignlgdel(
         tv.pstd = true;
 
         // Java: VariationRealigner.java#L1343-L1347 — incCnt for short dels
-        let sc3v_vars_count = soft_clips_3_end.get(&p).map(|s| s.base.vars_count).unwrap_or(0);
+        let sc3v_vars_count = soft_clips_3_end
+            .get(&p)
+            .map(|s| s.base.vars_count)
+            .unwrap_or(0);
         if dellen < instance.conf.indelsize {
             for tp in bp..(bp + dellen + extra.len() as i32 + extra_upper.len() as i32) {
                 inc_cnt(ref_coverage, tp, sc3v_vars_count);
@@ -3459,7 +3520,11 @@ pub fn realignlgdel(
         );
 
         // Java: VariationRealigner.java#L1365-L1367 — SV splits update
-        let new_gt_vc = dels5.get(&bp).and_then(|m| m.get(&gt)).copied().unwrap_or(tv_vc);
+        let new_gt_vc = dels5
+            .get(&bp)
+            .and_then(|m| m.get(&gt))
+            .copied()
+            .unwrap_or(tv_vc);
         if let Some(sv) = non_insertion_variants
             .get_mut(&bp)
             .and_then(|m| m.sv.as_mut())
@@ -3628,12 +3693,8 @@ pub fn realignlgins30(
 
             // Java: VariationRealigner.java#L1454
             let mut ins = if bp3 + smscore > 1 {
-                String::from_utf8_lossy(&substr_with_len(
-                    seq3.as_bytes(),
-                    0,
-                    -(bp3 + smscore) + 1,
-                ))
-                .to_string()
+                String::from_utf8_lossy(&substr_with_len(seq3.as_bytes(), 0, -(bp3 + smscore) + 1))
+                    .to_string()
             } else {
                 seq3.clone()
             };
@@ -3720,7 +3781,8 @@ pub fn realignlgins30(
                         ins.len() as i32 - tmp_str.len() as i32,
                     ))
                     .to_string();
-                    let sub2 = String::from_utf8_lossy(&substr(ins.as_bytes(), p3 - p5)).to_string();
+                    let sub2 =
+                        String::from_utf8_lossy(&substr(ins.as_bytes(), p3 - p5)).to_string();
                     ins = format!("{}&{}", sub1, sub2);
                     ins = format!("+{}", ins);
                     bi = p3 - 1;
@@ -3779,8 +3841,7 @@ pub fn realignlgins30(
                         tnr += 1;
                     }
                     // Java: VariationRealigner.java#L1525 — joinRef with f64 "to"
-                    let to_f64 = p5 as f64
-                        + (p3 - p5 + ins.len() as i32) as f64 / rpt as f64
+                    let to_f64 = p5 as f64 + (p3 - p5 + ins.len() as i32) as f64 / rpt as f64
                         - ins.len() as f64;
                     tmp_str += &join_ref_f64(reference_sequences, p5, to_f64);
                     ins = format!("+{}{}", tmp_str, ins);
@@ -3799,8 +3860,8 @@ pub fn realignlgins30(
                                 tex as i32
                             ))
                         );
-                        let right =
-                            String::from_utf8_lossy(&substr(ins.as_bytes(), tex as i32)).to_string();
+                        let right = String::from_utf8_lossy(&substr(ins.as_bytes(), tex as i32))
+                            .to_string();
                         if left == right {
                             ins = format!(
                                 "+{}",
@@ -3815,7 +3876,14 @@ pub fn realignlgins30(
                 }
 
                 if instance.conf.y {
-                    eprintln!("Found lgins30: {} {} {} {} + {}", p3, p5, ins.len(), tmp_str, ins);
+                    eprintln!(
+                        "Found lgins30: {} {} {} {} + {}",
+                        p3,
+                        p5,
+                        ins.len(),
+                        tmp_str,
+                        ins
+                    );
                 }
                 bi = p5 - 1;
                 use_insertion_variants = true;
@@ -3876,10 +3944,7 @@ pub fn realignlgins30(
 
                 // Java: VariationRealigner.java#L1563-L1569
                 if let Some(bams_vec) = instance_bams.as_ref() {
-                    if !bams_vec.is_empty()
-                        && p3 - p5 >= 5
-                        && p3 - p5 < max_read_length - 10
-                    {
+                    if !bams_vec.is_empty() && p3 - p5 >= 5 && p3 - p5 < max_read_length - 10 {
                         let mut mvref_for_check = get_variation_maybe(
                             non_insertion_variants,
                             bi,
@@ -3887,9 +3952,7 @@ pub fn realignlgins30(
                         )
                         .cloned();
                         if let Some(ref mut mvref) = mvref_for_check {
-                            if mvref.vars_count != 0
-                                && no_passing_reads(chr, p5, p3, bams_vec)
-                            {
+                            if mvref.vars_count != 0 && no_passing_reads(chr, p5, p3, bams_vec) {
                                 let vref_vc = insertion_variants
                                     .get(&bi)
                                     .and_then(|m| m.entries.get(&vref_key))
@@ -3897,8 +3960,7 @@ pub fn realignlgins30(
                                     .unwrap_or(0);
                                 if vref_vc > 2 * mvref.vars_count {
                                     let mvref_copy = mvref.clone();
-                                    let vref =
-                                        get_variation(insertion_variants, bi, &vref_key);
+                                    let vref = get_variation(insertion_variants, bi, &vref_key);
                                     adj_cnt_with_reference(vref, &mvref_copy, Some(mvref));
                                 }
                             }
@@ -4072,7 +4134,8 @@ pub fn realignlgins(
                 continue;
             }
             // Java: VariationRealigner.java#L1658 — findMatch
-            let match_result = super::structural_variants_processor::find_match(&seq, reference, p, -1, SEED_1, 1);
+            let match_result =
+                super::structural_variants_processor::find_match(&seq, reference, p, -1, SEED_1, 1);
             bi = match_result.base_position;
             extra = match_result.matched_sequence;
             // Java: VariationRealigner.java#L1661
@@ -4090,13 +4153,8 @@ pub fn realignlgins(
             if bi - p > instance.conf.svminlen + 2 * SVFLANK {
                 ins = join_ref(reference_sequences, p, p + SVFLANK - 1);
                 ins += &format!("<dup{}>", bi - p - 2 * SVFLANK + 1);
-                ins += &join_ref_for_5_lgins(
-                    reference_sequences,
-                    bi - SVFLANK + 1,
-                    bi,
-                    &seq,
-                    &extra,
-                );
+                ins +=
+                    &join_ref_for_5_lgins(reference_sequences, bi - SVFLANK + 1, bi, &seq, &extra);
             } else {
                 ins = join_ref_for_5_lgins(reference_sequences, p, bi, &seq, &extra);
             }
@@ -4142,7 +4200,10 @@ pub fn realignlgins(
         }
 
         if instance.conf.y {
-            eprintln!("  Found candidate lgins from 5: {} +{} {} {}", bi, ins, p, seq);
+            eprintln!(
+                "  Found candidate lgins from 5: {} +{} {} {}",
+                bi, ins, p, seq
+            );
         }
 
         // Java: VariationRealigner.java#L1720-L1723
@@ -4300,8 +4361,7 @@ pub fn realignlgins(
                             .unwrap_or(0);
                         if kref_vc > 2 * mref.vars_count {
                             let mref_copy = mref.clone();
-                            let kref =
-                                get_variation(insertion_variants, bi, &newins_key);
+                            let kref = get_variation(insertion_variants, bi, &newins_key);
                             adj_cnt_with_reference(kref, &mref_copy, Some(mref));
                         }
                     }
@@ -4364,7 +4424,8 @@ pub fn realignlgins(
                 continue;
             }
             // Java: VariationRealigner.java#L1829 — findMatch
-            let match_result = super::structural_variants_processor::find_match(&seq, reference, p, 1, SEED_1, 1);
+            let match_result =
+                super::structural_variants_processor::find_match(&seq, reference, p, 1, SEED_1, 1);
             bi = match_result.base_position;
             extra = match_result.matched_sequence;
             // Java: VariationRealigner.java#L1832
@@ -4394,8 +4455,14 @@ pub fn realignlgins(
 
             // Java: VariationRealigner.java#L1857-L1869
             if p - bi > instance.conf.svminlen + 2 * SVFLANK {
-                ins =
-                    join_ref_for_3_lgins(reference_sequences, bi, bi + SVFLANK - 1, shift5, &seq, &extra);
+                ins = join_ref_for_3_lgins(
+                    reference_sequences,
+                    bi,
+                    bi + SVFLANK - 1,
+                    shift5,
+                    &seq,
+                    &extra,
+                );
                 ins += &format!("<dup{}>", p - bi - 2 * SVFLANK);
                 ins += &join_ref(reference_sequences, p - SVFLANK, p - 1);
             } else {
@@ -4445,7 +4512,10 @@ pub fn realignlgins(
         }
 
         if instance.conf.y {
-            eprintln!("  Found candidate lgins from 3: {} +{} {} {}", bi, ins, p, seq);
+            eprintln!(
+                "  Found candidate lgins from 3: {} +{} {} {}",
+                bi, ins, p, seq
+            );
         }
 
         // Java: VariationRealigner.java#L1899-L1906
@@ -4612,8 +4682,7 @@ pub fn realignlgins(
                             .unwrap_or(0);
                         if iref_vc_now > 2 * mref.vars_count {
                             let mref_copy = mref.clone();
-                            let iref =
-                                get_variation(insertion_variants, bi, &ins_key);
+                            let iref = get_variation(insertion_variants, bi, &ins_key);
                             adj_cnt_with_reference(iref, &mref_copy, Some(mref));
                         }
                     }
@@ -4816,11 +4885,7 @@ pub fn process(scope: Scope<VariationData>) -> Scope<RealignedVariationData> {
     // Java: VariationRealigner.java#L79-L81
     let mut softp2sv: HashMap<i32, Vec<Sclip>> = HashMap::new();
     if !instance.conf.disable_sv {
-        filter_all_sv_structures(
-            &mut sv_structures,
-            max_read_length,
-            &mut softp2sv,
-        );
+        filter_all_sv_structures(&mut sv_structures, max_read_length, &mut softp2sv);
     }
 
     // Java: VariationRealigner.java#L83

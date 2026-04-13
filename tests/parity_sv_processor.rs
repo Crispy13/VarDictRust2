@@ -49,8 +49,10 @@ fn parity_sv_processor_all_regions() {
 
         // Load realigner golden as input
         let r_golden = common::load_golden_data("realigner", region_str);
-        let mut data: RealignedVariationData = serde_json::from_str(&r_golden)
-            .unwrap_or_else(|e| panic!("Failed to deserialize realigner golden for {region_str}: {e}"));
+        let mut data: RealignedVariationData =
+            serde_json::from_str(&r_golden).unwrap_or_else(|e| {
+                panic!("Failed to deserialize realigner golden for {region_str}: {e}")
+            });
 
         let bam_str = bam_path.to_str().unwrap();
         let bams: Option<Vec<String>> = Some(vec![bam_str.to_string()]);
@@ -81,8 +83,9 @@ fn parity_sv_processor_all_regions() {
             prev_max_read_length,
         );
 
-        let result_json = serde_json::to_string(&data)
-            .unwrap_or_else(|e| panic!("Failed to serialize sv_processor output for {region_str}: {e}"));
+        let result_json = serde_json::to_string(&data).unwrap_or_else(|e| {
+            panic!("Failed to serialize sv_processor output for {region_str}: {e}")
+        });
 
         common::assert_module_parity("sv_processor", region_str, &result_json);
     }

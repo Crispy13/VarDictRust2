@@ -8,9 +8,7 @@ use std::collections::HashMap;
 use regex::Regex;
 
 use crate::config::{Configuration, SVFLANK};
-use crate::data::{
-    AlignedVarsData, Region, Variant, VariationMap, Vars,
-};
+use crate::data::{AlignedVarsData, Region, Variant, VariationMap, Vars};
 use crate::patterns::{
     AMP_ATGC, ANY_SV, BEGIN_DIGITS, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_CARET, CARET_ATGNC,
     DUP_NUM, HASH_GROUP_CARET_GROUP, INV_NUM, SOME_SV_NUMBERS,
@@ -141,13 +139,15 @@ pub fn proceed_vref_is_deletion(
     let leftseq = join_ref(ref_map, (position - REF_70_BASES).max(1), position - 1);
     let chr0 = chromosome_limit(region, ref_map); // Trap T23: non-mutating
     // right dellen+70 bases in reference sequence
-    let tseq = join_ref(ref_map, position, (position + dellen + REF_70_BASES).min(chr0));
+    let tseq = join_ref(
+        ref_map,
+        position,
+        (position + dellen + REF_70_BASES).min(chr0),
+    );
 
     let tseq_bytes = tseq.as_bytes();
-    let tseq1_str =
-        String::from_utf8_lossy(&substr_with_len(tseq_bytes, 0, dellen)).to_string();
-    let tseq2_str =
-        String::from_utf8_lossy(&substr(tseq_bytes, dellen)).to_string();
+    let tseq1_str = String::from_utf8_lossy(&substr_with_len(tseq_bytes, 0, dellen)).to_string();
+    let tseq2_str = String::from_utf8_lossy(&substr(tseq_bytes, dellen)).to_string();
 
     // First findMSI call
     let (mut msi, shift3, mut msint) = find_msi(&tseq1_str, &tseq2_str, Some(&leftseq));
@@ -359,8 +359,7 @@ pub fn create_variant(
         tvref.vars_count_on_reverse = rev;
         tvref.strand_bias_flag = bias.to_string();
         tvref.frequency = round_half_even("0.0000", cnt.vars_count as f64 / ttcov as f64);
-        tvref.mean_position =
-            round_half_even("0.0", cnt.mean_position / cnt.vars_count as f64);
+        tvref.mean_position = round_half_even("0.0", cnt.mean_position / cnt.vars_count as f64);
         tvref.is_at_least_at_2_positions = cnt.pstd;
         tvref.mean_quality = base_quality;
         tvref.has_at_least_2_diff_qualities = cnt.qstd;
@@ -484,8 +483,7 @@ pub fn create_insertion(
         tvref.vars_count_on_reverse = rev;
         tvref.strand_bias_flag = bias.to_string();
         tvref.frequency = round_half_even("0.0000", cnt.vars_count as f64 / ttcov as f64);
-        tvref.mean_position =
-            round_half_even("0.0", cnt.mean_position / cnt.vars_count as f64);
+        tvref.mean_position = round_half_even("0.0", cnt.mean_position / cnt.vars_count as f64);
         tvref.is_at_least_at_2_positions = cnt.pstd;
         tvref.mean_quality = vqual;
         tvref.has_at_least_2_diff_qualities = cnt.qstd;
@@ -724,9 +722,11 @@ pub fn collect_reference_variants(
             .get(&(position + 1))
             .map_or(false, |vm| vm.entries.contains_key(&next_ref_str))
         {
-            if let Some(tpref) =
-                get_variation_maybe(non_insertion_variants, position + 1, ref_map.get(&(position + 1)).copied())
-            {
+            if let Some(tpref) = get_variation_maybe(
+                non_insertion_variants,
+                position + 1,
+                ref_map.get(&(position + 1)).copied(),
+            ) {
                 reference_forward_coverage = tpref.vars_count_on_forward;
                 reference_reverse_coverage = tpref.vars_count_on_reverse;
             }
@@ -771,8 +771,13 @@ pub fn collect_reference_variants(
                     && !description_string.contains('#')
                     && !description_string.contains("<dup")
                 {
-                    let (m, s, ms) =
-                        proceed_vref_is_insertion(position, &description_string, ref_map, region, conf);
+                    let (m, s, ms) = proceed_vref_is_insertion(
+                        position,
+                        &description_string,
+                        ref_map,
+                        region,
+                        conf,
+                    );
                     msi = m;
                     shift3 = s;
                     msint = ms;
@@ -831,13 +836,15 @@ pub fn collect_reference_variants(
             // Branch: Deletion
             if description_string.starts_with('-') {
                 let matcher_inv = INV_NUM.captures(&description_string);
-                let matcher_start_minus_num = BEGIN_MINUS_NUMBER_CARET.is_match(&description_string);
+                let matcher_start_minus_num =
+                    BEGIN_MINUS_NUMBER_CARET.is_match(&description_string);
 
                 if deletion_length < conf.svminlen {
                     // Trap T15: replaceFirst with regex
                     let re_leading = Regex::new(r"^-\d+").unwrap();
                     varallele = re_leading.replace(&description_string, "").to_string();
-                    let (m, s, ms) = proceed_vref_is_deletion(position, deletion_length, ref_map, region, conf);
+                    let (m, s, ms) =
+                        proceed_vref_is_deletion(position, deletion_length, ref_map, region, conf);
                     msi = m;
                     shift3 = s;
                     msint = ms;
@@ -1050,7 +1057,11 @@ fn process_variant_finalization(
         if let Some(caps2) = AMP_ATGC.captures(&varallele.clone()) {
             let vextra = caps2[1].to_string();
             varallele = varallele.replacen('&', "", 1);
-            let tch2 = join_ref(ref_map, end_position + 1, end_position + vextra.len() as i32);
+            let tch2 = join_ref(
+                ref_map,
+                end_position + 1,
+                end_position + vextra.len() as i32,
+            );
             refallele.push_str(&tch2);
             genotype1current.push_str(&tch2);
             end_position += vextra.len() as i32;
@@ -1075,8 +1086,9 @@ fn process_variant_finalization(
             if variations_at_pos.variants[vi].position_coverage > *total_pos_coverage {
                 *total_pos_coverage = variations_at_pos.variants[vi].position_coverage;
             }
-            variations_at_pos.variants[vi].frequency =
-                variations_at_pos.variants[vi].position_coverage as f64 / *total_pos_coverage as f64;
+            variations_at_pos.variants[vi].frequency = variations_at_pos.variants[vi]
+                .position_coverage as f64
+                / *total_pos_coverage as f64;
         }
     }
 
@@ -1208,10 +1220,16 @@ fn process_variant_finalization(
     }
 
     // Set flanking sequences
-    variations_at_pos.variants[vi].leftseq =
-        join_ref(ref_map, (start_position - REF_20_BASES).max(1), start_position - 1);
-    variations_at_pos.variants[vi].rightseq =
-        join_ref(ref_map, end_position + 1, (end_position + REF_20_BASES).min(chr0));
+    variations_at_pos.variants[vi].leftseq = join_ref(
+        ref_map,
+        (start_position - REF_20_BASES).max(1),
+        start_position - 1,
+    );
+    variations_at_pos.variants[vi].rightseq = join_ref(
+        ref_map,
+        end_position + 1,
+        (end_position + REF_20_BASES).min(chr0),
+    );
 
     // Build genotype string — Trap T34
     let mut genotype = format!("{}/{}", genotype1current, genotype2);
@@ -1224,7 +1242,8 @@ fn process_variant_finalization(
     let vref = &mut variations_at_pos.variants[vi];
     vref.extra_frequency = round_half_even("0.0000", vref.extra_frequency);
     vref.frequency = round_half_even("0.0000", vref.frequency);
-    vref.high_quality_reads_frequency = round_half_even("0.0000", vref.high_quality_reads_frequency);
+    vref.high_quality_reads_frequency =
+        round_half_even("0.0000", vref.high_quality_reads_frequency);
     vref.msi = round_half_even("0.000", msi);
     vref.msint = msint.len() as i32;
     vref.shift3 = shift3;
@@ -1356,7 +1375,13 @@ fn process_position(
     }
 
     // Check if only reference variant
-    if is_the_same_variation_on_ref(position, &vars_at_cur_position, insertion_variants, ref_map, conf) {
+    if is_the_same_variation_on_ref(
+        position,
+        &vars_at_cur_position,
+        insertion_variants,
+        ref_map,
+        conf,
+    ) {
         return;
     }
 

@@ -57,9 +57,7 @@ where
 
 /// Deserializes [[i32, V], ...] JSON array → HashMap<i32, V>
 /// Mirror of serialize_sorted_int_map.
-pub fn deserialize_sorted_int_map<'de, V, D>(
-    deserializer: D,
-) -> Result<HashMap<i32, V>, D::Error>
+pub fn deserialize_sorted_int_map<'de, V, D>(deserializer: D) -> Result<HashMap<i32, V>, D::Error>
 where
     V: Deserialize<'de>,
     D: Deserializer<'de>,
@@ -111,7 +109,8 @@ where
 #[cfg(test)]
 mod tests {
     use crate::data::{
-        AlignedVarsData, RealignedVariationData, SortedStringMap, Variation, VariationData, VariationMap, Vars,
+        AlignedVarsData, RealignedVariationData, SortedStringMap, Variation, VariationData,
+        VariationMap, Vars,
     };
     use indexmap::IndexMap;
     use std::collections::{BTreeMap, HashMap};
@@ -146,10 +145,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let vmap = VariationMap {
-            entries,
-            sv: None,
-        };
+        let vmap = VariationMap { entries, sv: None };
         assert_round_trip(&vmap);
     }
 
@@ -157,8 +153,20 @@ mod tests {
     fn test_variation_data_round_trip() {
         let mut non_ins = HashMap::new();
         let mut vmap1 = IndexMap::new();
-        vmap1.insert("C".to_string(), Variation { vars_count: 10, ..Default::default() });
-        non_ins.insert(100, VariationMap { entries: vmap1, sv: None });
+        vmap1.insert(
+            "C".to_string(),
+            Variation {
+                vars_count: 10,
+                ..Default::default()
+            },
+        );
+        non_ins.insert(
+            100,
+            VariationMap {
+                entries: vmap1,
+                sv: None,
+            },
+        );
 
         let mut ref_cov = HashMap::new();
         ref_cov.insert(100, 50);
@@ -182,8 +190,20 @@ mod tests {
     fn test_realigned_variation_data_round_trip() {
         let mut non_ins = HashMap::new();
         let mut vmap = IndexMap::new();
-        vmap.insert("G".to_string(), Variation { vars_count: 7, ..Default::default() });
-        non_ins.insert(50, VariationMap { entries: vmap, sv: None });
+        vmap.insert(
+            "G".to_string(),
+            Variation {
+                vars_count: 7,
+                ..Default::default()
+            },
+        );
+        non_ins.insert(
+            50,
+            VariationMap {
+                entries: vmap,
+                sv: None,
+            },
+        );
 
         let mut ref_cov = HashMap::new();
         ref_cov.insert(50, 42);

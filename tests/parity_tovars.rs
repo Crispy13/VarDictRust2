@@ -56,18 +56,14 @@ fn parity_tovars_all_regions() {
         let fai_path = format!("{}.fai", ref_path.display());
         let chr_lengths = load_chr_lengths(&fai_path);
 
-        let reference_resource = ReferenceResource::new(
-            ref_path.to_str().unwrap(),
-            1200,
-            0,
-            chr_lengths,
-            false,
-        );
+        let reference_resource =
+            ReferenceResource::new(ref_path.to_str().unwrap(), 1200, 0, chr_lengths, false);
 
         // Load sv_processor golden as input
         let sv_golden = common::load_golden_data("sv_processor", region_str);
-        let data: RealignedVariationData = serde_json::from_str(&sv_golden)
-            .unwrap_or_else(|e| panic!("Failed to deserialize sv_processor golden for {region_str}: {e}"));
+        let data: RealignedVariationData = serde_json::from_str(&sv_golden).unwrap_or_else(|e| {
+            panic!("Failed to deserialize sv_processor golden for {region_str}: {e}")
+        });
 
         // Match the shared Java pipeline reference more closely: load the full span of
         // positions present in SVProcessor output, not only the nominal test region.

@@ -108,8 +108,9 @@ fn parity_cigar_parser_all_regions() {
         let mut record_iter = records.into_iter();
         let result = parser.process(&mut record_iter, &header, &chr_name);
 
-        let result_json = serde_json::to_string(&result)
-            .unwrap_or_else(|e| panic!("Failed to serialize CigarParser output for {region_str}: {e}"));
+        let result_json = serde_json::to_string(&result).unwrap_or_else(|e| {
+            panic!("Failed to serialize CigarParser output for {region_str}: {e}")
+        });
 
         common::assert_module_parity("cigar_parser", region_str, &result_json);
     }
