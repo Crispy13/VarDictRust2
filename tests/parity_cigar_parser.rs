@@ -31,11 +31,10 @@ fn parity_cigar_parser_all_regions() {
     let regions = common::load_region_config();
 
     for (region_str, bam_path, ref_path) in &regions {
-        let _guard = common::init_test_scope();
-
         let region = common::parse_region(region_str);
         let fai_path = format!("{}.fai", ref_path.display());
         let chr_lengths = load_chr_lengths(&fai_path);
+        let _guard = common::init_test_scope(chr_lengths.clone());
 
         // Build ReferenceResource with real chr_lengths so FASTA loading works
         let reference_resource = ReferenceResource::new(

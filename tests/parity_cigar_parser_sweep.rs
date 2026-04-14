@@ -49,6 +49,7 @@ fn parity_cigar_parser_sweep() {
     let (_, first_ref) = common::bam_tag_lookup(&archives[0].0);
     let fai_path = format!("{first_ref}.fai");
     let chr_lengths = common::load_chr_lengths(&fai_path);
+    let _guard = common::init_test_scope(chr_lengths.clone());
 
     let mut failures = Vec::new();
     let mut tested = 0usize;
@@ -57,6 +58,16 @@ fn parity_cigar_parser_sweep() {
     'archives: for (bam_tag, _chrom, archive_path) in archives {
         completed_archives += 1;
         let (bam_path, ref_path) = common::bam_tag_lookup(&bam_tag);
+        let reference_resource = Arc::new(ReferenceResource::new(
+            ref_path,
+            1200,
+            0,
+            chr_lengths.clone(),
+            false,
+        ));
+        let header_reader = bam::IndexedReader::from_path(bam_path)
+            .unwrap_or_else(|error| panic!("Failed to open BAM {bam_path}: {error}"));
+        let header = header_reader.header().to_owned();
         let mut archive_reader = common::V2ArchiveReader::new(&archive_path);
 
         for line in &mut archive_reader {
@@ -70,11 +81,8 @@ fn parity_cigar_parser_sweep() {
 
             let region_str = line.region_str();
 
-            let _guard = common::init_test_scope();
             let region = common::parse_region(&region_str);
 
-            let reference_resource =
-                ReferenceResource::new(ref_path, 1200, 0, chr_lengths.clone(), false);
             let reference = reference_resource
                 .get_reference(&region)
                 .unwrap_or_else(|error| {
@@ -82,7 +90,6 @@ fn parity_cigar_parser_sweep() {
                 });
             let reference = Arc::new(reference);
 
-            let bam_str = bam_path;
             let initial_data = InitialData::new(
                 HashMap::new(),
                 HashMap::new(),
@@ -91,10 +98,10 @@ fn parity_cigar_parser_sweep() {
                 HashMap::new(),
             );
             let scope = Scope::new(
-                bam_str,
+                bam_path,
                 region.clone(),
                 Arc::clone(&reference),
-                Arc::new(reference_resource),
+                Arc::clone(&reference_resource),
                 0,
                 HashSet::new(),
                 VariantPrinter::Out,
@@ -117,8 +124,8 @@ fn parity_cigar_parser_sweep() {
                 HashMap::new(),
                 HashMap::new(),
                 HashMap::new(),
-                0,
-                0,
+                0, // NOTE: total_reads=0 - real value from RecordPreprocessor not available in sweep. Affects duprate only.
+                0, // NOTE: duplicate_reads=0 - same limitation.
             );
 
             let mut records: Vec<bam::Record> = Vec::new();
@@ -126,10 +133,6 @@ fn parity_cigar_parser_sweep() {
                 records.push(record);
             }
             preprocessor.close();
-
-            let header_reader = bam::IndexedReader::from_path(bam_str)
-                .unwrap_or_else(|error| panic!("Failed to open BAM {bam_str}: {error}"));
-            let header = header_reader.header().to_owned();
 
             let mut record_iter = records.into_iter();
             let result = parser.process(&mut record_iter, &header, &chr_name);

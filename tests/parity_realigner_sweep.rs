@@ -47,6 +47,7 @@ fn parity_realigner_sweep() {
     let (_, first_ref) = common::bam_tag_lookup(&archives[0].0);
     let fai_path = format!("{first_ref}.fai");
     let chr_lengths = common::load_chr_lengths(&fai_path);
+    let _guard = common::init_test_scope(chr_lengths.clone());
 
     let mut failures = Vec::new();
     let mut tested = 0usize;
@@ -72,6 +73,13 @@ fn parity_realigner_sweep() {
         let dep_reader = common::V2ArchiveReader::new(&dep_archive_path);
         let mod_reader = common::V2ArchiveReader::new(&archive_path);
         let (bam_path, ref_path) = common::bam_tag_lookup(&bam_tag);
+        let reference_resource = Arc::new(ReferenceResource::new(
+            ref_path,
+            1200,
+            0,
+            chr_lengths.clone(),
+            false,
+        ));
 
         for (dep_line, mod_line) in dep_reader.zip(mod_reader) {
             assert_eq!(
@@ -94,23 +102,17 @@ fn parity_realigner_sweep() {
 
             let region_str = mod_line.region_str();
 
-            let _guard = common::init_test_scope();
             let region = common::parse_region(&region_str);
 
-            let reference_resource = Arc::new(ReferenceResource::new(
-                ref_path,
-                1200,
-                0,
-                chr_lengths.clone(),
-                false,
-            ));
             let reference = reference_resource
                 .get_reference(&region)
-                .unwrap_or_else(|error| panic!("Failed to load reference for {region_str}: {error}"));
+                .unwrap_or_else(|error| {
+                    panic!("Failed to load reference for {region_str}: {error}")
+                });
             let reference = Arc::new(reference);
 
-            let variation_data: VariationData =
-                serde_json::from_str(&dep_line.data).unwrap_or_else(|error| {
+            let variation_data: VariationData = serde_json::from_str(&dep_line.data)
+                .unwrap_or_else(|error| {
                     panic!("Failed to deserialize cigar_parser golden for {region_str}: {error}")
                 });
 
@@ -118,7 +120,7 @@ fn parity_realigner_sweep() {
                 bam_path,
                 region.clone(),
                 reference,
-                reference_resource,
+                Arc::clone(&reference_resource),
                 variation_data.max_read_length.unwrap_or(0),
                 HashSet::new(),
                 VariantPrinter::Out,

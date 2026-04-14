@@ -306,12 +306,12 @@ pub fn load_chr_lengths(fai_path: &str) -> HashMap<String, i32> {
 static SCOPE_MUTEX: Mutex<()> = Mutex::new(());
 
 #[allow(dead_code)]
-pub fn init_test_scope() -> MutexGuard<'static, ()> {
+pub fn init_test_scope(chr_lengths: HashMap<String, i32>) -> MutexGuard<'static, ()> {
     let guard = SCOPE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     GlobalReadOnlyScope::clear();
     GlobalReadOnlyScope::init(
         Configuration::default(),
-        HashMap::new(),
+        chr_lengths,
         "test_sample",
         None,
         None,
