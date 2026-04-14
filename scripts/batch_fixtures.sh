@@ -29,12 +29,14 @@ TMP_ROOT="$PROJECT_ROOT/tmp/batch_fixtures"
 VARDICT_DIR="$PROJECT_ROOT/VarDictJava"
 VARDICT_BIN="$VARDICT_DIR/build/install/VarDict/bin/VarDict"
 
-MODULE_DIRS=(cigar_parser realigner sv_processor tovars)
+MODULE_DIRS=(cigar_parser realigner sv_processor tovars cigar_modifier sam_file_parser)
 MODULE_ENVS=(
     VARDICT_PARITY_CIGAR_PARSER
     VARDICT_PARITY_REALIGNER
     VARDICT_PARITY_SV_PROCESSOR
     VARDICT_PARITY_TOVARS
+    VARDICT_PARITY_CIGAR_MODIFIER
+    VARDICT_PARITY_SAM_FILE_PARSER
 )
 
 total_regions=0
@@ -44,8 +46,8 @@ skipped_regions=0
 run_failures=0
 copied_fixtures=0
 invalid_fixtures=0
-module_counts=(0 0 0 0)
-module_skips=(0 0 0 0)
+module_counts=(0 0 0 0 0 0)
+module_skips=(0 0 0 0 0 0)
 
 resolve_project_path() {
     local path="$1"

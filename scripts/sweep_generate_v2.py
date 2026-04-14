@@ -26,6 +26,8 @@ MODULES = (
     ("realigner", "VARDICT_PARITY_REALIGNER"),
     ("sv_processor", "VARDICT_PARITY_SV_PROCESSOR"),
     ("tovars", "VARDICT_PARITY_TOVARS"),
+    ("cigar_modifier", "VARDICT_PARITY_CIGAR_MODIFIER"),
+    ("sam_file_parser", "VARDICT_PARITY_SAM_FILE_PARSER"),
 )
 DEFAULT_OUTPUT_DIR = Path("tmp/sweep_fixtures")
 DEFAULT_SWEEP_BED_ROOT = Path("tmp/sweep_beds")
