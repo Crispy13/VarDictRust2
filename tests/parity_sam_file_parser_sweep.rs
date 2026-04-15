@@ -1,14 +1,18 @@
 mod common;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use crossbeam_channel::bounded;
+use rayon::prelude::*;
 use vardict_rs::data::{InitialData, Region};
 use vardict_rs::mods::sam_file_parser::sam_file_parser_process;
 use vardict_rs::reference::{Reference, ReferenceResource};
 use vardict_rs::scope::{Scope, VariantPrinter};
 
 const MAX_FAILURES: usize = 10;
+const NUM_THREADS: usize = 10;
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +75,13 @@ fn collect_sam_file_parser_result(
     result
 }
 
+/// A pre-read tile from a v2 archive, ready for parallel processing.
+struct Tile {
+    bam_tag: String,
+    region_str: String,
+    data: String,
+}
+
 #[test]
 #[ignore = "Sweep gate: SAMFileParser full-sweep parity"]
 fn parity_sam_file_parser_sweep() {
@@ -110,60 +121,93 @@ fn parity_sam_file_parser_sweep() {
     let chr_lengths = common::load_chr_lengths(&fai_path);
     let _guard = common::init_test_scope(chr_lengths.clone());
 
-    let mut failures = Vec::new();
-    let mut tested = 0usize;
-    let mut completed_archives = 0usize;
+    let (sender, receiver) = bounded::<Tile>(10_000);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(NUM_THREADS)
+        .build()
+        .expect("Failed to build rayon thread pool");
 
-    'archives: for (bam_tag, _chrom, archive_path) in archives {
-        completed_archives += 1;
-        let (bam_path, ref_path) = common::bam_tag_lookup(&bam_tag);
-        let reference_resource = Arc::new(ReferenceResource::new(
-            ref_path,
-            1200,
-            0,
-            chr_lengths.clone(),
-            false,
-        ));
-        let mut archive_reader = common::V2ArchiveReader::new(&archive_path);
+    let tested = AtomicUsize::new(0);
+    let failure_count = AtomicUsize::new(0);
 
-        for line in &mut archive_reader {
-            tested += 1;
-            if tested % 1000 == 0 {
-                eprintln!(
-                    "  [sam_file_parser] progress: {tested} tested, {} failures, archive {completed_archives}/{total_archives}",
-                    failures.len()
-                );
-            }
-
-            let region_str = line.region_str();
-            let region = common::parse_region(&region_str);
-            let actual_result = collect_sam_file_parser_result(
-                bam_path,
-                &region,
-                Arc::clone(&reference_resource),
-            );
-            let actual_json = serde_json::to_string(&actual_result)
-                .unwrap_or_else(|error| panic!("Failed to serialize output for {region_str}: {error}"));
-
-            if let Some(message) = common::assert_v2_module_parity(
-                "sam_file_parser",
-                &region_str,
-                &actual_json,
-                &line.data,
-            ) {
-                failures.push(message);
-                if failures.len() >= MAX_FAILURES {
-                    eprintln!(
-                        "  [sam_file_parser] Reached {MAX_FAILURES} failures, stopping early"
-                    );
-                    break 'archives;
+    let producer = std::thread::spawn(move || {
+        for (idx, (bam_tag, _chrom, archive_path)) in archives.into_iter().enumerate() {
+            let mut archive_reader = common::V2ArchiveReader::new(&archive_path);
+            for line in &mut archive_reader {
+                let tile = Tile {
+                    bam_tag: bam_tag.clone(),
+                    region_str: line.region_str(),
+                    data: line.data,
+                };
+                if sender.send(tile).is_err() {
+                    return;
                 }
             }
+            if (idx + 1) % 10 == 0 || idx + 1 == total_archives {
+                eprintln!("  [sam_file_parser] producer: archive {}/{total_archives}", idx + 1);
+            }
         }
-    }
+    });
 
+    let failures: Vec<String> = pool.install(|| {
+        receiver
+            .iter()
+            .par_bridge()
+            .filter_map(|tile| {
+                if failure_count.load(Ordering::Relaxed) >= MAX_FAILURES {
+                    return None;
+                }
+
+                let (bam_path, ref_path) = common::bam_tag_lookup(&tile.bam_tag);
+                let reference_resource = Arc::new(ReferenceResource::new(
+                    ref_path,
+                    1200,
+                    0,
+                    chr_lengths.clone(),
+                    false,
+                ));
+                let region = common::parse_region(&tile.region_str);
+                let actual_result = collect_sam_file_parser_result(
+                    bam_path,
+                    &region,
+                    Arc::clone(&reference_resource),
+                );
+                let actual_json =
+                    serde_json::to_string(&actual_result).unwrap_or_else(|error| {
+                        panic!(
+                            "Failed to serialize output for {}: {error}",
+                            tile.region_str
+                        )
+                    });
+
+                let count = tested.fetch_add(1, Ordering::Relaxed) + 1;
+                if count % 10000 == 0 {
+                    eprintln!(
+                        "  [sam_file_parser] progress: {count} tested, {} failures",
+                        failure_count.load(Ordering::Relaxed)
+                    );
+                }
+
+                if let Some(message) = common::assert_v2_module_parity(
+                    "sam_file_parser",
+                    &tile.region_str,
+                    &actual_json,
+                    &tile.data,
+                ) {
+                    failure_count.fetch_add(1, Ordering::Relaxed);
+                    Some(message)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    });
+
+    producer.join().expect("Producer thread panicked");
+
+    let final_tested = tested.load(Ordering::Relaxed);
     eprintln!(
-        "parity_sam_file_parser_sweep: tested={tested}, archives={completed_archives}/{total_archives}, failures={}",
+        "parity_sam_file_parser_sweep: tested={final_tested}, archives={total_archives}/{total_archives}, failures={}",
         failures.len()
     );
 
@@ -175,7 +219,7 @@ fn parity_sam_file_parser_sweep() {
     );
 
     assert!(
-        tested > 0,
+        final_tested > 0,
         "No v2 sweep fixtures found for sam_file_parser. Run: scripts/sweep_fixtures.sh"
     );
 }

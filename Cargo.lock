@@ -397,6 +397,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-channel"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1962,6 +1971,7 @@ dependencies = [
  "bio",
  "clap",
  "criterion",
+ "crossbeam-channel",
  "indexmap",
  "insta",
  "lazy_static",
@@ -1970,6 +1980,7 @@ dependencies = [
  "ordered-float",
  "proptest",
  "rand 0.8.5",
+ "rayon",
  "regex",
  "rust-htslib",
  "rustc-hash",
