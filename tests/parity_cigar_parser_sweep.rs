@@ -1,8 +1,11 @@
 mod common;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use crossbeam_channel::bounded;
+use rayon::prelude::*;
 use rust_htslib::bam::{self, Read as BamRead};
 
 use vardict_rs::data::InitialData;
@@ -11,6 +14,14 @@ use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::{Scope, VariantPrinter};
 
 const MAX_FAILURES: usize = 10;
+const NUM_THREADS: usize = 10;
+
+/// A pre-read tile from a v2 archive, ready for parallel processing.
+struct Tile {
+    bam_tag: String,
+    region_str: String,
+    data: String,
+}
 
 #[test]
 #[ignore = "Sweep gate: CigarParser full-sweep parity"]
@@ -51,111 +62,142 @@ fn parity_cigar_parser_sweep() {
     let chr_lengths = common::load_chr_lengths(&fai_path);
     let _guard = common::init_test_scope(chr_lengths.clone());
 
-    let mut failures = Vec::new();
-    let mut tested = 0usize;
-    let mut completed_archives = 0usize;
+    let (sender, receiver) = bounded::<Tile>(10_000);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(NUM_THREADS)
+        .build()
+        .expect("Failed to build rayon thread pool");
 
-    'archives: for (bam_tag, _chrom, archive_path) in archives {
-        completed_archives += 1;
-        let (bam_path, ref_path) = common::bam_tag_lookup(&bam_tag);
-        let reference_resource = Arc::new(ReferenceResource::new(
-            ref_path,
-            1200,
-            0,
-            chr_lengths.clone(),
-            false,
-        ));
-        let header_reader = bam::IndexedReader::from_path(bam_path)
-            .unwrap_or_else(|error| panic!("Failed to open BAM {bam_path}: {error}"));
-        let header = header_reader.header().to_owned();
-        let mut archive_reader = common::V2ArchiveReader::new(&archive_path);
+    let tested = AtomicUsize::new(0);
+    let failure_count = AtomicUsize::new(0);
 
-        for line in &mut archive_reader {
-            tested += 1;
-            if tested % 1000 == 0 {
-                eprintln!(
-                    "  [cigar_parser] progress: {tested} tested, {} failures, archive {completed_archives}/{total_archives}",
-                    failures.len()
-                );
-            }
-
-            let region_str = line.region_str();
-
-            let region = common::parse_region(&region_str);
-
-            let reference = reference_resource
-                .get_reference(&region)
-                .unwrap_or_else(|error| {
-                    panic!("Failed to load reference for {region_str}: {error}")
-                });
-            let reference = Arc::new(reference);
-
-            let initial_data = InitialData::new(
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-            );
-            let scope = Scope::new(
-                bam_path,
-                region.clone(),
-                Arc::clone(&reference),
-                Arc::clone(&reference_resource),
-                0,
-                HashSet::new(),
-                VariantPrinter::Out,
-                initial_data,
-            );
-            let scope = vardict_rs::mods::sam_file_parser::sam_file_parser_process(scope);
-
-            let mut preprocessor = scope.data;
-            let chr_name = preprocessor.get_chr_name();
-            let svflag = false;
-
-            let mut parser = CigarParser::new(svflag);
-            parser.init_from_scope(
-                &region,
-                &reference,
-                &HashSet::new(),
-                0,
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-                0, // NOTE: total_reads=0 - real value from RecordPreprocessor not available in sweep. Affects duprate only.
-                0, // NOTE: duplicate_reads=0 - same limitation.
-            );
-
-            let mut records: Vec<bam::Record> = Vec::new();
-            while let Some(record) = preprocessor.next_record() {
-                records.push(record);
-            }
-            preprocessor.close();
-
-            let mut record_iter = records.into_iter();
-            let result = parser.process(&mut record_iter, &header, &chr_name);
-            let result_json = serde_json::to_string(&result)
-                .unwrap_or_else(|error| panic!("Failed to serialize for {region_str}: {error}"));
-
-            if let Some(message) = common::assert_v2_module_parity(
-                "cigar_parser",
-                &region_str,
-                &result_json,
-                &line.data,
-            ) {
-                failures.push(message);
-                if failures.len() >= MAX_FAILURES {
-                    eprintln!("  [cigar_parser] Reached {MAX_FAILURES} failures, stopping early");
-                    break 'archives;
+    let producer = std::thread::spawn(move || {
+        for (idx, (bam_tag, _chrom, archive_path)) in archives.into_iter().enumerate() {
+            let mut archive_reader = common::V2ArchiveReader::new(&archive_path);
+            for line in &mut archive_reader {
+                let tile = Tile {
+                    bam_tag: bam_tag.clone(),
+                    region_str: line.region_str(),
+                    data: line.data,
+                };
+                if sender.send(tile).is_err() {
+                    return;
                 }
             }
+            if (idx + 1) % 10 == 0 || idx + 1 == total_archives {
+                eprintln!("  [cigar_parser] producer: archive {}/{total_archives}", idx + 1);
+            }
         }
-    }
+    });
+
+    let failures: Vec<String> = pool.install(|| {
+        receiver
+            .iter()
+            .par_bridge()
+            .filter_map(|tile| {
+                if failure_count.load(Ordering::Relaxed) >= MAX_FAILURES {
+                    return None;
+                }
+
+                let (bam_path, ref_path) = common::bam_tag_lookup(&tile.bam_tag);
+                let reference_resource = Arc::new(ReferenceResource::new(
+                    ref_path,
+                    1200,
+                    0,
+                    chr_lengths.clone(),
+                    false,
+                ));
+                let header_reader = bam::IndexedReader::from_path(bam_path)
+                    .unwrap_or_else(|error| panic!("Failed to open BAM {bam_path}: {error}"));
+                let header = header_reader.header().to_owned();
+                let region = common::parse_region(&tile.region_str);
+
+                let reference = reference_resource
+                    .get_reference(&region)
+                    .unwrap_or_else(|error| {
+                        panic!("Failed to load reference for {}: {error}", tile.region_str)
+                    });
+                let reference = Arc::new(reference);
+
+                let initial_data = InitialData::new(
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                );
+                let scope = Scope::new(
+                    bam_path,
+                    region.clone(),
+                    Arc::clone(&reference),
+                    Arc::clone(&reference_resource),
+                    0,
+                    HashSet::new(),
+                    VariantPrinter::Out,
+                    initial_data,
+                );
+                let scope = vardict_rs::mods::sam_file_parser::sam_file_parser_process(scope);
+
+                let mut preprocessor = scope.data;
+                let chr_name = preprocessor.get_chr_name();
+                let svflag = false;
+
+                let mut parser = CigarParser::new(svflag);
+                parser.init_from_scope(
+                    &region,
+                    &reference,
+                    &HashSet::new(),
+                    0,
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    0, // NOTE: total_reads=0 - real value from RecordPreprocessor not available in sweep. Affects duprate only.
+                    0, // NOTE: duplicate_reads=0 - same limitation.
+                );
+
+                let mut records: Vec<bam::Record> = Vec::new();
+                while let Some(record) = preprocessor.next_record() {
+                    records.push(record);
+                }
+                preprocessor.close();
+
+                let mut record_iter = records.into_iter();
+                let result = parser.process(&mut record_iter, &header, &chr_name);
+                let result_json = serde_json::to_string(&result).unwrap_or_else(|error| {
+                    panic!("Failed to serialize for {}: {error}", tile.region_str)
+                });
+
+                let count = tested.fetch_add(1, Ordering::Relaxed) + 1;
+                if count % 10000 == 0 {
+                    eprintln!(
+                        "  [cigar_parser] progress: {count} tested, {} failures",
+                        failure_count.load(Ordering::Relaxed)
+                    );
+                }
+
+                if let Some(message) = common::assert_v2_module_parity(
+                    "cigar_parser",
+                    &tile.region_str,
+                    &result_json,
+                    &tile.data,
+                ) {
+                    failure_count.fetch_add(1, Ordering::Relaxed);
+                    Some(message)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    });
+
+    producer.join().expect("Producer thread panicked");
+
+    let final_tested = tested.load(Ordering::Relaxed);
 
     eprintln!(
-        "parity_cigar_parser_sweep: tested={tested}, archives={completed_archives}/{total_archives}, failures={}",
+        "parity_cigar_parser_sweep: tested={final_tested}, archives={total_archives}/{total_archives}, failures={}",
         failures.len()
     );
 
@@ -167,7 +209,7 @@ fn parity_cigar_parser_sweep() {
     );
 
     assert!(
-        tested > 0,
+        final_tested > 0,
         "No v2 sweep fixtures found for cigar_parser. Run: scripts/sweep_fixtures.sh"
     );
 }
