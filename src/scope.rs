@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::sync::{Arc, RwLock};
 
 use once_cell::sync::Lazy;
@@ -25,6 +26,25 @@ impl From<PrinterType> for VariantPrinter {
         match value {
             PrinterType::Out => Self::Out,
             PrinterType::Err => Self::Err,
+        }
+    }
+}
+
+impl VariantPrinter {
+    /// Ported from: VariantPrinter.print(OutputVariant)
+    /// Java source: VariantPrinter.java:L17-L19
+    pub fn print_line(&self, line: &str) {
+        match self {
+            Self::Out => {
+                let stdout = std::io::stdout();
+                let mut handle = stdout.lock();
+                let _ = writeln!(handle, "{line}");
+            }
+            Self::Err => {
+                let stderr = std::io::stderr();
+                let mut handle = stderr.lock();
+                let _ = writeln!(handle, "{line}");
+            }
         }
     }
 }

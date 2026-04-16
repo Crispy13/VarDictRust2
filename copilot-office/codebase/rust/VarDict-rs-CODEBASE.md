@@ -38,8 +38,9 @@ Rows below mirror the Java cache structure so Java↔Rust correspondence can be 
 | VariationRealigner | `src/variations.rs` | HIGH | [variation_realigner.md](variation_realigner.md) | not started |
 | StructuralVariantsProcessor | `src/variations.rs` | HIGH | [structural_variants_processor.md](structural_variants_processor.md) | not started |
 | ToVarsBuilder | `src/variations.rs` | MEDIUM | [to_vars_builder.md](to_vars_builder.md) | not started |
-| PostProcessModules | `src/parity/format.rs` | HIGH | [post_process_modules.md](post_process_modules.md) | not started |
-| OutputVariant Printers | `src/parity/format.rs` | MEDIUM | [output_variant.md](output_variant.md) | not started |
+| PostProcessModules | `src/mods/simple_post_process.rs`<br>`src/mods/somatic_post_process.rs`<br>`src/mods/amplicon_post_process.rs` | HIGH | [tsv_output_layer.md](tsv_output_layer.md) | complete |
+| OutputVariant Printers | `src/mods/output.rs`<br>`src/scope.rs` | MEDIUM | [tsv_output_layer.md](tsv_output_layer.md) | complete |
+| TSV Output Mode Orchestrators | `src/modes.rs` | MEDIUM | [tsv_output_layer.md](tsv_output_layer.md) | complete |
 | FisherExact | `src/fisher.rs` | HIGH | [fisher_exact.md](fisher_exact.md) | not started |
 | ScopeData | `src/scope.rs`<br>`src/data.rs` | LOW | [scope_data.md](scope_data.md) | complete |
 | VariationMap and Collections | `src/data.rs` | LOW | [variation_map.md](variation_map.md) | not started |
@@ -48,7 +49,7 @@ Rows below mirror the Java cache structure so Java↔Rust correspondence can be 
 
 ## Coverage Summary
 
-- Rust cache docs in this index: 3 module docs (variations.md, scope_data.md, sam_file_parser.md), placeholder index for remaining modules
+- Rust cache docs in this index: 4 module docs (variations.md, scope_data.md, sam_file_parser.md, tsv_output_layer.md), placeholder index for remaining modules
 - Expected workflow: create per-module docs as Review Gate updates Rust cache coverage after approved reviews
 
 ## Per-Module File Template

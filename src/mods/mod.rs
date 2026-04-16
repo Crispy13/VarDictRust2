@@ -1,6 +1,10 @@
+pub mod amplicon_post_process;
 pub mod cigar_modifier;
 pub mod cigar_parser;
+pub mod output;
 pub mod sam_file_parser;
+pub mod simple_post_process;
+pub mod somatic_post_process;
 pub mod structural_variants_processor;
 pub mod to_vars_builder;
 pub mod variation_realigner;

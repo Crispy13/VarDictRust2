@@ -24,7 +24,7 @@ fn decimal_places(pattern: &str) -> usize {
         .map_or(0, |(_, fraction)| fraction.len())
 }
 
-fn format_half_even(pattern: &str, value: f64) -> String {
+pub(crate) fn format_half_even(pattern: &str, value: f64) -> String {
     let decimals = decimal_places(pattern);
     let scale = 10_f64.powi(decimals as i32);
     if decimals >= 3 && value.abs() * scale == 0.5 {
@@ -32,6 +32,57 @@ fn format_half_even(pattern: &str, value: f64) -> String {
     }
     format!("{:.*}", decimals, value)
 }
+
+pub(crate) fn zero_gated_format(pattern: &str, value: f64) -> String {
+    if value == 0.0 {
+        String::from("0")
+    } else {
+        format_half_even(pattern, value)
+    }
+}
+
+pub(crate) fn nm_non_fisher_format(value: f64) -> String {
+    if value > 0.0 {
+        format_half_even("0.0", value)
+    } else {
+        String::from("0")
+    }
+}
+
+pub(crate) fn nm_fisher_format(value: f64) -> String {
+    let clamped = value.max(0.0);
+    if clamped == 0.0 {
+        String::from("0")
+    } else {
+        format_half_even("0.0", clamped)
+    }
+}
+
+pub(crate) fn hifreq_fisher_format(value: f64) -> String {
+    zero_gated_format("0.0000", value)
+}
+
+macro_rules! tsv_join {
+    ($delim:expr $(, $value:expr)+ $(,)?) => {{
+        let delimiter = $delim;
+        let mut output = String::new();
+        let mut first = true;
+        $(
+            if !first {
+                output.push_str(delimiter);
+            } else {
+                first = false;
+            }
+            {
+                use std::fmt::Write as _;
+                write!(&mut output, "{}", $value).expect("write to String must succeed");
+            }
+        )+
+        output
+    }};
+}
+
+pub(crate) use tsv_join;
 
 // Java: Utils.complement(char) L243-L247
 pub fn complement_base(b: u8) -> u8 {
