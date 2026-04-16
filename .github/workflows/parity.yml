@@ -1,0 +1,31 @@
+name: Parity Tests (Tier 1)
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: 'Module to test (or "all")'
+        required: false
+        default: 'all'
+        type: choice
+        options: [all, cigar_modifier, cigar_parser, realigner, sam_file_parser, sv_processor, tovars]
+
+jobs:
+  parity:
+    name: Tier 1 Parity — ${{ inputs.module }}
+    runs-on: self-hosted
+    # NOTE: Self-hosted runner must have:
+    # - testdata/ directory with BAMs, FASTA, and fixtures
+    # - conda rust_build_env or equivalent system packages
+    # - LIBCLANG_PATH configured in runner environment
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Run parity tests
+        run: |
+          if [ "${{ inputs.module }}" = "all" ]; then
+            cargo test --profile debug-release --test 'parity_*' -- --test-threads=1
+          else
+            cargo test --profile debug-release --test "parity_${{ inputs.module }}" -- --test-threads=1
+          fi

@@ -1,0 +1,40 @@
+name: Sweep Tests (Tier 2)
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: 'Module to sweep'
+        required: true
+        type: choice
+        options: [cigar_modifier, cigar_parser, realigner, sam_file_parser, sv_processor, tovars]
+      shard_scope:
+        description: 'Shard-scoped (na12878_exome only, fast)'
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: '0 2 * * *'  # Nightly at 2 AM UTC — shard-scoped
+
+jobs:
+  sweep:
+    name: Sweep — ${{ inputs.module || 'all' }}
+    runs-on: self-hosted
+    env:
+      RAYON_NUM_THREADS: 10
+      VARDICT_SWEEP_SHARD_SCOPE: ${{ (github.event_name == 'schedule' || inputs.shard_scope) && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      # NOTE: Self-hosted runner must have tmp/sweep_fixtures/ (~240GB)
+      - name: Run sweep
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # Nightly: run all modules shard-scoped
+            for mod in cigar_modifier cigar_parser realigner sam_file_parser sv_processor tovars; do
+              echo "=== Sweep: $mod ==="
+              cargo test --profile debug-release --test "parity_${mod}_sweep" -- --include-ignored --nocapture
+            done
+          else
+            cargo test --profile debug-release --test "parity_${{ inputs.module }}_sweep" -- --include-ignored --nocapture
+          fi

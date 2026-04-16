@@ -1,5 +1,10 @@
 /target
 tmp/
+# Testdata: track fixtures and region configs, ignore large binaries
+testdata/*.bam
+testdata/*.bai
+testdata/*.fa
+testdata/*.fa.fai
 testdata/
 .vscode/
 **/__pycache__/

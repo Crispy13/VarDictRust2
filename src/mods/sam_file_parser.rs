@@ -397,6 +397,11 @@ impl RecordPreprocessor {
         self.current_reader = None;
     }
 
+    /// Returns a clone of the current BAM header for downstream CIGAR parsing.
+    pub fn header_view(&self) -> Option<HeaderView> {
+        self.current_reader.as_ref().map(|reader| reader.header().clone())
+    }
+
     /// Returns the chromosome name, optionally stripping "chr" prefix if -C flag is set.
     /// Ported from: RecordPreprocessor.getChrName() (Java: L219-L228)
     pub fn get_chr_name(&self) -> String {

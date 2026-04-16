@@ -104,6 +104,7 @@ pub fn modify_cigar(
     )
 }
 
+/// Ported from: CigarModifier.java:L57-L248 (core modifyCigar body)
 #[allow(clippy::collapsible_if)]
 fn modify_cigar_inner(s: &mut CigarModifierState) {
     // Trap T6: flag loop control — flag starts true
@@ -155,9 +156,13 @@ fn modify_cigar_inner(s: &mut CigarModifierState) {
                     if positions.len() == 1
                         && (s.position - positions[0]).abs() < 2 * s.max_read_length
                     {
-                        s.cigar_str = SA_CIGAR_D_S_5clip_GROUP_Repl
-                            .replace(&s.cigar_str, "")
-                            .to_string();
+                        // Match Java jregex replacer semantics: repeatedly strip leading
+                        // soft-clip runs until the anchored pattern no longer matches.
+                        while SA_CIGAR_D_S_5clip_GROUP_Repl.is_match(&s.cigar_str) {
+                            s.cigar_str = SA_CIGAR_D_S_5clip_GROUP_Repl
+                                .replace(&s.cigar_str, "")
+                                .to_string();
+                        }
                         s.query_sequence = String::from_utf8_lossy(&substr(
                             s.query_sequence.as_bytes(),
                             cigar_element,
@@ -195,9 +200,13 @@ fn modify_cigar_inner(s: &mut CigarModifierState) {
             if let Some(positions) = s.seed.get(&reverse_complemented_seed) {
                 if positions.len() == 1 && (s.position - positions[0]).abs() < 2 * s.max_read_length
                 {
-                    s.cigar_str = SA_CIGAR_D_S_3clip_GROUP_Repl
-                        .replace(&s.cigar_str, "")
-                        .to_string();
+                    // Match Java jregex replacer semantics: repeatedly strip trailing
+                    // soft-clip runs until the anchored pattern no longer matches.
+                    while SA_CIGAR_D_S_3clip_GROUP_Repl.is_match(&s.cigar_str) {
+                        s.cigar_str = SA_CIGAR_D_S_3clip_GROUP_Repl
+                            .replace(&s.cigar_str, "")
+                            .to_string();
+                    }
                     let seq_len = s.query_sequence.len() as i32;
                     s.query_sequence = String::from_utf8_lossy(&substr_with_len(
                         s.query_sequence.as_bytes(),
@@ -1033,6 +1042,20 @@ mod tests {
     use super::*;
     use crate::config::Configuration;
 
+    fn init_test_scope() {
+        crate::scope::GlobalReadOnlyScope::clear();
+        let conf = Configuration::default();
+        crate::scope::GlobalReadOnlyScope::init(
+            conf,
+            HashMap::new(),
+            "test",
+            None,
+            None,
+            HashMap::new(),
+            HashMap::new(),
+        );
+    }
+
     fn make_reference(bases: &[(i32, u8)]) -> Reference {
         let mut reference_sequences = HashMap::new();
         for &(pos, base) in bases {
@@ -1045,18 +1068,7 @@ mod tests {
 
     #[test]
     fn modify_cigar_strips_leading_deletion() {
-        // Setup GlobalReadOnlyScope with default config
-        crate::scope::GlobalReadOnlyScope::clear();
-        let conf = Configuration::default();
-        crate::scope::GlobalReadOnlyScope::init(
-            conf,
-            HashMap::new(),
-            "test",
-            None,
-            None,
-            HashMap::new(),
-            HashMap::new(),
-        );
+        init_test_scope();
 
         let reference = make_reference(&[]);
         let region = Region::new("chr1", 1, 1000, "gene");
@@ -1072,6 +1084,62 @@ mod tests {
         );
         assert_eq!(result.position, 105);
         assert!(!result.cigar.starts_with("5D"));
+
+        crate::scope::GlobalReadOnlyScope::clear();
+    }
+
+    #[test]
+    fn modify_cigar_strips_repeated_leading_soft_clips_in_chimeric_path() {
+        init_test_scope();
+
+        let mut reference = make_reference(&[]);
+        reference.seed.insert("TTTTTTTTTTTT".to_string(), vec![100]);
+        let region = Region::new("chr1", 1, 1000, "gene");
+        let query_sequence = format!("{}{}", "A".repeat(35), "C".repeat(66));
+        let query_quality = "I".repeat(101);
+
+        let result = modify_cigar(
+            100,
+            "35I66S",
+            &query_sequence,
+            &query_quality,
+            &reference,
+            35,
+            &region,
+            101,
+        );
+
+        assert_eq!(result.cigar, "");
+        assert_eq!(result.query_sequence, "C".repeat(66));
+        assert_eq!(result.query_quality, "I".repeat(66));
+
+        crate::scope::GlobalReadOnlyScope::clear();
+    }
+
+    #[test]
+    fn modify_cigar_strips_repeated_trailing_soft_clips_in_chimeric_path() {
+        init_test_scope();
+
+        let mut reference = make_reference(&[]);
+        reference.seed.insert("TTTTTTTTTTTT".to_string(), vec![100]);
+        let region = Region::new("chr1", 1, 1000, "gene");
+        let query_sequence = format!("{}{}{}", "C".repeat(66), "G".repeat(31), "A".repeat(35));
+        let query_quality = "I".repeat(132);
+
+        let result = modify_cigar(
+            100,
+            "66M31S35S",
+            &query_sequence,
+            &query_quality,
+            &reference,
+            0,
+            &region,
+            101,
+        );
+
+        assert_eq!(result.cigar, "66M");
+        assert_eq!(result.query_sequence, format!("{}{}", "C".repeat(66), "G".repeat(31)));
+        assert_eq!(result.query_quality, "I".repeat(97));
 
         crate::scope::GlobalReadOnlyScope::clear();
     }

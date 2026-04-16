@@ -463,6 +463,29 @@ pub fn discover_v2_archives(
             .cmp(&right.0)
             .then_with(|| v2_chrom_sort_key(&left.1).cmp(&v2_chrom_sort_key(&right.1)))
     });
+
+    // Shard-scope filtering: reduce to a single BAM tag for fast CI sweeps
+    if let Ok(scope) = std::env::var("VARDICT_SWEEP_SHARD_SCOPE") {
+        if !scope.is_empty() {
+            let target_tag = if scope == "1" {
+                "na12878_exome".to_string()
+            } else {
+                scope
+            };
+            archives.retain(|(bam_tag, _, _)| bam_tag == &target_tag);
+            if archives.is_empty() {
+                panic!(
+                    "VARDICT_SWEEP_SHARD_SCOPE={target_tag} matched zero archives for module '{module}'. \
+                     Available tags: check v2/{module}/ directory."
+                );
+            }
+            eprintln!(
+                "  [shard-scope] filtered to {target_tag}: {} archive(s) for module '{module}'",
+                archives.len()
+            );
+        }
+    }
+
     archives
 }
 

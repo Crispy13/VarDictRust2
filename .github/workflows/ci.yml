@@ -1,0 +1,56 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Build + Lint + Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # No submodules needed for build + unit tests
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev zlib1g-dev cmake
+
+      - name: Set LIBCLANG_PATH
+        run: echo "LIBCLANG_PATH=$(dpkg -L libclang-dev | grep 'libclang\.so$' | head -1 | xargs dirname)" >> $GITHUB_ENV
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug-release
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --profile debug-release
+
+      - name: Clippy
+        # NOTE: Not using -D warnings — existing codebase has ~211 clippy warnings.
+        # Tighten to -D warnings after cleanup pass.
+        continue-on-error: true
+        run: cargo clippy --profile debug-release
+
+      - name: Format check
+        continue-on-error: true
+        run: cargo fmt -- --check
+
+      - name: Unit tests
+        run: cargo test --lib --profile debug-release
+
+  # Placeholder for future Tier 1+ parity jobs.
+  # Placeholder for future end-to-end jobs.
