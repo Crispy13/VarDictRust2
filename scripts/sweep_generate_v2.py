@@ -362,9 +362,15 @@ def write_manifest(
     }
     manifest_path = output_dir / "manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    with manifest_path.open("w", encoding="utf-8") as handle:
+    # M10: atomic manifest update — write to a sibling .tmp, fsync, then rename.
+    # Guarantees readers never observe a partially written manifest.
+    tmp_path = manifest_path.with_suffix(".json.tmp")
+    with tmp_path.open("w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=2)
         handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, manifest_path)
 
 
 def build_archive_paths(output_dir: Path, shard: Shard) -> dict[str, Path]:
