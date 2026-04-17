@@ -35,6 +35,8 @@ jobs:
               echo "=== Sweep: $mod ==="
               cargo test --profile debug-release --test "parity_${mod}_sweep" -- --include-ignored --nocapture
             done
+            echo "=== E2E nightly (all 100 regions) ==="
+            cargo test --profile debug-release --test parity_e2e -- --include-ignored --nocapture
           else
             cargo test --profile debug-release --test "parity_${{ inputs.module }}_sweep" -- --include-ignored --nocapture
           fi
