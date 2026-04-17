@@ -86,11 +86,8 @@ fn parity_sam_file_parser_all_regions() {
             chr_lengths,
             false,
         ));
-        let actual_result = collect_sam_file_parser_result(
-            bam_path.to_str().unwrap(),
-            &region,
-            reference_resource,
-        );
+        let actual_result =
+            collect_sam_file_parser_result(bam_path.to_str().unwrap(), &region, reference_resource);
         let actual_json = serde_json::to_string(&actual_result)
             .unwrap_or_else(|error| panic!("Failed to serialize output for {region_str}: {error}"));
 

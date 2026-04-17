@@ -94,17 +94,22 @@ pub fn amplicon_post_process(
 
             if gvs.len() > 1 {
                 gvs.sort_by(|left, right| {
-                    let left_freq = left.variant.as_ref().map_or(0.0, |variant| variant.frequency);
-                    let right_freq = right.variant.as_ref().map_or(0.0, |variant| variant.frequency);
+                    let left_freq = left
+                        .variant
+                        .as_ref()
+                        .map_or(0.0, |variant| variant.frequency);
+                    let right_freq = right
+                        .variant
+                        .as_ref()
+                        .map_or(0.0, |variant| variant.frequency);
                     right_freq
                         .partial_cmp(&left_freq)
                         .unwrap_or(Ordering::Equal)
                 });
             }
             if ref_variants.len() > 1 {
-                ref_variants.sort_by(|left, right| {
-                    right.total_pos_coverage.cmp(&left.total_pos_coverage)
-                });
+                ref_variants
+                    .sort_by(|left, right| right.total_pos_coverage.cmp(&left.total_pos_coverage));
             }
 
             if gvs.is_empty() {
@@ -148,7 +153,8 @@ pub fn amplicon_post_process(
                         else {
                             continue;
                         };
-                        let Some(variant) = vtmp.var_description_string_to_variants.get(&gdnt) else {
+                        let Some(variant) = vtmp.var_description_string_to_variants.get(&gdnt)
+                        else {
                             continue;
                         };
                         if variant.is_good_var(vtmp.reference_variant.as_ref(), None, splice, &conf)
@@ -157,9 +163,7 @@ pub fn amplicon_post_process(
                                 Some(variant.clone()),
                                 format!(
                                     "{}:{}-{}",
-                                    amplicon_region.chr,
-                                    amplicon_region.start,
-                                    amplicon_region.end
+                                    amplicon_region.chr, amplicon_region.start, amplicon_region.end
                                 ),
                             ));
                         }
@@ -168,8 +172,14 @@ pub fn amplicon_post_process(
                         flag = false;
                     }
                     gcnt.sort_by(|left, right| {
-                        let left_freq = left.variant.as_ref().map_or(0.0, |variant| variant.frequency);
-                        let right_freq = right.variant.as_ref().map_or(0.0, |variant| variant.frequency);
+                        let left_freq = left
+                            .variant
+                            .as_ref()
+                            .map_or(0.0, |variant| variant.frequency);
+                        let right_freq = right
+                            .variant
+                            .as_ref()
+                            .map_or(0.0, |variant| variant.frequency);
                         right_freq
                             .partial_cmp(&left_freq)
                             .unwrap_or(Ordering::Equal)
@@ -202,7 +212,9 @@ pub fn amplicon_post_process(
                                 if let Some(variant) = vtmp.variants.first() {
                                     bad_variants
                                         .push(VariantRegion::new(Some(variant.clone()), reg_str));
-                                } else if let Some(reference_variant) = vtmp.reference_variant.clone() {
+                                } else if let Some(reference_variant) =
+                                    vtmp.reference_variant.clone()
+                                {
                                     bad_variants
                                         .push(VariantRegion::new(Some(reference_variant), reg_str));
                                 } else {
@@ -254,7 +266,10 @@ pub fn amplicon_post_process(
     }
 }
 
-fn count_variant_on_amplicons(vref: &Variant, good_variants_on_amp: &IndexMap<i32, Vec<Variant>>) -> i32 {
+fn count_variant_on_amplicons(
+    vref: &Variant,
+    good_variants_on_amp: &IndexMap<i32, Vec<Variant>>,
+) -> i32 {
     let mut gvscnt = 0;
     for variants in good_variants_on_amp.values() {
         for variant in variants {

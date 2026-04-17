@@ -7,7 +7,7 @@ use crate::mods::output::SomaticOutputVariant;
 use crate::patterns::MINUS_NUM_NUM;
 use crate::reference::ReferenceResource;
 use crate::scope::{GlobalReadOnlyScope, Scope};
-use crate::variations::{get_var_maybe_from_vars, VarMaybeArg, VarsType};
+use crate::variations::{VarMaybeArg, VarsType, get_var_maybe_from_vars};
 
 const STRONG_SOMATIC: &str = "StrongSomatic";
 const SAMPLE_SPECIFIC: &str = "SampleSpecific";
@@ -58,9 +58,15 @@ pub fn somatic_post_process(
                 (None, Some(v2)) => {
                     calling_for_one_sample(v2, true, DELETION, &region, &splice, &conf, &out)
                 }
-                (Some(v1), None) => {
-                    calling_for_one_sample(v1, false, SAMPLE_SPECIFIC, &region, &splice, &conf, &out)
-                }
+                (Some(v1), None) => calling_for_one_sample(
+                    v1,
+                    false,
+                    SAMPLE_SPECIFIC,
+                    &region,
+                    &splice,
+                    &conf,
+                    &out,
+                ),
                 (Some(v1), Some(v2)) => calling_for_both_samples(
                     position,
                     v1,
@@ -196,7 +202,12 @@ fn print_variations_from_first_sample(
     while processed < v1.variants.len() {
         let current = v1.variants[processed].clone();
         let current_type = current.var_type();
-        if !current.is_good_var(v1.reference_variant.as_ref(), Some(&current_type), splice, conf) {
+        if !current.is_good_var(
+            v1.reference_variant.as_ref(),
+            Some(&current_type),
+            splice,
+            conf,
+        ) {
             break;
         }
 
@@ -212,11 +223,9 @@ fn print_variations_from_first_sample(
             vref.adj_complex();
         }
 
-        if let Some(v2nt_ref) = get_var_maybe_from_vars(
-            v2,
-            VarsType::Varn,
-            VarMaybeArg::Description(&nt),
-        ) {
+        if let Some(v2nt_ref) =
+            get_var_maybe_from_vars(v2, VarsType::Varn, VarMaybeArg::Description(&nt))
+        {
             let mut v2nt = v2nt_ref.clone();
             let type_ = determinate_type(v2, &vref, &mut v2nt, splice, conf);
             let output_variant = SomaticOutputVariant::new(
@@ -309,16 +318,19 @@ fn print_variations_from_first_sample(
     for v2var_original in v2.variants.clone() {
         let mut v2var = v2var_original;
         v2var.vartype = v2var.var_type();
-        if !v2var.is_good_var(v2.reference_variant.as_ref(), Some(&v2var.vartype), splice, conf) {
+        if !v2var.is_good_var(
+            v2.reference_variant.as_ref(),
+            Some(&v2var.vartype),
+            splice,
+            conf,
+        ) {
             continue;
         }
 
         let nt = v2var.description_string.clone();
-        if let Some(v1nt_ref) = get_var_maybe_from_vars(
-            v1,
-            VarsType::Varn,
-            VarMaybeArg::Description(&nt),
-        ) {
+        if let Some(v1nt_ref) =
+            get_var_maybe_from_vars(v1, VarsType::Varn, VarMaybeArg::Description(&nt))
+        {
             let mut v1nt = v1nt_ref.clone();
             if v1nt.refallele == v1nt.varallele {
                 continue;
@@ -353,10 +365,7 @@ fn print_variations_from_first_sample(
             let fwd = v1ref.map_or(0, |variant| variant.vars_count_on_forward);
             let rev = v1ref.map_or(0, |variant| variant.vars_count_on_reverse);
             let genotype = if let Some(v1var) = v1var {
-                v1var
-                    .genotype
-                    .clone()
-                    .unwrap_or_else(|| String::from("0"))
+                v1var.genotype.clone().unwrap_or_else(|| String::from("0"))
             } else if let Some(v1ref) = v1ref {
                 format!("{0}/{0}", v1ref.description_string)
             } else {
@@ -405,7 +414,12 @@ fn print_variations_from_second_sample(
             continue;
         }
         v2var.vartype = v2var.var_type();
-        if !v2var.is_good_var(v2.reference_variant.as_ref(), Some(&v2var.vartype), splice, conf) {
+        if !v2var.is_good_var(
+            v2.reference_variant.as_ref(),
+            Some(&v2var.vartype),
+            splice,
+            conf,
+        ) {
             continue;
         }
 
@@ -496,7 +510,9 @@ pub fn determinate_type(
         } else {
             String::from(GERMLINE)
         }
-    } else if variant_to_compare.frequency < conf.lofreq || variant_to_compare.position_coverage <= 1 {
+    } else if variant_to_compare.frequency < conf.lofreq
+        || variant_to_compare.position_coverage <= 1
+    {
         String::from(LIKELY_SOMATIC)
     } else {
         String::from(AF_DIFF)

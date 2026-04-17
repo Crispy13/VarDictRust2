@@ -1,8 +1,8 @@
 mod common;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_channel::bounded;
 use rayon::prelude::*;
@@ -85,7 +85,10 @@ fn parity_cigar_parser_sweep() {
                 }
             }
             if (idx + 1) % 10 == 0 || idx + 1 == total_archives {
-                eprintln!("  [cigar_parser] producer: archive {}/{total_archives}", idx + 1);
+                eprintln!(
+                    "  [cigar_parser] producer: archive {}/{total_archives}",
+                    idx + 1
+                );
             }
         }
     });

@@ -155,8 +155,8 @@ fn parity_tovars_sweep() {
                     ReferenceResource::new(ref_path, 1200, 0, chr_lengths.clone(), false);
                 let region = common::parse_region(&tile.region_str);
 
-                let data: RealignedVariationData =
-                    serde_json::from_str(&tile.dep_data).unwrap_or_else(|error| {
+                let data: RealignedVariationData = serde_json::from_str(&tile.dep_data)
+                    .unwrap_or_else(|error| {
                         panic!(
                             "Failed to deserialize sv_processor golden for {}: {error}",
                             tile.region_str
@@ -199,9 +199,12 @@ fn parity_tovars_sweep() {
                     );
                 }
 
-                if let Some(message) =
-                    common::assert_v2_module_parity("tovars", &tile.region_str, &result_json, &tile.data)
-                {
+                if let Some(message) = common::assert_v2_module_parity(
+                    "tovars",
+                    &tile.region_str,
+                    &result_json,
+                    &tile.data,
+                ) {
                     failure_count.fetch_add(1, Ordering::Relaxed);
                     Some(message)
                 } else {

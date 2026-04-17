@@ -1,8 +1,8 @@
 mod common;
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_channel::bounded;
 use rayon::prelude::*;
@@ -113,7 +113,10 @@ fn parity_realigner_sweep() {
             }
 
             if (idx + 1) % 10 == 0 || idx + 1 == total_archives {
-                eprintln!("  [realigner] producer: archive {}/{total_archives}", idx + 1);
+                eprintln!(
+                    "  [realigner] producer: archive {}/{total_archives}",
+                    idx + 1
+                );
             }
         }
 
@@ -166,9 +169,10 @@ fn parity_realigner_sweep() {
                 );
 
                 let result_scope = variation_realigner::process(scope);
-                let result_json = serde_json::to_string(&result_scope.data).unwrap_or_else(|error| {
-                    panic!("Failed to serialize for {}: {error}", tile.region_str)
-                });
+                let result_json =
+                    serde_json::to_string(&result_scope.data).unwrap_or_else(|error| {
+                        panic!("Failed to serialize for {}: {error}", tile.region_str)
+                    });
 
                 let count = tested.fetch_add(1, Ordering::Relaxed) + 1;
                 if count % 10000 == 0 {

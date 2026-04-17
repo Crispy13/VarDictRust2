@@ -139,7 +139,10 @@ fn parity_cigar_modifier_sweep() {
                 }
             }
             if (idx + 1) % 10 == 0 || idx + 1 == total_archives {
-                eprintln!("  [cigar_modifier] producer: archive {}/{total_archives}", idx + 1);
+                eprintln!(
+                    "  [cigar_modifier] producer: archive {}/{total_archives}",
+                    idx + 1
+                );
             }
         }
     });
@@ -157,17 +160,13 @@ fn parity_cigar_modifier_sweep() {
                 let reference_resource =
                     ReferenceResource::new(ref_path, 1200, 0, chr_lengths.clone(), false);
                 let region = common::parse_region(&tile.region_str);
-                let reference =
-                    reference_resource
-                        .get_reference(&region)
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "Failed to load reference for {}: {error}",
-                                tile.region_str
-                            )
-                        });
-                let golden_records: Vec<CigarModRecord> =
-                    serde_json::from_str(&tile.data).unwrap_or_else(|error| {
+                let reference = reference_resource
+                    .get_reference(&region)
+                    .unwrap_or_else(|error| {
+                        panic!("Failed to load reference for {}: {error}", tile.region_str)
+                    });
+                let golden_records: Vec<CigarModRecord> = serde_json::from_str(&tile.data)
+                    .unwrap_or_else(|error| {
                         panic!(
                             "Failed to parse archive data for {}: {error}",
                             tile.region_str
@@ -175,13 +174,12 @@ fn parity_cigar_modifier_sweep() {
                     });
                 let actual_records =
                     rebuild_cigar_modifier_output(golden_records, &reference, &region);
-                let actual_json =
-                    serde_json::to_string(&actual_records).unwrap_or_else(|error| {
-                        panic!(
-                            "Failed to serialize output for {}: {error}",
-                            tile.region_str
-                        )
-                    });
+                let actual_json = serde_json::to_string(&actual_records).unwrap_or_else(|error| {
+                    panic!(
+                        "Failed to serialize output for {}: {error}",
+                        tile.region_str
+                    )
+                });
 
                 let count = tested.fetch_add(1, Ordering::Relaxed) + 1;
                 if count % 10000 == 0 {

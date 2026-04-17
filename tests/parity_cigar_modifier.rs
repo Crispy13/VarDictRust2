@@ -73,20 +73,17 @@ fn parity_cigar_modifier_all_regions() {
         let chr_lengths = common::load_chr_lengths(&fai_path);
         let _guard = common::init_test_scope(chr_lengths.clone());
 
-        let reference_resource = ReferenceResource::new(
-            ref_path.to_str().unwrap(),
-            1200,
-            0,
-            chr_lengths,
-            false,
-        );
+        let reference_resource =
+            ReferenceResource::new(ref_path.to_str().unwrap(), 1200, 0, chr_lengths, false);
         let reference = reference_resource
             .get_reference(&region)
             .unwrap_or_else(|error| panic!("Failed to load reference for {region_str}: {error}"));
 
         let golden_json = common::load_golden_data("cigar_modifier", region_str);
         let golden_records: Vec<CigarModRecord> = serde_json::from_str(&golden_json)
-            .unwrap_or_else(|error| panic!("Failed to parse golden fixture for {region_str}: {error}"));
+            .unwrap_or_else(|error| {
+                panic!("Failed to parse golden fixture for {region_str}: {error}")
+            });
         let actual_records = rebuild_cigar_modifier_output(golden_records, &reference, &region);
         let actual_json = serde_json::to_string(&actual_records)
             .unwrap_or_else(|error| panic!("Failed to serialize output for {region_str}: {error}"));

@@ -1138,7 +1138,10 @@ mod tests {
         );
 
         assert_eq!(result.cigar, "66M");
-        assert_eq!(result.query_sequence, format!("{}{}", "C".repeat(66), "G".repeat(31)));
+        assert_eq!(
+            result.query_sequence,
+            format!("{}{}", "C".repeat(66), "G".repeat(31))
+        );
         assert_eq!(result.query_quality, "I".repeat(97));
 
         crate::scope::GlobalReadOnlyScope::clear();

@@ -1,8 +1,8 @@
 mod common;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_channel::bounded;
 use rayon::prelude::*;
@@ -144,7 +144,10 @@ fn parity_sam_file_parser_sweep() {
                 }
             }
             if (idx + 1) % 10 == 0 || idx + 1 == total_archives {
-                eprintln!("  [sam_file_parser] producer: archive {}/{total_archives}", idx + 1);
+                eprintln!(
+                    "  [sam_file_parser] producer: archive {}/{total_archives}",
+                    idx + 1
+                );
             }
         }
     });
@@ -172,13 +175,12 @@ fn parity_sam_file_parser_sweep() {
                     &region,
                     Arc::clone(&reference_resource),
                 );
-                let actual_json =
-                    serde_json::to_string(&actual_result).unwrap_or_else(|error| {
-                        panic!(
-                            "Failed to serialize output for {}: {error}",
-                            tile.region_str
-                        )
-                    });
+                let actual_json = serde_json::to_string(&actual_result).unwrap_or_else(|error| {
+                    panic!(
+                        "Failed to serialize output for {}: {error}",
+                        tile.region_str
+                    )
+                });
 
                 let count = tested.fetch_add(1, Ordering::Relaxed) + 1;
                 if count % 10000 == 0 {

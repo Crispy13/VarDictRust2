@@ -1,8 +1,8 @@
 mod common;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_channel::bounded;
 use rayon::prelude::*;
@@ -112,7 +112,10 @@ fn parity_sv_processor_sweep() {
             }
 
             if (idx + 1) % 10 == 0 || idx + 1 == total_archives {
-                eprintln!("  [sv_processor] producer: archive {}/{total_archives}", idx + 1);
+                eprintln!(
+                    "  [sv_processor] producer: archive {}/{total_archives}",
+                    idx + 1
+                );
             }
         }
 
@@ -138,11 +141,12 @@ fn parity_sv_processor_sweep() {
                 ));
                 let region = common::parse_region(&tile.region_str);
 
-                let mut reference = reference_resource
-                    .get_reference(&region)
-                    .unwrap_or_else(|error| {
-                        panic!("Failed to load reference for {}: {error}", tile.region_str)
-                    });
+                let mut reference =
+                    reference_resource
+                        .get_reference(&region)
+                        .unwrap_or_else(|error| {
+                            panic!("Failed to load reference for {}: {error}", tile.region_str)
+                        });
 
                 let mut data: RealignedVariationData = serde_json::from_str(&tile.dep_data)
                     .unwrap_or_else(|error| {

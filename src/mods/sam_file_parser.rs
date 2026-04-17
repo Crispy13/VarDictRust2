@@ -399,7 +399,9 @@ impl RecordPreprocessor {
 
     /// Returns a clone of the current BAM header for downstream CIGAR parsing.
     pub fn header_view(&self) -> Option<HeaderView> {
-        self.current_reader.as_ref().map(|reader| reader.header().clone())
+        self.current_reader
+            .as_ref()
+            .map(|reader| reader.header().clone())
     }
 
     /// Returns the chromosome name, optionally stripping "chr" prefix if -C flag is set.
