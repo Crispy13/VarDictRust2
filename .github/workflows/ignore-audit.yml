@@ -1,0 +1,21 @@
+name: Ignore Audit
+on:
+  push:
+    paths:
+      - '**/*.rs'
+      - 'scripts/check_ignore_annotations.sh'
+      - '.github/workflows/ignore-audit.yml'
+  pull_request:
+    paths:
+      - '**/*.rs'
+      - 'scripts/check_ignore_annotations.sh'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: Enforce #[ignore] hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check ignore annotations
+        run: bash scripts/check_ignore_annotations.sh
