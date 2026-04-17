@@ -3,10 +3,12 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: scripts/gen_e2e_golden_tsv.sh [--push-only] [--force]
+Usage: scripts/gen_e2e_golden_tsv.sh [--push-only] [--force] [--config <preset>]
 
-  --push-only  Generate only the 10-region push subset
-  --force      Regenerate files even if they already exist
+  --push-only        Generate only the 10-region push subset
+  --force            Regenerate files even if they already exist
+  --config <preset>  Config preset: default | high_freq | low_qual | strict_bias
+                     (default: default; output goes to tmp/e2e_fixtures/<preset>/)
 EOF
 }
 
@@ -18,6 +20,7 @@ VARDICT_BIN="$VARDICT_DIR/build/install/VarDict/bin/VarDict"
 
 push_only=false
 force=false
+config_preset="default"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -26,6 +29,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --force)
             force=true
+            ;;
+        --config)
+            shift
+            config_preset="${1:-}"
+            if [[ -z "$config_preset" ]]; then
+                echo "ERROR: --config requires a preset name" >&2
+                exit 1
+            fi
             ;;
         -h|--help)
             usage
@@ -40,6 +51,17 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+case "$config_preset" in
+    default)     extra_flags=() ;;
+    high_freq)   extra_flags=(-f 0.05) ;;
+    low_qual)    extra_flags=(-q 15) ;;
+    strict_bias) extra_flags=(-B 5) ;;
+    *)
+        echo "ERROR: Unknown config preset '$config_preset'. Valid: default, high_freq, low_qual, strict_bias" >&2
+        exit 1
+        ;;
+esac
+
 cd "$PROJECT_ROOT"
 
 if [[ ! -x "$VARDICT_BIN" ]]; then
@@ -52,6 +74,9 @@ if [[ ! -x "$VARDICT_BIN" ]]; then
 fi
 
 OUTPUT_DIR="${VARDICT_E2E_FIXTURE_DIR:-tmp/e2e_fixtures}"
+if [[ "$config_preset" != "default" ]]; then
+    OUTPUT_DIR="$OUTPUT_DIR/$config_preset"
+fi
 mkdir -p "$OUTPUT_DIR"
 
 mapfile -t region_rows < <(awk 'NF' "$REGION_TSV")
@@ -88,6 +113,7 @@ for ((position = 0; position < total; position++)); do
         -b "$bam_path" \
         -N test_sample \
         -th 1 \
+        "${extra_flags[@]}" \
         -R "$region" \
         > "$out_file"
 done

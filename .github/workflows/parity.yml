@@ -27,8 +27,10 @@ jobs:
           if [ "${{ inputs.module }}" = "all" ]; then
             cargo test --profile debug-release --test 'parity_*' -- --test-threads=1
             cargo test --profile debug-release --test parity_e2e -- --test-threads=1 --include-ignored
+            cargo test --profile debug-release --test parity_e2e_config -- --test-threads=1 --include-ignored
           elif [ "${{ inputs.module }}" = "e2e" ]; then
             cargo test --profile debug-release --test parity_e2e -- --test-threads=1 --include-ignored
+            cargo test --profile debug-release --test parity_e2e_config -- --test-threads=1 --include-ignored
           else
             cargo test --profile debug-release --test "parity_${{ inputs.module }}" -- --test-threads=1
           fi

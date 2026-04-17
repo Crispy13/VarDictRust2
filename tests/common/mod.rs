@@ -334,12 +334,26 @@ pub fn init_test_scope_with_bam(
     ref_path: &str,
     chr_lengths: HashMap<String, i32>,
 ) -> MutexGuard<'static, ()> {
+    init_test_scope_with_bam_config(bam_path, ref_path, chr_lengths, |_| {})
+}
+
+#[allow(dead_code)]
+pub fn init_test_scope_with_bam_config<F>(
+    bam_path: &str,
+    ref_path: &str,
+    chr_lengths: HashMap<String, i32>,
+    configure: F,
+) -> MutexGuard<'static, ()>
+where
+    F: FnOnce(&mut Configuration),
+{
     let guard = SCOPE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     GlobalReadOnlyScope::clear();
 
     let mut config = Configuration::default();
     config.bam = Some(BamNames::new(bam_path));
     config.fasta = ref_path.to_string();
+    configure(&mut config);
 
     GlobalReadOnlyScope::init(
         config,
