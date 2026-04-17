@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use once_cell::sync::Lazy;
 
@@ -9,11 +9,24 @@ use crate::data::Region;
 use crate::reference::{Reference, ReferenceResource};
 
 /// Ported from: VariantPrinter.java placeholder for Scope.java:L14-L24 consumers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum VariantPrinter {
     Out,
     Err,
+    Buffer(Arc<Mutex<String>>),
 }
+
+impl PartialEq for VariantPrinter {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Out, Self::Out) | (Self::Err, Self::Err) => true,
+            (Self::Buffer(left), Self::Buffer(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for VariantPrinter {}
 
 impl Default for VariantPrinter {
     fn default() -> Self {
@@ -44,6 +57,11 @@ impl VariantPrinter {
                 let stderr = std::io::stderr();
                 let mut handle = stderr.lock();
                 let _ = writeln!(handle, "{line}");
+            }
+            Self::Buffer(buffer) => {
+                let mut output = buffer.lock().unwrap_or_else(|error| error.into_inner());
+                output.push_str(line);
+                output.push('\n');
             }
         }
     }
@@ -120,6 +138,7 @@ pub struct GlobalReadOnlyScope {
     pub samplem: Option<String>,
     pub amplicon_based_calling: Option<String>,
     pub printer_type_out: PrinterType,
+    pub variant_printer: VariantPrinter,
     pub adaptor_forward: HashMap<String, i32>,
     pub adaptor_reverse: HashMap<String, i32>,
 }
@@ -170,6 +189,7 @@ impl GlobalReadOnlyScope {
         adaptor_reverse: HashMap<String, i32>,
     ) -> Self {
         let printer_type_out = conf.printer_type;
+        let variant_printer = VariantPrinter::from(printer_type_out);
         Self {
             conf,
             chr_lengths,
@@ -177,6 +197,7 @@ impl GlobalReadOnlyScope {
             samplem,
             amplicon_based_calling,
             printer_type_out,
+            variant_printer,
             adaptor_forward,
             adaptor_reverse,
         }
@@ -231,6 +252,24 @@ impl GlobalReadOnlyScope {
         }
 
         write_global_mode(Some(run_mode));
+    }
+
+    pub fn set_variant_printer(printer: VariantPrinter) {
+        match GLOBAL_READ_ONLY_SCOPE.write() {
+            Ok(mut guard) => {
+                let scope = guard
+                    .as_mut()
+                    .expect("GlobalReadOnlyScope must be initialized before setting printer");
+                scope.variant_printer = printer;
+            }
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                let scope = guard
+                    .as_mut()
+                    .expect("GlobalReadOnlyScope must be initialized before setting printer");
+                scope.variant_printer = printer;
+            }
+        }
     }
 
     /// Ported from: GlobalReadOnlyScope.clear()
@@ -310,6 +349,7 @@ mod tests {
         assert_eq!(instance.adaptor_forward, adaptor_forward);
         assert_eq!(instance.adaptor_reverse, adaptor_reverse);
         assert_eq!(instance.printer_type_out, PrinterType::Out);
+        assert_eq!(instance.variant_printer, VariantPrinter::Out);
 
         GlobalReadOnlyScope::set_mode(Arc::new(DummyMode));
         assert!(GlobalReadOnlyScope::get_mode().is_some());

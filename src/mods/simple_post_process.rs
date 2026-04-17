@@ -19,12 +19,13 @@ pub fn simple_post_process(scope: Scope<AlignedVarsData>) {
     positions.sort();
 
     for position in positions {
-        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             let Some(variants_on_position) = data.aligned_variants.get(&position) else {
                 return;
             };
 
-            if variants_on_position.sv.is_empty() && (position < region.start || position > region.end)
+            if variants_on_position.sv.is_empty()
+                && (position < region.start || position > region.end)
             {
                 return;
             }
@@ -70,13 +71,13 @@ pub fn simple_post_process(scope: Scope<AlignedVarsData>) {
                         }
                     }
                     vref.vartype = vref.var_type();
-                    if !vref.is_good_var(
+                    let is_good = vref.is_good_var(
                         variants_on_position.reference_variant.as_ref(),
                         Some(&vref.vartype),
                         &splice,
                         &conf,
-                    ) && !conf.do_pileup
-                    {
+                    );
+                    if !is_good && !conf.do_pileup {
                         continue;
                     }
                     vrefs.push(vref);
@@ -99,12 +100,5 @@ pub fn simple_post_process(scope: Scope<AlignedVarsData>) {
                 out.print_line(&output_variant.to_tsv_line(&conf));
             }
         }));
-
-        if let Err(error) = result {
-            eprintln!(
-                "Error processing position {} in {}:{}-{}: {:?}",
-                position, region.chr, region.start, region.end, error
-            );
-        }
     }
 }

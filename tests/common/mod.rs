@@ -3,7 +3,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::{fs::File, io::Read, path::PathBuf};
 
 use std::sync::Arc;
-use vardict_rs::config::Configuration;
+use vardict_rs::config::{BamNames, Configuration};
 use vardict_rs::data::Region;
 use vardict_rs::reference::{Reference, ReferenceResource};
 use vardict_rs::scope::{GlobalReadOnlyScope, Scope, VariantPrinter};
@@ -110,6 +110,13 @@ pub fn sweep_fixture_base() -> PathBuf {
     );
 
     base
+}
+
+#[allow(dead_code)]
+pub fn e2e_fixture_base() -> PathBuf {
+    std::env::var_os("VARDICT_E2E_FIXTURE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("tmp/e2e_fixtures"))
 }
 
 #[allow(dead_code)]
@@ -318,6 +325,32 @@ pub fn init_test_scope(chr_lengths: HashMap<String, i32>) -> MutexGuard<'static,
         HashMap::new(),
         HashMap::new(),
     );
+    guard
+}
+
+#[allow(dead_code)]
+pub fn init_test_scope_with_bam(
+    bam_path: &str,
+    ref_path: &str,
+    chr_lengths: HashMap<String, i32>,
+) -> MutexGuard<'static, ()> {
+    let guard = SCOPE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    GlobalReadOnlyScope::clear();
+
+    let mut config = Configuration::default();
+    config.bam = Some(BamNames::new(bam_path));
+    config.fasta = ref_path.to_string();
+
+    GlobalReadOnlyScope::init(
+        config,
+        chr_lengths,
+        "test_sample",
+        None,
+        None,
+        HashMap::new(),
+        HashMap::new(),
+    );
+
     guard
 }
 

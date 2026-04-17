@@ -11,13 +11,19 @@ use crate::mods::simple_post_process::simple_post_process;
 use crate::mods::somatic_post_process::somatic_post_process;
 use crate::mods::{structural_variants_processor, to_vars_builder, variation_realigner};
 use crate::reference::{Reference, ReferenceResource};
-use crate::scope::{AbstractMode, GlobalReadOnlyScope, Scope, VariantPrinter};
+use crate::scope::{AbstractMode, GlobalReadOnlyScope, Scope};
 use crate::utils::tsv_join;
 
 fn try_to_get_reference(reference_resource: &ReferenceResource, region: &Region) -> Reference {
     reference_resource
         .get_reference(region)
-        .unwrap_or_else(|error| panic!("Failed to fetch reference for {}: {}", region.print_region(), error))
+        .unwrap_or_else(|error| {
+            panic!(
+                "Failed to fetch reference for {}: {}",
+                region.print_region(),
+                error
+            )
+        })
 }
 
 fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
@@ -37,8 +43,30 @@ fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
     let header = data
         .header_view()
         .expect("current BAM header must exist before CIGAR parsing");
-    let mut records = std::iter::from_fn(|| data.next_record());
+    let InitialData {
+        non_insertion_variants,
+        insertion_variants,
+        ref_coverage,
+        soft_clips_5_end,
+        soft_clips_3_end,
+    } = std::mem::take(&mut data.initial_data);
+    let total_reads = data.total_reads;
+    let duplicate_reads = data.duplicate_reads;
     let mut parser = CigarParser::new(false);
+    parser.init_from_scope(
+        &region,
+        &region_ref,
+        &splice,
+        max_read_length,
+        non_insertion_variants,
+        insertion_variants,
+        ref_coverage,
+        soft_clips_3_end,
+        soft_clips_5_end,
+        total_reads,
+        duplicate_reads,
+    );
+    let mut records = std::iter::from_fn(|| data.next_record());
     let variation_data = parser.process(&mut records, &header, &chr_name);
     data.close();
 
@@ -142,7 +170,7 @@ impl SimpleMode {
     }
 
     pub fn not_parallel(&self) {
-        let printer = VariantPrinter::from(GlobalReadOnlyScope::instance().printer_type_out);
+        let printer = GlobalReadOnlyScope::instance().variant_printer;
         for regions in &self.segments {
             for region in regions {
                 let reference = try_to_get_reference(&self.reference_resource, region);
@@ -158,7 +186,7 @@ impl SimpleMode {
                     Arc::new(self.reference_resource.clone()),
                     0,
                     HashSet::new(),
-                    printer,
+                    printer.clone(),
                     InitialData::default(),
                 );
                 simple_post_process(run_pipeline(initial_scope));
@@ -238,7 +266,7 @@ impl SomaticMode {
     }
 
     pub fn not_parallel(&self) {
-        let printer = VariantPrinter::from(GlobalReadOnlyScope::instance().printer_type_out);
+        let printer = GlobalReadOnlyScope::instance().variant_printer;
         let bam_names = GlobalReadOnlyScope::instance()
             .conf
             .bam
@@ -257,20 +285,18 @@ impl SomaticMode {
                     Arc::new(self.reference_resource.clone()),
                     0,
                     splice.clone(),
-                    printer,
+                    printer.clone(),
                     InitialData::default(),
                 );
                 let bam1_aligned = run_pipeline(bam1_scope);
                 let bam2_scope = Scope::new(
-                    bam_names
-                        .get_bam2()
-                        .expect("Somatic mode requires BAM2"),
+                    bam_names.get_bam2().expect("Somatic mode requires BAM2"),
                     region.clone(),
                     Arc::new(reference),
                     Arc::new(self.reference_resource.clone()),
                     bam1_aligned.max_read_length,
                     splice,
-                    printer,
+                    printer.clone(),
                     InitialData::default(),
                 );
                 let bam2_aligned = run_pipeline(bam2_scope);
@@ -366,7 +392,7 @@ impl AmpliconMode {
     }
 
     pub fn not_parallel(&self) {
-        let printer = VariantPrinter::from(GlobalReadOnlyScope::instance().printer_type_out);
+        let printer = GlobalReadOnlyScope::instance().variant_printer;
         let bam1 = GlobalReadOnlyScope::instance()
             .conf
             .bam
@@ -377,7 +403,10 @@ impl AmpliconMode {
 
         for regions in &self.segments {
             let mut pos: HashMap<i32, Vec<(i32, Region)>> = HashMap::new();
-            let mut current_region = regions.first().cloned().unwrap_or_else(|| Region::new("", 0, 0, ""));
+            let mut current_region = regions
+                .first()
+                .cloned()
+                .unwrap_or_else(|| Region::new("", 0, 0, ""));
             let splice = HashSet::new();
             let mut vars = Vec::new();
 
@@ -396,7 +425,7 @@ impl AmpliconMode {
                     Arc::new(self.reference_resource.clone()),
                     0,
                     splice.clone(),
-                    printer,
+                    printer.clone(),
                     InitialData::default(),
                 );
                 vars.push(run_pipeline(initial_scope).data.aligned_variants);
