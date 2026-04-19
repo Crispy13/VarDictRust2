@@ -1,6 +1,13 @@
 use std::collections::{HashMap, HashSet};
+use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, MutexGuard};
-use std::{fs::File, io::Read, path::PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use std::sync::Arc;
 use vardict_rs::config::{BamNames, Configuration};
@@ -13,7 +20,7 @@ pub fn load_region_config() -> Vec<(String, PathBuf, PathBuf)> {
     let tsv = std::fs::read_to_string("testdata/parity_regions.tsv")
         .expect("testdata/parity_regions.tsv not found");
 
-    tsv.lines()
+    let regions: Vec<_> = tsv.lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
@@ -28,7 +35,25 @@ pub fn load_region_config() -> Vec<(String, PathBuf, PathBuf)> {
                 PathBuf::from(fields[2]),
             )
         })
-        .collect()
+        .collect();
+
+    match std::env::var("PARITY_REGION_INDEX") {
+        Err(std::env::VarError::NotPresent) => regions,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("PARITY_REGION_INDEX must be valid UTF-8")
+        }
+        Ok(value) => {
+            let index = value.parse::<usize>().unwrap_or_else(|_| {
+                panic!("PARITY_REGION_INDEX must be a non-negative integer, got: {value}")
+            });
+            assert!(
+                index < regions.len(),
+                "PARITY_REGION_INDEX={index} out of range (0..{})",
+                regions.len()
+            );
+            vec![regions[index].clone()]
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -117,6 +142,247 @@ pub fn e2e_fixture_base() -> PathBuf {
     std::env::var_os("VARDICT_E2E_FIXTURE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("tmp/e2e_fixtures"))
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VardictImpl {
+    Rust,
+    Java,
+    Both,
+}
+
+#[allow(dead_code)]
+pub fn resolve_impl() -> VardictImpl {
+    match std::env::var("VARDICT_IMPL") {
+        Err(std::env::VarError::NotPresent) => VardictImpl::Rust,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("Unknown VARDICT_IMPL: value was not valid UTF-8")
+        }
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "" | "rust" => VardictImpl::Rust,
+            "java" => VardictImpl::Java,
+            "both" => VardictImpl::Both,
+            _ => panic!(
+                "Unknown VARDICT_IMPL '{value}'. Expected one of: rust, java, both"
+            ),
+        },
+    }
+}
+
+#[allow(dead_code)]
+pub fn java_binary_path() -> PathBuf {
+    const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
+
+    let vardict_dir = project_root().join("VarDictJava");
+    let binary = vardict_dir.join("build/install/VarDict/bin/VarDict");
+    if is_executable_file(&binary) {
+        return binary;
+    }
+
+    let mut build = Command::new("./gradlew");
+    build
+        .current_dir(&vardict_dir)
+        .args(["installDist", "-q"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_command_with_timeout(
+        build,
+        BUILD_TIMEOUT,
+        "building VarDictJava with ./gradlew installDist -q",
+    );
+
+    assert!(
+        output.status.success(),
+        "Failed to build VarDictJava with ./gradlew installDist -q\nSTDOUT:\n{}\nSTDERR:\n{}",
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim(),
+    );
+    assert!(
+        is_executable_file(&binary),
+        "VarDictJava launcher still missing after build at {}. Build manually with: (cd {} && ./gradlew installDist -q)",
+        binary.display(),
+        vardict_dir.display(),
+    );
+
+    binary
+}
+
+#[allow(dead_code)]
+pub fn run_java_region(region_str: &str, bam: &str, ref_path: &str, extra_flags: &[String]) -> String {
+    const RUN_TIMEOUT: Duration = Duration::from_secs(120);
+
+    let java_bin = java_binary_path();
+    let mut command = Command::new(&java_bin);
+    command
+        .arg("-G")
+        .arg(ref_path)
+        .arg("-b")
+        .arg(bam)
+        .arg("-N")
+        .arg("test_sample")
+        .arg("-th")
+        .arg("1")
+        .args(extra_flags)
+        .arg("-R")
+        .arg(region_str)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = run_command_with_timeout(
+        command,
+        RUN_TIMEOUT,
+        &format!("running VarDictJava for region {region_str}"),
+    );
+    assert!(
+        output.status.success(),
+        "VarDictJava failed for region {region_str} with exit status {}\nSTDERR:\n{}\nSTDOUT:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim(),
+        String::from_utf8_lossy(&output.stdout).trim(),
+    );
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[allow(dead_code)]
+pub fn config_preset_java_flags(config_name: &str) -> Vec<String> {
+    if config_name == "default" {
+        return Vec::new();
+    }
+
+    let available = load_config_presets_raw_tsv();
+    available
+        .into_iter()
+        .find_map(|(name, flags)| {
+            (name == config_name).then(|| {
+                flags
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "Unknown config preset: {config_name}. Available presets: {}",
+                CONFIG_PRESETS.join(", ")
+            )
+        })
+}
+
+#[allow(dead_code)]
+pub fn safe_region_name(region: &str) -> String {
+    region.replace(':', "_").replace('-', "_")
+}
+
+fn project_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        return path
+            .metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false);
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn run_command_with_timeout(mut command: Command, timeout: Duration, description: &str) -> Output {
+    let mut child = command.spawn().unwrap_or_else(|error| {
+        panic!("Failed to start {description}: {error}")
+    });
+
+    let stdout_handle = child.stdout.take().map(spawn_output_reader);
+    let stderr_handle = child.stderr.take().map(spawn_output_reader);
+    let start = Instant::now();
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(50)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let stdout = join_output_reader(stdout_handle);
+                let stderr = join_output_reader(stderr_handle);
+                panic!(
+                    "Timed out after {}s while {description}\nSTDOUT:\n{}\nSTDERR:\n{}",
+                    timeout.as_secs(),
+                    String::from_utf8_lossy(&stdout).trim(),
+                    String::from_utf8_lossy(&stderr).trim(),
+                );
+            }
+            Err(error) => panic!("Failed while waiting for {description}: {error}"),
+        }
+    };
+
+    Output {
+        status,
+        stdout: join_output_reader(stdout_handle),
+        stderr: join_output_reader(stderr_handle),
+    }
+}
+
+fn spawn_output_reader<R>(mut reader: R) -> thread::JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        reader
+            .read_to_end(&mut bytes)
+            .unwrap_or_else(|error| panic!("Failed reading child process output: {error}"));
+        bytes
+    })
+}
+
+fn join_output_reader(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle
+        .map(|reader| {
+            reader
+                .join()
+                .unwrap_or_else(|_| panic!("Failed joining child process output reader"))
+        })
+        .unwrap_or_default()
+}
+
+#[allow(dead_code)]
+pub fn load_golden_tsv(
+    fixture_base: &Path,
+    region_str: &str,
+    config_subdir: Option<&str>,
+    regen_cmd: &str,
+) -> String {
+    let safe_region = safe_region_name(region_str);
+    let path = match config_subdir {
+        Some(name) => fixture_base.join(name).join(format!("{safe_region}.tsv")),
+        None => fixture_base.join(format!("{safe_region}.tsv")),
+    };
+
+    std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "Missing E2E golden for region {region_str} at {}: {error}. Regenerate with: {regen_cmd}",
+            path.display()
+        )
+    })
 }
 
 #[allow(dead_code)]
@@ -260,6 +526,66 @@ pub fn assert_module_parity(module: &str, region: &str, actual_json: &str) {
 }
 
 #[allow(dead_code)]
+pub fn assert_tsv_parity(rust_output: &str, golden: &str, region: &str) {
+    let mut expected_lines: Vec<&str> = golden.lines().collect();
+    let mut actual_lines: Vec<&str> = rust_output.lines().collect();
+    expected_lines.sort_unstable();
+    actual_lines.sort_unstable();
+
+    if actual_lines == expected_lines {
+        return;
+    }
+
+    let first_diff = expected_lines
+        .iter()
+        .zip(actual_lines.iter())
+        .position(|(expected_line, actual_line)| expected_line != actual_line)
+        .unwrap_or_else(|| expected_lines.len().min(actual_lines.len()));
+
+    let expected_line = expected_lines.get(first_diff).copied().unwrap_or("");
+    let actual_line = actual_lines.get(first_diff).copied().unwrap_or("");
+    let mut message = format!(
+        "E2E TSV mismatch for region {region}\nFirst divergent sorted line index: {first_diff}\nGolden: {}\nActual: {}",
+        escape_snippet(expected_line),
+        escape_snippet(actual_line),
+    );
+
+    if whitespace_only_difference(expected_line, actual_line) {
+        message.push_str(&format!(
+            "\nGolden bytes: {}\nActual bytes: {}",
+            hex_dump(expected_line.as_bytes()),
+            hex_dump(actual_line.as_bytes()),
+        ));
+    }
+
+    panic!("{message}");
+}
+
+fn escape_snippet(line: &str) -> String {
+    format!("{:?}", line)
+}
+
+fn whitespace_only_difference(left: &str, right: &str) -> bool {
+    left != right
+        && left
+            .chars()
+            .filter(|ch| !ch.is_ascii_whitespace())
+            .collect::<String>()
+            == right
+                .chars()
+                .filter(|ch| !ch.is_ascii_whitespace())
+                .collect::<String>()
+}
+
+fn hex_dump(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[allow(dead_code)]
 #[allow(deprecated)]
 #[deprecated(note = "Use v2 archive functions instead")]
 pub fn assert_sweep_module_parity(module: &str, region: &str, actual_json: &str) -> Option<String> {
@@ -308,6 +634,103 @@ pub fn load_chr_lengths(fai_path: &str) -> HashMap<String, i32> {
         .collect()
 }
 
+#[allow(dead_code)]
+pub const CONFIG_PRESETS: &[&str] = &[
+    "default",
+    "sensitive",
+    "strict",
+    "mismatch_tolerant",
+    "low_bias",
+    "clinical_wgs",
+];
+
+fn load_config_presets_raw_tsv() -> Vec<(String, String)> {
+    let preset_path = project_root().join("scripts/config_presets.tsv");
+    let tsv = std::fs::read_to_string(&preset_path)
+        .unwrap_or_else(|error| panic!("Failed to read {}: {error}", preset_path.display()));
+
+    tsv.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert_eq!(
+                fields.len(),
+                3,
+                "expected 3 tab-separated fields in {}: {line}",
+                preset_path.display()
+            );
+            (fields[0].to_string(), fields[1].to_string())
+        })
+        .collect()
+}
+
+#[allow(dead_code)]
+pub fn load_config_presets_tsv() -> Vec<(String, HashMap<String, String>)> {
+    load_config_presets_raw_tsv()
+        .into_iter()
+        .map(|(name, flags)| (name, parse_java_flags(&flags)))
+        .collect()
+}
+
+fn parse_java_flags(flags: &str) -> HashMap<String, String> {
+    let tokens: Vec<&str> = flags.split_whitespace().collect();
+    assert_eq!(
+        tokens.len() % 2,
+        0,
+        "Expected flag/value pairs in config preset flags: {flags}"
+    );
+
+    let mut parsed = HashMap::new();
+    for pair in tokens.chunks(2) {
+        let flag = pair[0];
+        let value = pair[1];
+        assert!(flag.starts_with('-'), "Invalid flag token in preset flags: {flag}");
+        let previous = parsed.insert(flag.to_string(), value.to_string());
+        assert!(
+            previous.is_none(),
+            "Duplicate flag {flag} in config preset flags: {flags}"
+        );
+    }
+
+    parsed
+}
+
+#[allow(dead_code)]
+pub fn config_preset(name: &str) -> Configuration {
+    let mut config = Configuration::default();
+
+    match name {
+        "default" => {}
+        "sensitive" => {
+            config.freq = 0.005;
+            config.minr = 1;
+            config.goodq = 15.0;
+        }
+        "strict" => {
+            config.freq = 0.05;
+            config.minr = 4;
+            config.goodq = 30.0;
+        }
+        "mismatch_tolerant" => {
+            config.mismatch = 15;
+            config.vext = 5;
+        }
+        "low_bias" => {
+            config.min_bias_reads = 1;
+            config.freq = 0.02;
+        }
+        "clinical_wgs" => {
+            config.freq = 0.001;
+            config.minr = 1;
+            config.goodq = 20.0;
+            config.mismatch = 12;
+        }
+        _ => panic!("Unknown config preset: {name}"),
+    }
+
+    config
+}
+
 // ── Step 2.2: init_test_scope ───────────────────────────────────────────────
 
 static SCOPE_MUTEX: Mutex<()> = Mutex::new(());
@@ -334,26 +757,38 @@ pub fn init_test_scope_with_bam(
     ref_path: &str,
     chr_lengths: HashMap<String, i32>,
 ) -> MutexGuard<'static, ()> {
-    init_test_scope_with_bam_config(bam_path, ref_path, chr_lengths, |_| {})
-}
-
-#[allow(dead_code)]
-pub fn init_test_scope_with_bam_config<F>(
-    bam_path: &str,
-    ref_path: &str,
-    chr_lengths: HashMap<String, i32>,
-    configure: F,
-) -> MutexGuard<'static, ()>
-where
-    F: FnOnce(&mut Configuration),
-{
     let guard = SCOPE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     GlobalReadOnlyScope::clear();
 
     let mut config = Configuration::default();
     config.bam = Some(BamNames::new(bam_path));
     config.fasta = ref_path.to_string();
-    configure(&mut config);
+
+    GlobalReadOnlyScope::init(
+        config,
+        chr_lengths,
+        "test_sample",
+        None,
+        None,
+        HashMap::new(),
+        HashMap::new(),
+    );
+
+    guard
+}
+
+#[allow(dead_code)]
+pub fn init_test_scope_with_config(
+    mut config: Configuration,
+    bam_path: &str,
+    reference: &str,
+    chr_lengths: HashMap<String, i32>,
+) -> MutexGuard<'static, ()> {
+    let guard = SCOPE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    GlobalReadOnlyScope::clear();
+
+    config.bam = Some(BamNames::new(bam_path));
+    config.fasta = reference.to_string();
 
     GlobalReadOnlyScope::init(
         config,

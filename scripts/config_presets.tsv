@@ -1,0 +1,6 @@
+default		Default configuration (no extra flags).
+sensitive	-f 0.005 -r 1 -q 15	Low thresholds for high-sensitivity calling.
+strict	-f 0.05 -r 4 -q 30	High thresholds for aggressively filtered calls.
+mismatch_tolerant	-m 15 -X 5	Relax mismatch and extension limits during realignment.
+low_bias	-B 1 -f 0.02	Lower strand-bias bar while keeping moderate frequency filtering.
+clinical_wgs	-f 0.001 -r 1 -q 20 -m 12	Ultra-sensitive whole-genome style preset.

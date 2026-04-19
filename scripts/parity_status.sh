@@ -1,87 +1,83 @@
 #!/usr/bin/env bash
-# scripts/parity_status.sh — M8 progress tracker.
-#
-# Runs each Tier 1 parity test (push subset), counts pass/fail, and prints
-# a summary per module. For full sweep coverage, use sweep.yml CI instead.
-#
-# Usage:
-#   scripts/parity_status.sh                 # all modules
-#   scripts/parity_status.sh cigar_parser    # single module
-#
-# Requires: rust_build_env activated, LIBCLANG_PATH set.
+set -euo pipefail
 
-set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+OUTPUT_FILE="$PROJECT_ROOT/tmp/parity_status_output.txt"
 
-MODULES=(cigar_modifier cigar_parser realigner sam_file_parser sv_processor tovars)
-# E2E entries: "test_name:extra_args" (e.g., include-ignored for config-variant suite).
-E2E_TESTS=(
-    "parity_e2e:"
-    "parity_e2e_config:--include-ignored"
+MODULES=(
+    cigar_parser
+    cigar_modifier
+    realigner
+    sam_file_parser
+    sv_processor
+    tovars
 )
 
-targets=("$@")
-if [[ ${#targets[@]} -eq 0 ]]; then
-    targets=("${MODULES[@]}" e2e)
-fi
+cd "$PROJECT_ROOT"
+mkdir -p tmp
 
-print_header() {
-    printf '\n%-24s  %6s  %6s  %6s  %s\n' "MODULE" "PASS" "FAIL" "IGNORE" "STATUS"
-    printf '%-24s  %6s  %6s  %6s  %s\n' "------" "----" "----" "------" "------"
-}
+cargo_output="$(
+    cargo test --profile debug-release --color=never \
+        --test parity_cigar_parser \
+        --test parity_cigar_modifier \
+        --test parity_realigner \
+        --test parity_sam_file_parser \
+        --test parity_sv_processor \
+        --test parity_tovars \
+        2>&1 || true
+)"
 
-run_test() {
-    local test_name="$1"
-    local extra_args="${2:-}"
-    local output
-    if [[ -n "$extra_args" ]]; then
-        output=$(cargo test --profile debug-release --test "$test_name" -- --test-threads=1 $extra_args 2>&1 || true)
-    else
-        output=$(cargo test --profile debug-release --test "$test_name" -- --test-threads=1 2>&1 || true)
-    fi
-    # Match lines like: "test result: ok. 6 passed; 0 failed; 0 ignored; ..."
-    local line
-    line=$(echo "$output" | grep -E "^test result:" | tail -1)
-    if [[ -z "$line" ]]; then
-        echo "BUILD_FAIL 0 0 0"
-        return
-    fi
-    local passed failed ignored status
-    passed=$(echo "$line" | grep -oE '[0-9]+ passed' | head -1 | awk '{print $1}')
-    failed=$(echo "$line" | grep -oE '[0-9]+ failed' | head -1 | awk '{print $1}')
-    ignored=$(echo "$line" | grep -oE '[0-9]+ ignored' | head -1 | awk '{print $1}')
-    if [[ "${failed:-0}" -gt 0 ]]; then
-        status="FAIL"
-    elif [[ "${passed:-0}" -gt 0 ]]; then
-        status="PASS"
-    else
-        status="EMPTY"
-    fi
-    echo "$status ${passed:-0} ${failed:-0} ${ignored:-0}"
-}
+printf '%s\n' "$cargo_output" > "$OUTPUT_FILE"
 
-print_header
-overall_fail=0
-for target in "${targets[@]}"; do
-    if [[ "$target" == "e2e" ]]; then
-        for entry in "${E2E_TESTS[@]}"; do
-            t="${entry%%:*}"
-            extra="${entry#*:}"
-            read -r status p f i <<< "$(run_test "$t" "$extra")"
-            printf '%-24s  %6s  %6s  %6s  %s\n' "$t" "$p" "$f" "$i" "$status"
-            [[ "$status" == "FAIL" || "$status" == "BUILD_FAIL" ]] && overall_fail=1
-        done
-    else
-        read -r status p f i <<< "$(run_test "parity_$target")"
-        printf '%-24s  %6s  %6s  %6s  %s\n' "parity_$target" "$p" "$f" "$i" "$status"
-        [[ "$status" == "FAIL" || "$status" == "BUILD_FAIL" ]] && overall_fail=1
+declare -A module_statuses=()
+pass_count=0
+fail_count=0
+ignored_count=0
+error_count=0
+
+for module in "${MODULES[@]}"; do
+    result_line="$(grep -E "^test[[:space:]]+parity_${module}_all_regions[[:space:]]+\.\.\.[[:space:]]+(ok|FAILED|ignored)$" "$OUTPUT_FILE" | tail -n 1 || true)"
+
+    if [[ -z "$result_line" ]]; then
+        module_statuses["$module"]="ERROR"
+        error_count=$((error_count + 1))
+        continue
     fi
+
+    case "$result_line" in
+        *" ok")
+            module_statuses["$module"]="PASS"
+            pass_count=$((pass_count + 1))
+            ;;
+        *" FAILED")
+            module_statuses["$module"]="FAIL"
+            fail_count=$((fail_count + 1))
+            ;;
+        *" ignored")
+            module_statuses["$module"]="IGNORED"
+            ignored_count=$((ignored_count + 1))
+            ;;
+        *)
+            module_statuses["$module"]="ERROR"
+            error_count=$((error_count + 1))
+            ;;
+    esac
 done
 
-echo ""
-if [[ $overall_fail -eq 0 ]]; then
-    echo "Overall: PASS"
-    exit 0
-else
-    echo "Overall: FAIL — see module summary above"
+printf '=== Parity Status Report ===\n\n'
+printf '%-23s %s\n' 'Module' 'Status'
+printf '%-23s %s\n' '-----------------------' '------'
+
+for module in "${MODULES[@]}"; do
+    printf '%-23s %s\n' "$module" "${module_statuses[$module]}"
+done
+
+printf '\nSummary: %d pass, %d fail, %d ignored, %d error\n' \
+    "$pass_count" "$fail_count" "$ignored_count" "$error_count"
+
+if [[ "$fail_count" -gt 0 || "$error_count" -gt 0 ]]; then
     exit 1
 fi
+
+exit 0

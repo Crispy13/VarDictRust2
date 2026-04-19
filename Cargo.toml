@@ -46,3 +46,7 @@ panic = "abort"
 lto = true
 codegen-units = 1
 debug = false
+
+[[bin]]
+name = "vardict_rs"
+path = "src/bin/vardict_rs.rs"

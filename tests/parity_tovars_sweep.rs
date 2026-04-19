@@ -44,37 +44,31 @@ fn reference_fetch_region(
 }
 
 #[test]
-#[ignore = "Sweep gate: ToVarsBuilder full-sweep parity"]
+#[ignore = "Sweep: ToVarsBuilder parity — run via sweep.yml or: cargo test --profile debug-release -- --ignored parity_tovars_sweep --test-threads=1"]
 fn parity_tovars_sweep() {
     let base = std::env::var_os("VARDICT_SWEEP_FIXTURE_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("tmp/sweep_fixtures"));
-    if !base.is_dir() {
-        eprintln!(
-            "parity_tovars_sweep: skipping, no sweep fixtures at {}",
-            base.display()
-        );
-        return;
-    }
+    assert!(
+        base.is_dir(),
+        "Sweep fixtures not found at {}. Generate with: python scripts/sweep_generate_v2.py",
+        base.display()
+    );
 
     common::check_sweep_manifest();
     let archive_root = base.join("v2").join("tovars");
-    if !archive_root.is_dir() {
-        eprintln!(
-            "parity_tovars_sweep: skipping, no v2 archives at {}",
-            archive_root.display()
-        );
-        return;
-    }
+    assert!(
+        archive_root.is_dir(),
+        "No v2 archives at {}. Generate with: python scripts/sweep_generate_v2.py",
+        archive_root.display()
+    );
 
     let archives = common::discover_v2_archives(&base, "tovars");
-    if archives.is_empty() {
-        eprintln!(
-            "parity_tovars_sweep: skipping, no v2 archives discovered under {}",
-            archive_root.display()
-        );
-        return;
-    }
+    assert!(
+        !archives.is_empty(),
+        "No v2 archives under {}. Generate with: python scripts/sweep_generate_v2.py",
+        archive_root.display()
+    );
 
     let total_archives = archives.len();
     let (_, first_ref) = common::bam_tag_lookup(&archives[0].0);

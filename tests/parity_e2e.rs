@@ -1,6 +1,5 @@
 mod common;
 
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use vardict_rs::modes::SimpleMode;
@@ -13,21 +12,23 @@ const PUSH_INDICES: &[usize] = &[0, 1, 2, 3, 4, 35, 36, 37, 70, 71];
 fn parity_e2e_push() {
     run_e2e_suite(
         Some(PUSH_INDICES),
-        "bash scripts/gen_e2e_golden_tsv.sh --push-only",
+        "bash scripts/gen_e2e_golden_tsv.sh --push-only --config default",
     );
 }
 
 #[test]
 #[ignore = "Nightly E2E - see parity_e2e_push for fast gate"]
 fn parity_e2e_all() {
-    run_e2e_suite(None, "bash scripts/gen_e2e_golden_tsv.sh");
+    run_e2e_suite(None, "bash scripts/gen_e2e_golden_tsv.sh --config default");
 }
 
 fn run_e2e_suite(indices: Option<&[usize]>, regeneration_command: &str) {
     let regions = common::load_region_config();
     let fixture_base = common::e2e_fixture_base();
+    let implementation = common::resolve_impl();
+    let java_flags = Vec::new();
 
-    for (region_index, region_str, bam_path, ref_path) in select_regions(&regions, indices) {
+    for (_region_index, region_str, bam_path, ref_path) in select_regions(&regions, indices) {
         let bam_str = bam_path.to_str().unwrap_or_else(|| {
             panic!(
                 "BAM path for region {region_str} was not valid UTF-8: {}",
@@ -42,11 +43,34 @@ fn run_e2e_suite(indices: Option<&[usize]>, regeneration_command: &str) {
         });
         let fai_path = format!("{ref_str}.fai");
         let chr_lengths = common::load_chr_lengths(&fai_path);
-        let actual = run_simple_mode_region(&region_str, bam_str, ref_str, chr_lengths);
-        let golden_path = fixture_base.join(format!("{}.tsv", safe_region_name(&region_str)));
-        let expected = load_golden_tsv(&golden_path, &region_str, regeneration_command);
+        let expected = common::load_golden_tsv(
+            &fixture_base,
+            &region_str,
+            Some("default"),
+            regeneration_command,
+        );
 
-        assert_tsv_parity(region_index, &region_str, &actual, &expected);
+        match implementation {
+            common::VardictImpl::Rust => {
+                let actual = run_simple_mode_region(&region_str, bam_str, ref_str, chr_lengths);
+                common::assert_tsv_parity(&actual, &expected, &region_str);
+            }
+            common::VardictImpl::Java => {
+                let actual = common::run_java_region(&region_str, bam_str, ref_str, &java_flags);
+                common::assert_tsv_parity(&actual, &expected, &region_str);
+            }
+            common::VardictImpl::Both => {
+                let rust_actual =
+                    run_simple_mode_region(&region_str, bam_str, ref_str, chr_lengths);
+                common::assert_tsv_parity(&rust_actual, &expected, &region_str);
+
+                GlobalReadOnlyScope::clear();
+
+                let java_actual =
+                    common::run_java_region(&region_str, bam_str, ref_str, &java_flags);
+                common::assert_tsv_parity(&java_actual, &expected, &region_str);
+            }
+        }
     }
 }
 
@@ -106,76 +130,4 @@ fn run_simple_mode_region(
 fn take_captured_output(buffer: &Arc<Mutex<String>>) -> String {
     let mut output = buffer.lock().unwrap_or_else(|error| error.into_inner());
     std::mem::take(&mut *output)
-}
-
-fn load_golden_tsv(path: &Path, region_str: &str, regeneration_command: &str) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|error| {
-        panic!(
-            "Missing E2E golden for region {region_str} at {}: {error}. Regenerate with: {regeneration_command}",
-            path.display()
-        )
-    })
-}
-
-fn safe_region_name(region: &str) -> String {
-    region.replace(':', "_").replace('-', "_")
-}
-
-fn assert_tsv_parity(region_index: usize, region_str: &str, actual: &str, expected: &str) {
-    let mut expected_lines: Vec<&str> = expected.lines().collect();
-    let mut actual_lines: Vec<&str> = actual.lines().collect();
-    expected_lines.sort_unstable();
-    actual_lines.sort_unstable();
-
-    if actual_lines == expected_lines {
-        return;
-    }
-
-    let first_diff = expected_lines
-        .iter()
-        .zip(actual_lines.iter())
-        .position(|(expected_line, actual_line)| expected_line != actual_line)
-        .unwrap_or_else(|| expected_lines.len().min(actual_lines.len()));
-
-    let expected_line = expected_lines.get(first_diff).copied().unwrap_or("");
-    let actual_line = actual_lines.get(first_diff).copied().unwrap_or("");
-    let mut message = format!(
-        "E2E TSV mismatch for region index {region_index} ({region_str})\nFirst divergent sorted line index: {first_diff}\nGolden: {}\nActual: {}",
-        escape_snippet(expected_line),
-        escape_snippet(actual_line),
-    );
-
-    if whitespace_only_difference(expected_line, actual_line) {
-        message.push_str(&format!(
-            "\nGolden bytes: {}\nActual bytes: {}",
-            hex_dump(expected_line.as_bytes()),
-            hex_dump(actual_line.as_bytes()),
-        ));
-    }
-
-    panic!("{message}");
-}
-
-fn escape_snippet(line: &str) -> String {
-    format!("{:?}", line)
-}
-
-fn whitespace_only_difference(left: &str, right: &str) -> bool {
-    left != right
-        && left
-            .chars()
-            .filter(|ch| !ch.is_ascii_whitespace())
-            .collect::<String>()
-            == right
-                .chars()
-                .filter(|ch| !ch.is_ascii_whitespace())
-                .collect::<String>()
-}
-
-fn hex_dump(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }

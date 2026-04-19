@@ -19,13 +19,14 @@ fn sample_region(module: &str, sample_path: &std::path::Path) -> String {
 }
 
 #[test]
-#[ignore = "Pilot archive read-back validation"]
+#[ignore = "Pilot readback — requires tmp/pilot from: python scripts/pilot_generate.py — remove when sweep coverage is complete"]
 fn pilot_v2_readback() {
     let pilot_dir = std::path::PathBuf::from("tmp/pilot");
-    if !pilot_dir.is_dir() {
-        eprintln!("Pilot dir not found, skipping");
-        return;
-    }
+    assert!(
+        pilot_dir.is_dir(),
+        "Pilot fixture dir not found at {}. Generate with: python scripts/pilot_generate.py",
+        pilot_dir.display()
+    );
 
     let modules = ["cigar_parser", "realigner", "sv_processor", "tovars"];
     let mut pass_count = 0usize;

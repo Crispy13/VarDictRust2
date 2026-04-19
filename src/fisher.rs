@@ -654,4 +654,98 @@ mod tests {
         0.0,
         "87.68597"
     );
+
+    mod pbt {
+        use super::*;
+        use proptest::prelude::*;
+        use proptest::test_runner::Config as ProptestConfig;
+
+        fn arb_unit_interval() -> impl Strategy<Value = f64> {
+            prop_oneof![
+                0.0f64..=1.0f64,
+                Just(0.0),
+                Just(1.0),
+                Just(0.000005),
+                Just(0.999995),
+                Just(0.0000049),
+                Just(0.9999951),
+                Just(0.5),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig {
+                cases: 256,
+                ..ProptestConfig::default()
+            })]
+
+            #[test]
+            fn pbt_fisher_p_values_in_unit_interval(
+                ref_fwd in 0..100i32,
+                ref_rev in 0..100i32,
+                alt_fwd in 0..100i32,
+                alt_rev in 0..100i32,
+            ) {
+                let fisher = FisherExact::new(ref_fwd, ref_rev, alt_fwd, alt_rev);
+
+                prop_assert!((0.0..=1.0).contains(&fisher.get_p_value()));
+                prop_assert!((0.0..=1.0).contains(&fisher.get_p_value_less()));
+                prop_assert!((0.0..=1.0).contains(&fisher.get_p_value_greater()));
+            }
+
+            #[test]
+            fn pbt_fisher_p_less_plus_p_greater_ge_p_two_sided(
+                ref_fwd in 0..100i32,
+                ref_rev in 0..100i32,
+                alt_fwd in 0..100i32,
+                alt_rev in 0..100i32,
+            ) {
+                let fisher = FisherExact::new(ref_fwd, ref_rev, alt_fwd, alt_rev);
+                let p_less = fisher.get_p_value_less();
+                let p_greater = fisher.get_p_value_greater();
+                let p_two_sided = fisher.get_p_value();
+
+                prop_assert!(
+                    p_less + p_greater >= p_two_sided - 1e-4,
+                    "p_less ({p_less}) + p_greater ({p_greater}) < p_two_sided ({p_two_sided})"
+                );
+            }
+
+            #[test]
+            fn pbt_fisher_row_swap_symmetry(
+                ref_fwd in 0..100i32,
+                ref_rev in 0..100i32,
+                alt_fwd in 0..100i32,
+                alt_rev in 0..100i32,
+            ) {
+                let fisher = FisherExact::new(ref_fwd, ref_rev, alt_fwd, alt_rev);
+                let swapped = FisherExact::new(alt_fwd, alt_rev, ref_fwd, ref_rev);
+
+                prop_assert_eq!(fisher.get_p_value(), swapped.get_p_value());
+            }
+
+            #[test]
+            fn pbt_log_binom_neg_infinity_for_invalid_k(
+                n in 0..200i32,
+                k in -1..201i32,
+            ) {
+                prop_assume!(k < 0 || k > n);
+
+                prop_assert_eq!(log_binomial_coefficient(n, k), f64::NEG_INFINITY);
+            }
+
+            #[test]
+            fn pbt_log_binom_zero_for_boundary_k(n in 0..200i32) {
+                prop_assert!((log_binomial_coefficient(n, 0) - 0.0).abs() <= 1e-12);
+                prop_assert!((log_binomial_coefficient(n, n) - 0.0).abs() <= 1e-12);
+            }
+
+            #[test]
+            fn pbt_round_as_r_preserves_unit_interval(value in arb_unit_interval()) {
+                let rounded = round_as_r(value);
+
+                prop_assert!((0.0..=1.0).contains(&rounded));
+            }
+        }
+    }
 }

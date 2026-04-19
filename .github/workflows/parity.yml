@@ -7,11 +7,18 @@ on:
         required: false
         default: 'all'
         type: choice
-        options: [all, cigar_modifier, cigar_parser, realigner, sam_file_parser, sv_processor, tovars, e2e]
+        options: [all, cigar_modifier, cigar_parser, realigner, sam_file_parser, sv_processor, tovars, e2e, config_e2e, dual_run]
+  schedule:
+    - cron: '0 4 * * *'
+
+concurrency:
+  group: parity-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   parity:
     name: Tier 1 Parity — ${{ inputs.module }}
+    if: github.event_name == 'workflow_dispatch' && inputs.module != 'dual_run'
     runs-on: self-hosted
     # NOTE: Self-hosted runner must have:
     # - testdata/ directory with BAMs, FASTA, and fixtures
@@ -22,15 +29,54 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Generate E2E golden fixtures
+        if: inputs.module == 'e2e' || inputs.module == 'config_e2e' || inputs.module == 'all'
+        run: |
+          if [ "${{ inputs.module }}" = "all" ]; then
+            bash scripts/gen_e2e_golden_tsv.sh --all-configs --push-only
+          elif [ "${{ inputs.module }}" = "config_e2e" ]; then
+            bash scripts/gen_e2e_golden_tsv.sh --all-configs
+          else
+            bash scripts/gen_e2e_golden_tsv.sh --config default
+          fi
+
       - name: Run parity tests
         run: |
           if [ "${{ inputs.module }}" = "all" ]; then
             cargo test --profile debug-release --test 'parity_*' -- --test-threads=1
-            cargo test --profile debug-release --test parity_e2e -- --test-threads=1 --include-ignored
-            cargo test --profile debug-release --test parity_e2e_config -- --test-threads=1 --include-ignored
           elif [ "${{ inputs.module }}" = "e2e" ]; then
-            cargo test --profile debug-release --test parity_e2e -- --test-threads=1 --include-ignored
-            cargo test --profile debug-release --test parity_e2e_config -- --test-threads=1 --include-ignored
+            cargo test --profile debug-release --test parity_e2e -- --include-ignored --test-threads=1
+          elif [ "${{ inputs.module }}" = "config_e2e" ]; then
+            cargo test --profile debug-release --test parity_config_e2e -- --include-ignored --test-threads=1
           else
             cargo test --profile debug-release --test "parity_${{ inputs.module }}" -- --test-threads=1
           fi
+
+  dual-run:
+    name: Dual Run
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.module == 'dual_run')
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build Rust binary
+        run: cargo build --profile debug-release
+
+      - name: Build Java
+        run: cd VarDictJava && ./gradlew installDist -q
+
+      - name: Generate E2E golden fixtures
+        run: bash scripts/gen_e2e_golden_tsv.sh --all-configs --push-only
+
+      - name: Run dual-run comparison
+        run: python3 scripts/dual_run.py --push-only --all-configs --verbose
+
+      - name: Run E2E push parity with both implementations
+        if: success() || failure()
+        run: VARDICT_IMPL=both cargo test --profile debug-release --test parity_e2e parity_e2e_push -- --exact --test-threads=1
+
+      - name: Run config E2E push parity with both implementations
+        if: success() || failure()
+        run: VARDICT_IMPL=both cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push -- --exact --test-threads=1

@@ -1,5 +1,8 @@
 /target
 tmp/
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/target
 # Testdata: track fixtures and region configs, ignore large binaries
 testdata/*.bam
 testdata/*.bai

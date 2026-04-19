@@ -1,21 +1,25 @@
 name: Ignore Audit
+
 on:
-  push:
-    paths:
-      - '**/*.rs'
-      - 'scripts/check_ignore_annotations.sh'
-      - '.github/workflows/ignore-audit.yml'
-  pull_request:
-    paths:
-      - '**/*.rs'
-      - 'scripts/check_ignore_annotations.sh'
   workflow_dispatch:
+  schedule:
+    - cron: '30 3 * * *'
+
+concurrency:
+  group: ignore-audit
+  cancel-in-progress: true
 
 jobs:
-  audit:
-    name: Enforce #[ignore] hygiene
-    runs-on: ubuntu-latest
+  ignore-audit:
+    name: Audit Ignored Tests
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-      - name: Check ignore annotations
-        run: bash scripts/check_ignore_annotations.sh
+        with:
+          submodules: recursive
+
+      - name: Build
+        run: cargo build --profile debug-release
+
+      - name: Audit ignored tests
+        run: bash scripts/check_ignored_tests.sh

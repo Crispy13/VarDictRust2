@@ -3921,4 +3921,83 @@ mod tests {
         assert_eq!(result.base_insert, Some(100));
         assert_eq!(result.insertion_sequence, "TG");
     }
+
+    mod pbt {
+        use super::*;
+        use proptest::prelude::*;
+        use proptest::sample::select;
+        use proptest::test_runner::Config as ProptestConfig;
+
+        fn arb_cigar_string() -> impl Strategy<Value = String> {
+            proptest::collection::vec(
+                (
+                    prop_oneof![1..1000i32, Just(1), Just(999)],
+                    select(&['M', 'I', 'D', 'N', 'S', 'H', 'P', '=', 'X']),
+                ),
+                1..10,
+            )
+            .prop_map(|elements: Vec<(i32, char)>| {
+                elements
+                    .into_iter()
+                    .map(|(length, operator)| format!("{length}{operator}"))
+                    .collect::<String>()
+            })
+        }
+
+        fn arb_cigar_op() -> impl Strategy<Value = CigarOp> {
+            prop_oneof![
+                Just(CigarOp::M),
+                Just(CigarOp::I),
+                Just(CigarOp::D),
+                Just(CigarOp::N),
+                Just(CigarOp::S),
+                Just(CigarOp::H),
+                Just(CigarOp::P),
+                Just(CigarOp::Eq),
+                Just(CigarOp::X),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig {
+                cases: 256,
+                ..ProptestConfig::default()
+            })]
+
+            #[test]
+            fn pbt_parse_cigar_roundtrip(cigar_string in arb_cigar_string()) {
+                let parsed = parse_cigar_string(&cigar_string);
+
+                prop_assert_eq!(parsed.to_string(), cigar_string);
+            }
+
+            #[test]
+            fn pbt_get_reference_length_equals_ref_consuming_sum(cigar_string in arb_cigar_string()) {
+                let parsed = parse_cigar_string(&cigar_string);
+                let expected: i32 = parsed
+                    .elements
+                    .iter()
+                    .filter(|element| element.operator.consumes_reference_bases())
+                    .map(|element| element.length)
+                    .sum();
+
+                prop_assert_eq!(parsed.get_reference_length(), expected);
+            }
+
+            #[test]
+            fn pbt_consumes_both_iff_read_and_ref(operator in arb_cigar_op()) {
+                prop_assert_eq!(
+                    operator.consumes_both(),
+                    operator.consumes_read_bases() && operator.consumes_reference_bases()
+                );
+            }
+
+            #[test]
+            fn pbt_get_reference_length_non_negative(cigar_string in arb_cigar_string()) {
+                let parsed = parse_cigar_string(&cigar_string);
+
+                prop_assert!(parsed.get_reference_length() >= 0);
+            }
+        }
+    }
 }

@@ -6,7 +6,7 @@ on:
         description: 'Module to sweep'
         required: true
         type: choice
-        options: [cigar_modifier, cigar_parser, realigner, sam_file_parser, sv_processor, tovars]
+        options: [cigar_modifier, cigar_parser, realigner, sam_file_parser, sv_processor, tovars, e2e, config_e2e]
       shard_scope:
         description: 'Shard-scoped (na12878_exome only, fast)'
         required: false
@@ -27,6 +27,16 @@ jobs:
         with:
           submodules: recursive
       # NOTE: Self-hosted runner must have tmp/sweep_fixtures/ (~240GB)
+
+      - name: Generate E2E golden fixtures
+        if: github.event_name == 'schedule' || inputs.module == 'e2e' || inputs.module == 'config_e2e'
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.module }}" = "config_e2e" ]; then
+            bash scripts/gen_e2e_golden_tsv.sh --all-configs
+          else
+            bash scripts/gen_e2e_golden_tsv.sh --config default
+          fi
+
       - name: Run sweep
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
@@ -35,8 +45,14 @@ jobs:
               echo "=== Sweep: $mod ==="
               cargo test --profile debug-release --test "parity_${mod}_sweep" -- --include-ignored --nocapture
             done
-            echo "=== E2E nightly (all 100 regions) ==="
-            cargo test --profile debug-release --test parity_e2e -- --include-ignored --nocapture
+            echo "=== E2E: full ==="
+            cargo test --profile debug-release --test parity_e2e -- --include-ignored --test-threads=1 --nocapture
+            echo "=== Config E2E: full ==="
+            cargo test --profile debug-release --test parity_config_e2e -- --include-ignored --test-threads=1 --nocapture
+          elif [ "${{ inputs.module }}" = "e2e" ]; then
+            cargo test --profile debug-release --test parity_e2e -- --include-ignored --test-threads=1 --nocapture
+          elif [ "${{ inputs.module }}" = "config_e2e" ]; then
+            cargo test --profile debug-release --test parity_config_e2e -- --include-ignored --test-threads=1 --nocapture
           else
             cargo test --profile debug-release --test "parity_${{ inputs.module }}_sweep" -- --include-ignored --nocapture
           fi

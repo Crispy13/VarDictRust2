@@ -608,4 +608,114 @@ mod tests {
     fn reverse_complemented_sequence_empty_length() {
         assert_eq!(get_reverse_complemented_sequence(b"AACCGGTT", 3, 0), b"");
     }
+
+    mod pbt {
+        use super::*;
+        use proptest::prelude::*;
+        use proptest::test_runner::Config as ProptestConfig;
+
+        fn arb_finite_f64() -> impl Strategy<Value = f64> {
+            prop_oneof![
+                proptest::num::f64::NORMAL.prop_filter("finite", |value| value.is_finite()),
+                Just(0.0),
+                Just(-0.0),
+                Just(f64::MIN_POSITIVE),
+                Just(5e-324_f64),
+                Just(f64::MAX),
+                Just(f64::MIN),
+                (-1e15_f64..1e15_f64),
+            ]
+        }
+
+        fn arb_negative_f64() -> impl Strategy<Value = f64> {
+            prop_oneof![Just(f64::MIN), Just(-f64::MIN_POSITIVE), Just(-5e-324_f64), (-1e15_f64..-f64::MIN_POSITIVE)]
+        }
+
+        fn arb_pattern() -> impl Strategy<Value = &'static str> {
+            prop_oneof![
+                Just("0"),
+                Just("0.0"),
+                Just("0.00"),
+                Just("0.000"),
+                Just("0.0000"),
+                Just("0.00000"),
+            ]
+        }
+
+        fn arb_non_empty_string() -> impl Strategy<Value = String> {
+            proptest::collection::vec(any::<char>(), 1..100)
+                .prop_map(|chars| chars.into_iter().collect())
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig {
+                cases: 256,
+                ..ProptestConfig::default()
+            })]
+
+            #[test]
+            fn pbt_format_half_even_output_parseable_as_f64(
+                pattern in arb_pattern(),
+                value in arb_finite_f64(),
+            ) {
+                prop_assert!(format_half_even(pattern, value).parse::<f64>().is_ok());
+            }
+
+            #[test]
+            fn pbt_round_half_even_is_idempotent(
+                pattern in arb_pattern(),
+                value in arb_finite_f64(),
+            ) {
+                let rounded_once = round_half_even(pattern, value);
+                let rounded_twice = round_half_even(pattern, rounded_once);
+
+                prop_assert_eq!(rounded_twice, rounded_once);
+            }
+
+            #[test]
+            fn pbt_get_rounded_value_to_print_no_trailing_zeros(
+                pattern in arb_pattern(),
+                value in arb_finite_f64(),
+            ) {
+                let rounded = get_rounded_value_to_print(pattern, value);
+
+                prop_assert!(
+                    !rounded.contains('.') || !rounded.ends_with('0'),
+                    "rounded value retained trailing zero: {rounded}"
+                );
+            }
+
+            #[test]
+            fn pbt_zero_gated_format_zero_returns_zero(pattern in arb_pattern()) {
+                prop_assert_eq!(zero_gated_format(pattern, 0.0), "0");
+                prop_assert_eq!(zero_gated_format(pattern, -0.0), "0");
+            }
+
+            #[test]
+            fn pbt_nm_fisher_format_negative_returns_zero(value in arb_negative_f64()) {
+                prop_assert_eq!(nm_fisher_format(value), "0");
+            }
+
+            #[test]
+            fn pbt_complement_base_involution(base in any::<u8>()) {
+                prop_assert_eq!(complement_base(complement_base(base)), base);
+            }
+
+            #[test]
+            fn pbt_reverse_sequence_involution(seq in proptest::collection::vec(any::<u8>(), 0..100)) {
+                prop_assert_eq!(reverse_sequence(&reverse_sequence(&seq)), seq);
+            }
+
+            #[test]
+            fn pbt_complement_sequence_preserves_length(seq in proptest::collection::vec(any::<u8>(), 0..100)) {
+                prop_assert_eq!(complement_sequence(&seq).len(), seq.len());
+            }
+
+            #[test]
+            fn pbt_substr_zero_is_identity(input in arb_non_empty_string()) {
+                let expected = input.as_bytes().to_vec();
+                prop_assert_eq!(substr(input.as_bytes(), 0), expected);
+            }
+        }
+    }
 }

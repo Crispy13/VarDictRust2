@@ -324,52 +324,99 @@ def write_manifest(
     chunk_size: int,
     vardict_commit: str,
 ) -> None:
+    manifest_path = output_dir / "manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing_manifest: dict[str, object] | None = None
+    existing_shards: list[dict[str, object]] = []
+    if manifest_path.exists():
+        try:
+            with manifest_path.open("r", encoding="utf-8") as handle:
+                loaded_manifest = json.load(handle)
+            if not isinstance(loaded_manifest, dict):
+                raise ValueError("manifest root must be a JSON object")
+            loaded_shards = loaded_manifest.get("shards", [])
+            if not isinstance(loaded_shards, list):
+                raise ValueError("manifest shards must be a JSON array")
+            if not all(isinstance(shard, dict) for shard in loaded_shards):
+                raise ValueError("manifest shards must contain JSON objects")
+            existing_manifest = loaded_manifest
+            existing_shards = loaded_shards
+        except (json.JSONDecodeError, ValueError) as exc:
+            corrupt_path = manifest_path.with_suffix(".json.corrupt")
+            manifest_path.rename(corrupt_path)
+            print(
+                f"WARNING: corrupt manifest renamed to {corrupt_path}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    if existing_manifest is not None:
+        existing_commit = existing_manifest.get("vardictjava_commit")
+        if existing_commit is not None and existing_commit != vardict_commit:
+            print(
+                "WARNING: existing manifest vardictjava_commit "
+                f"{existing_commit} differs from current run {vardict_commit}; merging anyway",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    retained_shards = [shard for shard in existing_shards if shard.get("tag") not in selected_tags]
+    new_shards = [
+        {
+            "tag": result.tag,
+            "chrom": result.chrom,
+            "status": result.status,
+            "total_tiles": result.total_tiles,
+            "chunk_count": result.chunk_count,
+            "archive_paths": result.archive_paths,
+            "modules": result.module_stats,
+            "warnings": result.warnings,
+            "error": result.error,
+            "log_path": result.log_path,
+        }
+        for result in results
+    ]
+    merged_shards = sorted(retained_shards + new_shards, key=lambda item: (item.get("tag", ""), item.get("chrom", "")))
+
+    merged_tags = []
+    for tag in ALL_BAM_TAGS:
+        if any(shard.get("tag") == tag for shard in merged_shards):
+            merged_tags.append(tag)
+    for shard in merged_shards:
+        tag = shard.get("tag")
+        if isinstance(tag, str) and tag not in merged_tags:
+            merged_tags.append(tag)
+
+    known_tags = [tag for tag in merged_tags if tag in BAM_MAP]
     manifest = {
         "vardictjava_commit": vardict_commit,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "bam_tags": selected_tags,
-        "bam_paths": {tag: BAM_MAP[tag] for tag in selected_tags},
+        "bam_tags": merged_tags,
+        "bam_paths": {tag: BAM_MAP[tag] for tag in known_tags},
         "workers": workers,
         "chunk_size": chunk_size,
         "module_names": [module_name for module_name, _ in MODULES],
-        "shard_count": len(results),
-        "completed_shards": sum(1 for result in results if result.status == "success"),
-        "skipped_shards": sum(1 for result in results if result.status == "skipped"),
+        "shard_count": len(merged_shards),
+        "completed_shards": sum(1 for shard in merged_shards if shard.get("status") == "success"),
+        "skipped_shards": sum(1 for shard in merged_shards if shard.get("status") == "skipped"),
         "failed_shards": [
             {
-                "tag": result.tag,
-                "chrom": result.chrom,
-                "error": result.error,
-                "log_path": result.log_path,
+                "tag": shard.get("tag", ""),
+                "chrom": shard.get("chrom", ""),
+                "error": shard.get("error", ""),
+                "log_path": shard.get("log_path", ""),
             }
-            for result in results
-            if result.status == "failed"
+            for shard in merged_shards
+            if shard.get("status") == "failed"
         ],
-        "shards": [
-            {
-                "tag": result.tag,
-                "chrom": result.chrom,
-                "status": result.status,
-                "total_tiles": result.total_tiles,
-                "chunk_count": result.chunk_count,
-                "archive_paths": result.archive_paths,
-                "modules": result.module_stats,
-                "warnings": result.warnings,
-                "log_path": result.log_path,
-            }
-            for result in sorted(results, key=lambda item: (item.tag, item.chrom))
-        ],
+        "shards": merged_shards,
     }
-    manifest_path = output_dir / "manifest.json"
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    # M10: atomic manifest update — write to a sibling .tmp, fsync, then rename.
-    # Guarantees readers never observe a partially written manifest.
+
     tmp_path = manifest_path.with_suffix(".json.tmp")
     with tmp_path.open("w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=2)
         handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
     os.replace(tmp_path, manifest_path)
 
 

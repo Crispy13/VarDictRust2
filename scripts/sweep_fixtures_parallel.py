@@ -413,14 +413,9 @@ def write_manifest(
         "failed_shards": [f"{result.tag}/{result.chrom}" for result in failed_shards],
     }
     manifest_path = output_root / "manifest.json"
-    # M10: atomic manifest update — write-then-rename to prevent partial writes.
-    tmp_path = manifest_path.with_suffix(".json.tmp")
-    with tmp_path.open("w", encoding="utf-8") as handle:
+    with manifest_path.open("w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=2, sort_keys=False)
         handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp_path, manifest_path)
 
 
 def emit(message: str, log_handle: TextIO, stream: TextIO = sys.stdout) -> None:

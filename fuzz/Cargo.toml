@@ -1,5 +1,5 @@
 [package]
-name = "vardict_rs-fuzz"
+name = "vardict-rs-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -7,33 +7,32 @@ edition = "2021"
 [package.metadata]
 cargo-fuzz = true
 
+[workspace]
+members = ["."]
+
 [dependencies]
 libfuzzer-sys = "0.4"
 
 [dependencies.vardict_rs]
 path = ".."
 
-# Prevent workspace inheritance issues; declare this crate independent of the
-# parent workspace so `cargo fuzz` manages its own lockfile.
-[workspace]
+[profile.release]
+panic = "unwind"
 
 [[bin]]
-name = "complement_sequence"
-path = "fuzz_targets/complement_sequence.rs"
+name = "fuzz_parse_cigar_string"
+path = "fuzz_targets/fuzz_parse_cigar_string.rs"
 test = false
 doc = false
-bench = false
 
 [[bin]]
-name = "substr_with_len"
-path = "fuzz_targets/substr_with_len.rs"
+name = "fuzz_substr_with_len"
+path = "fuzz_targets/fuzz_substr_with_len.rs"
 test = false
 doc = false
-bench = false
 
 [[bin]]
-name = "fisher_exact"
-path = "fuzz_targets/fisher_exact.rs"
+name = "fuzz_bam_names_parse"
+path = "fuzz_targets/fuzz_bam_names_parse.rs"
 test = false
 doc = false
-bench = false
