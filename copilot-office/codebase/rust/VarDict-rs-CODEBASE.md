@@ -34,7 +34,7 @@ Rows below mirror the Java cache structure so Java↔Rust correspondence can be 
 | Modes | `src/scope.rs` | LOW | [modes.md](modes.md) | not started |
 | SAMFileParser | `src/mods/sam_file_parser.rs` | MEDIUM | [sam_file_parser.md](sam_file_parser.md) | complete |
 | CigarModifier | `src/data.rs` | MEDIUM | [cigar_modifier.md](cigar_modifier.md) | not started |
-| CigarParser | `src/data.rs` | HIGH | [cigar_parser.md](cigar_parser.md) | not started |
+| CigarParser | `src/mods/cigar_parser.rs` | HIGH | [cigar_parser.md](cigar_parser.md) | partial |
 | VariationRealigner | `src/variations.rs` | HIGH | [variation_realigner.md](variation_realigner.md) | not started |
 | StructuralVariantsProcessor | `src/variations.rs` | HIGH | [structural_variants_processor.md](structural_variants_processor.md) | not started |
 | ToVarsBuilder | `src/variations.rs` | MEDIUM | [to_vars_builder.md](to_vars_builder.md) | not started |

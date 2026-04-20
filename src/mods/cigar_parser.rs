@@ -382,12 +382,9 @@ impl CigarParser {
                 1.0
             }
         } else if conf.remove_duplicated_reads && self.total_reads != 0 {
-            // T11: Duprate double round-trip — format then parse to match Java rounding
-            let formatted = format!(
-                "{:.3}",
-                self.duplicate_reads as f64 / self.total_reads as f64
-            );
-            formatted.parse::<f64>().unwrap_or(0.0)
+            // Java rounds the duplicate-rate ratio with `String.format("%.3f", ...)`
+            // before parsing it back to a double.
+            Self::round_duplicate_rate(self.duplicate_reads, self.total_reads)
         } else {
             0.0
         };
@@ -753,6 +750,19 @@ impl CigarParser {
         }
     }
 
+    /// Mirrors Java's `Double.parseDouble(String.format("%.3f", duplicateReads / totalReads))`
+    /// for the non-negative duplicate-rate ratio used by CigarParser.
+    fn round_duplicate_rate(duplicate_reads: i32, total_reads: i32) -> f64 {
+        if total_reads <= 0 {
+            return 0.0;
+        }
+
+        let numerator = i64::from(duplicate_reads.max(0));
+        let denominator = i64::from(total_reads);
+        let scaled = (numerator * 2_000 + denominator) / (2 * denominator);
+        scaled as f64 / 1_000.0
+    }
+
     /// Ported from: CigarParser.java:L224-L653 (parseCigar)
     /// Main per-record CIGAR parsing loop. Extracts variants from a single BAM record.
     #[allow(clippy::too_many_lines)]
@@ -834,8 +844,9 @@ impl CigarParser {
             self.cigar = cigar_from_record(record);
         }
 
-        // Java: CigarParser.java#L295
-        self.cleanup_cigar();
+        // Java caches `cigar` before cleanup and keeps parsing against that cached object.
+        // `cleanupCigar(record)` only rewrites the SAMRecord's cigar, so the parser's working
+        // cigar must stay untouched here.
         // Java: CigarParser.java#L297
         self.start = position;
         self.offset = 0;
@@ -3829,6 +3840,26 @@ mod tests {
         parser.cigar = parse_cigar_string("5S10M3S");
         parser.cleanup_cigar();
         assert_eq!(parser.cigar.to_string(), "5S10M3S");
+    }
+
+    #[test]
+    fn test_cleanup_cigar_would_change_minmatch_length_for_edge_insertions() {
+        let raw = parse_cigar_string("3I10M5I");
+
+        let mut parser = CigarParser::new(false);
+        parser.cigar = raw.clone();
+        parser.cleanup_cigar();
+
+        assert_eq!(CigarParser::get_match_insertion_length(&raw), 18);
+        assert_eq!(CigarParser::get_match_insertion_length(&parser.cigar), 10);
+    }
+
+    #[test]
+    fn test_round_duplicate_rate_matches_java_half_up_examples() {
+        assert_eq!(CigarParser::round_duplicate_rate(1, 8), 125.0 / 1_000.0);
+        assert_eq!(CigarParser::round_duplicate_rate(889, 2_000), 445.0 / 1_000.0);
+        assert_eq!(CigarParser::round_duplicate_rate(1_111, 2_000), 556.0 / 1_000.0);
+        assert_eq!(CigarParser::round_duplicate_rate(3_998, 4_000), 1.0);
     }
 
     #[test]
