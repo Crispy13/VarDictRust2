@@ -35,6 +35,25 @@ pub fn write_module_snapshot<T: Serialize>(
     Ok(())
 }
 
+/// Checks `VARDICT_PARITY_{module_name}` env var. If set, writes a module snapshot
+/// to the specified directory. If unset or empty, does nothing.
+///
+/// Env var convention matches Java's JsonlConfig: `VARDICT_PARITY_CIGAR_PARSER`, etc.
+pub fn maybe_write_module_snapshot<T: Serialize>(module_name: &str, region: &Region, data: &T) {
+    let env_key = format!("VARDICT_PARITY_{}", module_name);
+    match std::env::var(&env_key) {
+        Ok(dir) if !dir.is_empty() => {
+            if let Err(error) = write_module_snapshot(module_name, region, data, Path::new(&dir)) {
+                eprintln!(
+                    "WARNING: parity snapshot write failed for {}: {}",
+                    env_key, error
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Reads the golden data line (line 2) from a JSONL file.
 pub fn load_golden(path: &Path) -> io::Result<String> {
     let file = File::open(path)?;

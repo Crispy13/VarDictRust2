@@ -10,6 +10,7 @@ use crate::mods::sam_file_parser::sam_file_parser_process;
 use crate::mods::simple_post_process::simple_post_process;
 use crate::mods::somatic_post_process::somatic_post_process;
 use crate::mods::{structural_variants_processor, to_vars_builder, variation_realigner};
+use crate::parity::snapshot::maybe_write_module_snapshot;
 use crate::reference::{Reference, ReferenceResource};
 use crate::scope::{AbstractMode, GlobalReadOnlyScope, Scope};
 use crate::utils::tsv_join;
@@ -28,6 +29,11 @@ fn try_to_get_reference(reference_resource: &ReferenceResource, region: &Region)
 
 fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
     let parsed_scope = sam_file_parser_process(scope);
+    maybe_write_module_snapshot(
+        "SAM_FILE_PARSER",
+        &parsed_scope.region,
+        &parsed_scope.data.initial_data,
+    );
     let Scope {
         bam,
         region,
@@ -68,6 +74,8 @@ fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
     );
     let mut records = std::iter::from_fn(|| data.next_record());
     let variation_data = parser.process(&mut records, &header, &chr_name);
+    maybe_write_module_snapshot("CIGAR_PARSER", &region, &variation_data);
+    maybe_write_module_snapshot("CIGAR_MODIFIER", &region, &parser.cigar_modifier_snapshots);
     data.close();
 
     let variation_scope = Scope {
@@ -81,6 +89,7 @@ fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
         data: variation_data,
     };
     let realigned_scope = variation_realigner::process(variation_scope);
+    maybe_write_module_snapshot("REALIGNER", &realigned_scope.region, &realigned_scope.data);
     finalize_pipeline(realigned_scope)
 }
 
@@ -127,6 +136,7 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
         "",
         0,
     );
+    maybe_write_module_snapshot("SV_PROCESSOR", &region, &data);
 
     let aligned_data = to_vars_builder::process(
         data.max_read_length.unwrap_or(max_read_length),
@@ -137,6 +147,7 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
         &mut data.non_insertion_variants,
         data.duprate,
     );
+    maybe_write_module_snapshot("TOVARS", &region, &aligned_data);
 
     Scope {
         bam,

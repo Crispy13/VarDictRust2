@@ -9,8 +9,8 @@ use rust_htslib::bam::{self, HeaderView, record::Aux};
 
 use crate::config::{MINMAPBASE, MINSVCDIST, MINSVPOS, SEED_1};
 use crate::data::{
-    BaseInsertion, Mate, Region, SVStructures, Sclip, SortedStringMap, Variation, VariationData,
-    VariationMap,
+    BaseInsertion, Mate, ModifiedCigar, Region, SVStructures, Sclip, SortedStringMap, Variation,
+    VariationData, VariationMap,
 };
 use crate::mods::cigar_modifier::modify_cigar;
 use crate::mods::sam_file_parser::get_mate_reference_name;
@@ -237,6 +237,8 @@ pub struct CigarParser {
     pub duplicate_reads: i32,
     pub discordant_count: i32,
     pub svflag: bool,
+    pub snapshot_cigar_modifier: bool,
+    pub cigar_modifier_snapshots: Vec<ModifiedCigar>,
     pub offset: i32,
     pub cigar_element_length: i32,
     pub read_position_including_soft_clipped: i32,
@@ -275,6 +277,9 @@ impl CigarParser {
             duplicate_reads: 0,
             discordant_count: 0,
             svflag,
+            snapshot_cigar_modifier: std::env::var("VARDICT_PARITY_CIGAR_MODIFIER")
+                .map_or(false, |value| !value.is_empty()),
+            cigar_modifier_snapshots: Vec::new(),
             offset: 0,
             cigar_element_length: 0,
             read_position_including_soft_clipped: 0,
@@ -834,6 +839,9 @@ impl CigarParser {
                 &self.region,
                 self.max_read_length,
             );
+            if self.snapshot_cigar_modifier {
+                self.cigar_modifier_snapshots.push(modified.clone());
+            }
             position = modified.position;
             self.cigar = parse_cigar_string(&modified.cigar);
             query_sequence = modified.query_sequence;

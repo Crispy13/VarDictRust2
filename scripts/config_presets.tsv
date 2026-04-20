@@ -1,6 +1,45 @@
-default		Default configuration (no extra flags).
-sensitive	-f 0.005 -r 1 -q 15	Low thresholds for high-sensitivity calling.
-strict	-f 0.05 -r 4 -q 30	High thresholds for aggressively filtered calls.
-mismatch_tolerant	-m 15 -X 5	Relax mismatch and extension limits during realignment.
-low_bias	-B 1 -f 0.02	Lower strand-bias bar while keeping moderate frequency filtering.
-clinical_wgs	-f 0.001 -r 1 -q 20 -m 12	Ultra-sensitive whole-genome style preset.
+# name	flags	description	tier
+T1-01		Default configuration	1
+T1-02	-f 0.005 -r 1 -q 15	Low thresholds for high-sensitivity calling	1
+T1-03	-f 0.05 -r 4 -q 30	High thresholds for strict filtering	1
+T1-04	-m 15 -X 5	Relax mismatch and extension limits	1
+T1-05	-B 1 -f 0.02	Lower bias bar with moderate freq	1
+T1-06	-f 0.001 -r 1 -q 20 -m 12	Ultra-sensitive whole-genome style	1
+T1-07	-f 0.1	High freq threshold only	1
+T1-08	-r 8	High min reads only	1
+T1-09	-q 10	Very low quality threshold	1
+T1-10	-q 25	Slightly elevated quality	1
+T1-11	-m 4	Strict mismatch limit	1
+T1-12	-m 20	Very relaxed mismatch	1
+T1-13	-X 1	Minimal extension	1
+T1-14	-B 4	High bias read requirement	1
+T2-01	-f 0.005 -q 10	Sensitive freq with low quality	2
+T2-02	-f 0.1 -r 8	High freq with high reads	2
+T2-03	-m 20 -X 5 -q 15	Relaxed realignment with low quality	2
+T2-04	-f 0.001 -B 1	Ultra-sensitive with low bias	2
+T2-05	-r 4 -q 30 -m 4	Strict across multiple params	2
+T2-06	-f 0.02 -m 12 -X 3	Moderate freq with relaxed realignment	2
+T2-07	-f 0.05 -r 1 -B 4	Medium freq with min reads 1 and high bias	2
+T2-08	-q 25 -m 15	Elevated quality with relaxed mismatch	2
+T2-09	-f 0.005 -r 4 -q 20	Sensitive freq with elevated reads and quality	2
+T2-10	-B 1 -m 20 -X 5	Low bias with very relaxed realignment	2
+T3-01	-f 0.001 -r 1 -q 10	Ultra-sensitive everything	3
+T3-02	-f 0.1 -r 8 -q 30 -m 4	Ultra-strict everything	3
+T3-03	-f 0.001 -m 20 -X 5 -B 1	Max sensitivity with max realignment tolerance	3
+T3-04	-f 0.05 -r 4 -q 25 -B 4	Medium-strict with high bias bar	3
+T3-05	-r 1 -m 4 -X 1	Min reads with strict realignment	3
+T3-06	-f 0.005 -q 30 -m 15	Sensitive freq but strict quality	3
+T3-07	-r 8 -q 10 -B 1	High reads with low quality and low bias	3
+T3-08	-f 0.02 -r 1 -m 12 -X 3 -B 4	Five-param combo	3
+T3-09	-f 0.001 -r 4 -q 15 -m 20	Sensitive with moderate stringency	3
+T3-10	-f 0.1 -B 1 -m 4 -X 1	High freq with strict realignment and low bias	3
+PW-000	-f 0.005 -r 4	Pairwise: freq x minr	4
+PW-001	-f 0.05 -q 10	Pairwise: freq x goodq	4
+PW-002	-f 0.001 -m 15	Pairwise: freq x mismatch	4
+PW-003	-r 1 -X 5	Pairwise: minr x vext	4
+PW-004	-r 8 -B 1	Pairwise: minr x bias	4
+PW-005	-q 30 -m 20	Pairwise: goodq x mismatch	4
+PW-006	-q 15 -X 1	Pairwise: goodq x vext	4
+PW-007	-m 4 -B 4	Pairwise: mismatch x bias	4
+PW-008	-X 5 -B 1	Pairwise: vext x bias	4
+PW-009	-m 12 -X 3	Pairwise: mismatch x vext	4

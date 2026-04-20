@@ -636,12 +636,50 @@ pub fn load_chr_lengths(fai_path: &str) -> HashMap<String, i32> {
 
 #[allow(dead_code)]
 pub const CONFIG_PRESETS: &[&str] = &[
-    "default",
-    "sensitive",
-    "strict",
-    "mismatch_tolerant",
-    "low_bias",
-    "clinical_wgs",
+    "T1-01",
+    "T1-02",
+    "T1-03",
+    "T1-04",
+    "T1-05",
+    "T1-06",
+    "T1-07",
+    "T1-08",
+    "T1-09",
+    "T1-10",
+    "T1-11",
+    "T1-12",
+    "T1-13",
+    "T1-14",
+    "T2-01",
+    "T2-02",
+    "T2-03",
+    "T2-04",
+    "T2-05",
+    "T2-06",
+    "T2-07",
+    "T2-08",
+    "T2-09",
+    "T2-10",
+    "T3-01",
+    "T3-02",
+    "T3-03",
+    "T3-04",
+    "T3-05",
+    "T3-06",
+    "T3-07",
+    "T3-08",
+    "T3-09",
+    "T3-10",
+    "PW-000",
+    "PW-001",
+    "PW-002",
+    "PW-003",
+    "PW-004",
+    "PW-005",
+    "PW-006",
+    "PW-007",
+    "PW-008",
+    "PW-009",
 ];
 
 fn load_config_presets_raw_tsv() -> Vec<(String, String)> {
@@ -650,16 +688,38 @@ fn load_config_presets_raw_tsv() -> Vec<(String, String)> {
         .unwrap_or_else(|error| panic!("Failed to read {}: {error}", preset_path.display()));
 
     tsv.lines()
-        .filter(|line| !line.trim().is_empty())
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
-            assert_eq!(
-                fields.len(),
-                3,
-                "expected 3 tab-separated fields in {}: {line}",
+            assert!(
+                fields.len() >= 3,
+                "expected at least 3 tab-separated fields in {}: {line}",
                 preset_path.display()
             );
             (fields[0].to_string(), fields[1].to_string())
+        })
+        .collect()
+}
+
+#[allow(dead_code)]
+pub fn load_config_presets_with_tier() -> Vec<(String, String, u8)> {
+    let preset_path = project_root().join("scripts/config_presets.tsv");
+    let tsv = std::fs::read_to_string(&preset_path)
+        .unwrap_or_else(|error| panic!("Failed to read {}: {error}", preset_path.display()));
+
+    tsv.lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert!(
+                fields.len() >= 4,
+                "expected at least 4 tab-separated fields for tier-aware load in {}: {line}",
+                preset_path.display()
+            );
+            let tier: u8 = fields[3].parse().unwrap_or_else(|_| {
+                panic!("Invalid tier value in {}: {}", preset_path.display(), fields[3])
+            });
+            (fields[0].to_string(), fields[1].to_string(), tier)
         })
         .collect()
 }
@@ -700,35 +760,217 @@ pub fn config_preset(name: &str) -> Configuration {
     let mut config = Configuration::default();
 
     match name {
-        "default" => {}
-        "sensitive" => {
+        "default" | "T1-01" => {}
+        "sensitive" | "T1-02" => {
             config.freq = 0.005;
             config.minr = 1;
             config.goodq = 15.0;
         }
-        "strict" => {
+        "strict" | "T1-03" => {
             config.freq = 0.05;
             config.minr = 4;
             config.goodq = 30.0;
         }
-        "mismatch_tolerant" => {
+        "mismatch_tolerant" | "T1-04" => {
             config.mismatch = 15;
             config.vext = 5;
         }
-        "low_bias" => {
+        "low_bias" | "T1-05" => {
             config.min_bias_reads = 1;
             config.freq = 0.02;
         }
-        "clinical_wgs" => {
+        "clinical_wgs" | "T1-06" => {
             config.freq = 0.001;
             config.minr = 1;
             config.goodq = 20.0;
             config.mismatch = 12;
         }
+        "T1-07" => {
+            config.freq = 0.1;
+        }
+        "T1-08" => {
+            config.minr = 8;
+        }
+        "T1-09" => {
+            config.goodq = 10.0;
+        }
+        "T1-10" => {
+            config.goodq = 25.0;
+        }
+        "T1-11" => {
+            config.mismatch = 4;
+        }
+        "T1-12" => {
+            config.mismatch = 20;
+        }
+        "T1-13" => {
+            config.vext = 1;
+        }
+        "T1-14" => {
+            config.min_bias_reads = 4;
+        }
+        "T2-01" => {
+            config.freq = 0.005;
+            config.goodq = 10.0;
+        }
+        "T2-02" => {
+            config.freq = 0.1;
+            config.minr = 8;
+        }
+        "T2-03" => {
+            config.mismatch = 20;
+            config.vext = 5;
+            config.goodq = 15.0;
+        }
+        "T2-04" => {
+            config.freq = 0.001;
+            config.min_bias_reads = 1;
+        }
+        "T2-05" => {
+            config.minr = 4;
+            config.goodq = 30.0;
+            config.mismatch = 4;
+        }
+        "T2-06" => {
+            config.freq = 0.02;
+            config.mismatch = 12;
+            config.vext = 3;
+        }
+        "T2-07" => {
+            config.freq = 0.05;
+            config.minr = 1;
+            config.min_bias_reads = 4;
+        }
+        "T2-08" => {
+            config.goodq = 25.0;
+            config.mismatch = 15;
+        }
+        "T2-09" => {
+            config.freq = 0.005;
+            config.minr = 4;
+            config.goodq = 20.0;
+        }
+        "T2-10" => {
+            config.min_bias_reads = 1;
+            config.mismatch = 20;
+            config.vext = 5;
+        }
+        "T3-01" => {
+            config.freq = 0.001;
+            config.minr = 1;
+            config.goodq = 10.0;
+        }
+        "T3-02" => {
+            config.freq = 0.1;
+            config.minr = 8;
+            config.goodq = 30.0;
+            config.mismatch = 4;
+        }
+        "T3-03" => {
+            config.freq = 0.001;
+            config.mismatch = 20;
+            config.vext = 5;
+            config.min_bias_reads = 1;
+        }
+        "T3-04" => {
+            config.freq = 0.05;
+            config.minr = 4;
+            config.goodq = 25.0;
+            config.min_bias_reads = 4;
+        }
+        "T3-05" => {
+            config.minr = 1;
+            config.mismatch = 4;
+            config.vext = 1;
+        }
+        "T3-06" => {
+            config.freq = 0.005;
+            config.goodq = 30.0;
+            config.mismatch = 15;
+        }
+        "T3-07" => {
+            config.minr = 8;
+            config.goodq = 10.0;
+            config.min_bias_reads = 1;
+        }
+        "T3-08" => {
+            config.freq = 0.02;
+            config.minr = 1;
+            config.mismatch = 12;
+            config.vext = 3;
+            config.min_bias_reads = 4;
+        }
+        "T3-09" => {
+            config.freq = 0.001;
+            config.minr = 4;
+            config.goodq = 15.0;
+            config.mismatch = 20;
+        }
+        "T3-10" => {
+            config.freq = 0.1;
+            config.min_bias_reads = 1;
+            config.mismatch = 4;
+            config.vext = 1;
+        }
+        "PW-000" => {
+            config.freq = 0.005;
+            config.minr = 4;
+        }
+        "PW-001" => {
+            config.freq = 0.05;
+            config.goodq = 10.0;
+        }
+        "PW-002" => {
+            config.freq = 0.001;
+            config.mismatch = 15;
+        }
+        "PW-003" => {
+            config.minr = 1;
+            config.vext = 5;
+        }
+        "PW-004" => {
+            config.minr = 8;
+            config.min_bias_reads = 1;
+        }
+        "PW-005" => {
+            config.goodq = 30.0;
+            config.mismatch = 20;
+        }
+        "PW-006" => {
+            config.goodq = 15.0;
+            config.vext = 1;
+        }
+        "PW-007" => {
+            config.mismatch = 4;
+            config.min_bias_reads = 4;
+        }
+        "PW-008" => {
+            config.vext = 5;
+            config.min_bias_reads = 1;
+        }
+        "PW-009" => {
+            config.mismatch = 12;
+            config.vext = 3;
+        }
         _ => panic!("Unknown config preset: {name}"),
     }
 
     config
+}
+
+#[allow(dead_code)]
+pub fn config_presets_for_tier(tier: u8) -> Vec<&'static str> {
+    CONFIG_PRESETS
+        .iter()
+        .copied()
+        .filter(|name| match tier {
+            1 => name.starts_with("T1-"),
+            2 => name.starts_with("T2-"),
+            3 => name.starts_with("T3-"),
+            4 => name.starts_with("PW-"),
+            _ => false,
+        })
+        .collect()
 }
 
 // ── Step 2.2: init_test_scope ───────────────────────────────────────────────

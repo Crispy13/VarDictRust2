@@ -494,12 +494,31 @@ pub struct SVStructures {
 }
 
 // Java: InitialData L14-L42
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct InitialData {
+    #[serde(rename = "nonInsertionVariants")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub non_insertion_variants: HashMap<i32, VariationMap>,
+
+    #[serde(rename = "insertionVariants")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub insertion_variants: HashMap<i32, VariationMap>,
+
+    #[serde(rename = "refCoverage")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub ref_coverage: HashMap<i32, i32>,
+
+    #[serde(rename = "softClips5End")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub soft_clips_5_end: HashMap<i32, Sclip>,
+
+    #[serde(rename = "softClips3End")]
+    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
     pub soft_clips_3_end: HashMap<i32, Sclip>,
 }
 

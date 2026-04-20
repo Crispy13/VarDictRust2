@@ -3,12 +3,13 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: scripts/gen_e2e_golden_tsv.sh [--push-only] [--force] [--config <name> | --all-configs]
+Usage: scripts/gen_e2e_golden_tsv.sh [--push-only] [--force] [--config <name> | --all-configs] [--tier <n>]
 
   --push-only    Generate only the 10-region push subset
   --force        Regenerate files even if they already exist
   --config NAME  Generate fixtures for a single config preset
   --all-configs  Generate fixtures for every preset from scripts/config_presets.tsv
+    --tier N       Generate fixtures for configs in the specified tier only (1-4)
 EOF
 }
 
@@ -22,15 +23,20 @@ VARDICT_BIN="$VARDICT_DIR/build/install/VarDict/bin/VarDict"
 push_only=false
 force=false
 selected_config=""
+selected_tier=""
 all_configs=false
 
 list_preset_names() {
-    awk -F '\t' 'NF { print $1 }' "$PRESET_TSV"
+    if [[ -n "${selected_tier:-}" ]]; then
+        awk -F '\t' -v tier="$selected_tier" 'NF && $0 !~ /^[[:space:]]*#/ && $4 == tier { print $1 }' "$PRESET_TSV"
+    else
+        awk -F '\t' 'NF && $0 !~ /^[[:space:]]*#/ { print $1 }' "$PRESET_TSV"
+    fi
 }
 
 available_presets() {
     awk -F '\t' '
-        NF {
+        NF && $0 !~ /^[[:space:]]*#/ {
             names[++count] = $1
         }
         END {
@@ -45,7 +51,7 @@ lookup_preset_flags() {
     local preset_name="$1"
 
     awk -F '\t' -v preset_name="$preset_name" '
-        $1 == preset_name {
+        NF && $0 !~ /^[[:space:]]*#/ && $1 == preset_name {
             print $2
             found = 1
             exit
@@ -128,6 +134,14 @@ while [[ $# -gt 0 ]]; do
         --all-configs)
             all_configs=true
             ;;
+        --tier)
+            shift
+            selected_tier="${1:-}"
+            if [[ -z "$selected_tier" ]]; then
+                echo "ERROR: --tier requires a tier number" >&2
+                exit 1
+            fi
+            ;;
         -h|--help)
             usage
             exit 0
@@ -153,6 +167,16 @@ if [[ "$all_configs" == true && -n "$selected_config" ]]; then
     exit 1
 fi
 
+if [[ -n "$selected_tier" && ! "$selected_tier" =~ ^[1-4]$ ]]; then
+    echo "ERROR: --tier must be one of: 1, 2, 3, 4" >&2
+    exit 1
+fi
+
+if [[ -n "$selected_tier" && "$all_configs" != true ]]; then
+    echo "ERROR: --tier requires --all-configs" >&2
+    exit 1
+fi
+
 if [[ ! -x "$VARDICT_BIN" ]]; then
     (cd "$VARDICT_DIR" && ./gradlew installDist -q)
 fi
@@ -165,7 +189,7 @@ fi
 BASE_OUTPUT_DIR="${VARDICT_E2E_FIXTURE_DIR:-tmp/e2e_fixtures}"
 mkdir -p "$BASE_OUTPUT_DIR"
 
-mapfile -t region_rows < <(awk 'NF' "$REGION_TSV")
+mapfile -t region_rows < <(awk 'NF && $0 !~ /^[[:space:]]*#/' "$REGION_TSV")
 if [[ ${#region_rows[@]} -eq 0 ]]; then
     echo "ERROR: No regions found in $REGION_TSV" >&2
     exit 1
@@ -176,7 +200,11 @@ build_region_indices
 if [[ "$all_configs" == true ]]; then
     mapfile -t config_names < <(list_preset_names)
     if [[ ${#config_names[@]} -eq 0 ]]; then
-        echo "ERROR: No config presets found in $PRESET_TSV" >&2
+        if [[ -n "$selected_tier" ]]; then
+            echo "ERROR: No config presets found in $PRESET_TSV for tier $selected_tier" >&2
+        else
+            echo "ERROR: No config presets found in $PRESET_TSV" >&2
+        fi
         exit 1
     fi
 

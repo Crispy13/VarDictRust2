@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
+import os
 import shlex
 import subprocess
 import sys
@@ -18,6 +20,16 @@ JAVA_BUILD_TIMEOUT_SECONDS = 600
 RUN_TIMEOUT_SECONDS = 120
 DIFF_PREVIEW_LIMIT = 20
 PUSH_INDICES = [0, 1, 2, 3, 4, 35, 36, 37, 70, 71]
+SUPPORTED_DEBUG_MODULES = {"cigar_parser", "realigner", "sv_processor", "tovars"}
+UNSUPPORTED_DEBUG_MODULES = {"sam_file_parser", "cigar_modifier"}
+MODULE_PIPELINE_ORDER = [
+    "sam_file_parser",
+    "cigar_parser",
+    "cigar_modifier",
+    "realigner",
+    "sv_processor",
+    "tovars",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,6 +68,13 @@ def parse_args() -> argparse.Namespace:
         help="Run all config presets in file order",
     )
     parser.add_argument(
+        "--tier",
+        type=int,
+        choices=[1, 2, 3, 4],
+        default=None,
+        help="When used with --all-configs, run only configs from the specified tier",
+    )
+    parser.add_argument(
         "--sample-name",
         default=DEFAULT_SAMPLE_NAME,
         help="Sample name passed to both implementations",
@@ -80,6 +99,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print resolved commands and paths",
     )
+    parser.add_argument(
+        "--debug-modules",
+        nargs="+",
+        choices=[
+            "sam_file_parser",
+            "cigar_parser",
+            "cigar_modifier",
+            "realigner",
+            "sv_processor",
+            "tovars",
+        ],
+        default=None,
+        help=(
+            "Capture per-module JSONL intermediates for specified pipeline modules. "
+            "Currently supported: cigar_parser, realigner, sv_processor, tovars. "
+            "Unsupported selections are accepted but skipped at runtime."
+        ),
+    )
     args = parser.parse_args()
 
     if args.region:
@@ -87,6 +124,9 @@ def parse_args() -> argparse.Namespace:
             parser.error("--bam and --ref are required when --region is used")
     elif args.bam or args.ref:
         parser.error("--bam and --ref are only valid with --region")
+
+    if args.tier is not None and not args.all_configs:
+        parser.error("--tier is only valid with --all-configs")
 
     return args
 
@@ -114,23 +154,43 @@ def load_config_presets(preset_path: Path) -> list:
 
     presets = []
     for line_number, raw_line in enumerate(content.splitlines(), start=1):
-        if not raw_line.strip():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
         fields = raw_line.split("\t")
-        if len(fields) != 3:
+        if len(fields) not in (3, 4):
             raise SystemExit(
-                "ERROR: Expected 3 tab-separated fields in {} at line {}: {}".format(
+                "ERROR: Expected 3 or 4 tab-separated fields in {} at line {}: {}".format(
                     preset_path, line_number, raw_line
                 )
             )
-        preset_name, flags, _description = fields
-        presets.append((preset_name, flags))
+
+        preset_name = fields[0]
+        flags = fields[1]
+        if len(fields) >= 4:
+            try:
+                tier = int(fields[3])
+            except ValueError as error:
+                raise SystemExit(
+                    "ERROR: Invalid tier value in {} at line {}: {} ({})".format(
+                        preset_path,
+                        line_number,
+                        fields[3],
+                        error,
+                    )
+                )
+        else:
+            tier = 0
+
+        presets.append((preset_name, flags, tier))
 
     return presets
 
 
 def load_config_preset(preset_path: Path, name: str) -> str:
-    presets = dict(load_config_presets(preset_path))
+    presets = {
+        preset_name: flags for preset_name, flags, _tier in load_config_presets(preset_path)
+    }
 
     if name not in presets:
         available = ", ".join(sorted(presets))
@@ -141,8 +201,15 @@ def load_config_preset(preset_path: Path, name: str) -> str:
     return presets[name]
 
 
-def load_all_config_names(preset_path: Path) -> list:
-    return [preset_name for preset_name, _flags in load_config_presets(preset_path)]
+def load_all_config_names(preset_path: Path, tier: int = None) -> list:
+    presets = load_config_presets(preset_path)
+    if tier is not None:
+        presets = [
+            (preset_name, flags, preset_tier)
+            for preset_name, flags, preset_tier in presets
+            if preset_tier == tier
+        ]
+    return [preset_name for preset_name, _flags, _tier in presets]
 
 
 def load_regions_file(path: Path) -> list:
@@ -235,6 +302,7 @@ def run_impl(
     extra_flags: str,
     is_java: bool,
     verbose: bool,
+    extra_env: dict = None,
 ) -> str:
     thread_flag = ["-th", "1"] if is_java else ["--th", "1"]
     command = [
@@ -254,6 +322,11 @@ def run_impl(
         label = "java" if is_java else "rust"
         print("Running {}: {}".format(label, shell_join(command)))
 
+    env = None
+    if extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
+
     try:
         completed = subprocess.run(
             command,
@@ -261,6 +334,7 @@ def run_impl(
             text=True,
             check=False,
             timeout=RUN_TIMEOUT_SECONDS,
+            env=env,
         )
     except subprocess.TimeoutExpired as error:
         label = "Java" if is_java else "Rust"
@@ -361,6 +435,146 @@ def shell_join(command: list) -> str:
     return " ".join(shlex.quote(part) for part in command)
 
 
+def build_module_env(modules: list, output_dir: Path, side: str) -> dict:
+    env = {}
+    for mod_name in modules:
+        if mod_name not in SUPPORTED_DEBUG_MODULES:
+            continue
+        env_key = "VARDICT_PARITY_{}".format(mod_name.upper())
+        mod_dir = output_dir / "module_snapshots" / side / mod_name
+        mod_dir.mkdir(parents=True, exist_ok=True)
+        env[env_key] = str(mod_dir)
+    return env
+
+
+def diff_module_outputs(output_dir: Path, modules: list, region: str) -> list:
+    results = []
+
+    region_file_suffix = None
+    if ":" in region and "-" in region:
+        chrom, coordinates = region.split(":", 1)
+        start, end = coordinates.split("-", 1)
+        region_file_suffix = "{}_{}-{}.jsonl".format(chrom, start, end)
+
+    for mod_name in MODULE_PIPELINE_ORDER:
+        if mod_name not in modules or mod_name not in SUPPORTED_DEBUG_MODULES:
+            continue
+
+        java_dir = output_dir / "module_snapshots" / "java" / mod_name
+        rust_dir = output_dir / "module_snapshots" / "rust" / mod_name
+        if region_file_suffix:
+            pattern = "{}_{}".format(mod_name.upper(), region_file_suffix)
+        else:
+            pattern = "{}*.jsonl".format(mod_name.upper())
+
+        java_files = sorted(java_dir.glob(pattern))
+        rust_files = sorted(rust_dir.glob(pattern))
+
+        if not java_files and not rust_files:
+            results.append(
+                {
+                    "module": mod_name,
+                    "result": "MISSING",
+                    "detail": "No JSONL files from either side",
+                }
+            )
+            continue
+        if not java_files:
+            results.append({"module": mod_name, "result": "MISSING", "detail": "No Java JSONL"})
+            continue
+        if not rust_files:
+            results.append({"module": mod_name, "result": "MISSING", "detail": "No Rust JSONL"})
+            continue
+
+        try:
+            java_data = java_files[0].read_text(encoding="utf-8").splitlines()
+            rust_data = rust_files[0].read_text(encoding="utf-8").splitlines()
+        except OSError as error:
+            results.append(
+                {
+                    "module": mod_name,
+                    "result": "FAIL",
+                    "detail": "Failed reading JSONL: {}".format(error),
+                }
+            )
+            continue
+
+        if len(java_data) < 2 or len(rust_data) < 2:
+            results.append(
+                {
+                    "module": mod_name,
+                    "result": "FAIL",
+                    "detail": "Incomplete JSONL (missing data line)",
+                }
+            )
+            continue
+
+        if java_data[1] == rust_data[1]:
+            results.append({"module": mod_name, "result": "PASS", "detail": ""})
+            continue
+
+        try:
+            java_json = json.loads(java_data[1])
+            rust_json = json.loads(rust_data[1])
+        except json.JSONDecodeError:
+            results.append(
+                {
+                    "module": mod_name,
+                    "result": "FAIL",
+                    "detail": "Data differs (raw string compare)",
+                }
+            )
+            continue
+
+        if java_json == rust_json:
+            results.append(
+                {
+                    "module": mod_name,
+                    "result": "PASS",
+                    "detail": "Matched after JSON normalization",
+                }
+            )
+        else:
+            results.append(
+                {
+                    "module": mod_name,
+                    "result": "FAIL",
+                    "detail": "Data differs (JSON-normalized)",
+                }
+            )
+
+    return results
+
+
+def print_module_results(region: str, config_name: str, module_results: list) -> None:
+    if not module_results:
+        return
+
+    summary = []
+    for module_result in module_results:
+        entry = "{}={}".format(module_result["module"], module_result["result"])
+        if module_result["detail"]:
+            entry = "{} ({})".format(entry, module_result["detail"])
+        summary.append(entry)
+
+    print("MODULES {} [{}]: {}".format(region, config_name, "; ".join(summary)))
+
+    first_divergent = next(
+        (module_result for module_result in module_results if module_result["result"] != "PASS"),
+        None,
+    )
+    if first_divergent:
+        detail = first_divergent["detail"] or first_divergent["result"]
+        print(
+            "FIRST_DIVERGENT {} [{}]: {} ({})".format(
+                region,
+                config_name,
+                first_divergent["module"],
+                detail,
+            )
+        )
+
+
 def run_comparison(
     region: str,
     bam_path: Path,
@@ -371,7 +585,11 @@ def run_comparison(
     java_bin: Path,
     rust_bin: Path,
     output_dir: Path,
+    debug_modules: list = None,
 ) -> dict:
+    java_env = build_module_env(debug_modules, output_dir, "java") if debug_modules else None
+    rust_env = build_module_env(debug_modules, output_dir, "rust") if debug_modules else None
+
     java_out = run_impl(
         binary=java_bin,
         region=region,
@@ -381,6 +599,7 @@ def run_comparison(
         extra_flags=extra_flags,
         is_java=True,
         verbose=args.verbose,
+        extra_env=java_env,
     )
     rust_out = run_impl(
         binary=rust_bin,
@@ -391,6 +610,7 @@ def run_comparison(
         extra_flags=extra_flags,
         is_java=False,
         verbose=args.verbose,
+        extra_env=rust_env,
     )
 
     matches, diff_text = compare_outputs(java_out, rust_out)
@@ -402,6 +622,7 @@ def run_comparison(
         rust_out=rust_out,
         diff_text=diff_text,
     )
+    module_results = diff_module_outputs(output_dir, debug_modules, region) if debug_modules else []
 
     return {
         "region": region,
@@ -411,6 +632,7 @@ def run_comparison(
         "rust_path": rust_path,
         "diff_path": diff_path if diff_text else None,
         "diff_text": diff_text,
+        "module_results": module_results,
         "error": "",
     }
 
@@ -424,6 +646,7 @@ def run_batch(
     rust_bin: Path,
     output_dir: Path,
     preset_path: Path,
+    debug_modules: list = None,
 ) -> list:
     config_flags = {config_name: load_config_preset(preset_path, config_name) for config_name in configs}
     total = len(regions) * len(configs)
@@ -455,6 +678,7 @@ def run_batch(
                     java_bin=java_bin,
                     rust_bin=rust_bin,
                     output_dir=output_dir,
+                    debug_modules=debug_modules,
                 )
             except SystemExit as error:
                 result = {
@@ -465,6 +689,7 @@ def run_batch(
                     "rust_path": None,
                     "diff_path": None,
                     "diff_text": "",
+                    "module_results": [],
                     "error": str(error),
                 }
             except Exception as error:  # pragma: no cover - defensive isolation for subprocess/file errors
@@ -476,6 +701,7 @@ def run_batch(
                     "rust_path": None,
                     "diff_path": None,
                     "diff_text": "",
+                    "module_results": [],
                     "error": "ERROR: {}".format(error),
                 }
 
@@ -533,6 +759,8 @@ def print_summary_table(results: list) -> int:
             print("DIFF {} [{}]: {}".format(result["region"], result["config"], result["diff_path"]))
         if result["result"] == "ERROR" and result["error"]:
             print("ERROR {} [{}]: {}".format(result["region"], result["config"], result["error"]))
+        if result["module_results"]:
+            print_module_results(result["region"], result["config"], result["module_results"])
 
     return 0 if fail_count == 0 and error_count == 0 else 1
 
@@ -562,8 +790,31 @@ def main() -> int:
     build_java_if_needed(java_bin, project_root, args.verbose)
     ensure_rust_bin_exists(rust_bin)
 
+    if args.debug_modules:
+        unsupported = [module for module in args.debug_modules if module in UNSUPPORTED_DEBUG_MODULES]
+        if unsupported:
+            print(
+                "NOTE: --debug-modules: {} not yet supported (deferred). "
+                "Capturing supported modules only.".format(", ".join(unsupported)),
+                file=sys.stderr,
+            )
+        active_debug_modules = [
+            module for module in args.debug_modules if module in SUPPORTED_DEBUG_MODULES
+        ]
+    else:
+        active_debug_modules = []
+
     if args.all_configs:
-        config_names = load_all_config_names(preset_path)
+        config_names = load_all_config_names(preset_path, tier=args.tier)
+        if not config_names:
+            if args.tier is None:
+                raise SystemExit("ERROR: No config presets found in {}".format(preset_path))
+            raise SystemExit(
+                "ERROR: No config presets found in {} for tier {}".format(
+                    preset_path,
+                    args.tier,
+                )
+            )
     else:
         load_config_preset(preset_path, args.config)
         config_names = [args.config]
@@ -592,6 +843,7 @@ def main() -> int:
                 rust_bin=rust_bin,
                 output_dir=output_dir,
                 preset_path=preset_path,
+                debug_modules=active_debug_modules,
             )
         )
 
@@ -613,6 +865,7 @@ def main() -> int:
                 rust_bin=rust_bin,
                 output_dir=output_dir,
                 preset_path=preset_path,
+                debug_modules=active_debug_modules,
             )
         )
 
@@ -626,16 +879,19 @@ def main() -> int:
         java_bin=java_bin,
         rust_bin=rust_bin,
         output_dir=output_dir,
+        debug_modules=active_debug_modules,
     )
 
     if result["result"] == "PASS":
         print("PASS: {}".format(args.region))
+        print_module_results(result["region"], result["config"], result["module_results"])
         if args.verbose:
             print("Saved Java output to {}".format(result["java_path"]))
             print("Saved Rust output to {}".format(result["rust_path"]))
         return 0
 
     print("FAIL: {}".format(args.region))
+    print_module_results(result["region"], result["config"], result["module_results"])
     print(result["diff_text"])
     print("Saved Java output to {}".format(result["java_path"]))
     print("Saved Rust output to {}".format(result["rust_path"]))

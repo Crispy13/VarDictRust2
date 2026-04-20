@@ -6,7 +6,7 @@ description: >
   reporting divergences. Always use after Port Engineer completes a module.
 name: Parity Verifier
 tools: [vscode/memory, vscode/resolveMemoryFileUri, execute, read, search, edit]
-model: ['GPT-5.4 (copilot)', ]
+model: 'GPT-5.4 (copilot)'
 user-invocable: false
 disable-model-invocation: false
 ---
@@ -42,6 +42,9 @@ Dispatched on Tier 2 failure. Read the `shard-diagnosis` skill. Diagnose the fai
 
 ### Tier 2 Config Expansion (tiered-config-test)
 Dispatched after logic-parity-audit VERIFIED. Read the `tiered-config-test` skill and follow its tiered procedure.
+
+### Config E2E Diagnosis (config-e2e-diagnosis)
+Dispatched as the Final Gate after all modules pass their per-module cycle. Read the `config-e2e-diagnosis` skill and follow its 5-phase procedure. Execute Phases 1, 2, and 5 (run tests, isolate module, verify fixes). Report failures with identified root-cause module for Port Engineer routing.
 
 ## Report Templates
 
@@ -125,4 +128,44 @@ Module is ready for Review Gate.
 
 ## Recommendation
 Run shard-diagnosis on failing config, then mismatch-repair.
+```
+
+### CONFIG-E2E — PASS
+
+```markdown
+# Config E2E Diagnosis: PASS
+**Date:** {date}
+**Status:** ✅ CONFIG E2E GATE PASSED
+All config presets produce byte-identical E2E output to Java across {N} test cells.
+
+## Summary
+- Configs tested: {config_count}
+- Regions tested: {region_count}
+- Total cells: {total}
+
+## Recommendation
+E2E config gate passed. Project is ready for release validation.
+```
+
+### CONFIG-E2E — FAIL
+
+```markdown
+# Config E2E Diagnosis: FAIL
+**Date:** {date}
+**Status:** ❌ CONFIG E2E FAILURE — Module Isolated
+
+## Failing Cells
+| Config | Region | Root-Cause Module |
+|--------|--------|-------------------|
+| {config} | {region} | {module} |
+
+## First Divergence (per failure)
+**Module:** {module}
+**Test:** parity_{module}_sweep / fixture {name}
+**Divergent Field:** {field}
+**Java Value:** {java_value}
+**Rust Value:** {rust_value}
+
+## Recommendation
+Dispatch Port Engineer with `mismatch-repair` for module `{module}`. Failing test to be created in Phase 3.
 ```

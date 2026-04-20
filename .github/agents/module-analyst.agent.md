@@ -7,7 +7,7 @@ description: >
   for downstream implementation.
 name: Module Analyst
 tools: [vscode/memory, vscode/resolveMemoryFileUri, read, search, web]
-model: ['Claude Opus 4.7 (copilot)', 'Claude Opus 4.6 (copilot)', ]
+model: 'Claude Opus 4.6 (copilot)'
 user-invocable: false
 disable-model-invocation: false
 ---
