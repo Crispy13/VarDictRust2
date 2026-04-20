@@ -11,13 +11,14 @@ description: >
 
 ## When to Use
 - After all pipeline modules pass their per-module parity cycle (Steps 0-7)
-- A config E2E test (`parity_config_e2e_push` or `parity_config_e2e_all`) fails
+- A config E2E test from the `parity_config_e2e_push_*` family or `parity_config_e2e_all` fails
 - You need to trace an E2E mismatch back to the responsible module
 
 ## Prerequisites
 - All 6 modules have passed per-module Tier 1 + Tier 2 gates
 - `parity_config_e2e.rs` tests exist and golden fixtures are generated
 - Java and Rust binaries are built
+- Install nextest first if it is not already available: `cargo install cargo-nextest --locked`.
 
 ## Pipeline Module Order (diagnosis sequence)
 1. sam_file_parser
@@ -33,9 +34,9 @@ description: >
 Identify which (config, region) pairs produce mismatches at E2E level.
 
 ### Procedure
-1. Run `parity_config_e2e_push` (10 regions × 44 configs = 440 test cells):
+1. Run the `parity_config_e2e_push_*` test family (10 regions × 44 configs = 440 test cells):
    ```bash
-   cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push -- --exact
+   cargo nextest run --cargo-profile debug-release --test parity_config_e2e -E 'test(/parity_config_e2e_push_/)' -j 10
    ```
 2. If ALL PASS → config E2E gate passes. Report PASS.
 3. If any FAIL → record failing (config, region) pairs from test output.
@@ -148,9 +149,9 @@ Confirm the fix resolves the original failure without introducing regressions.
    ```bash
    cargo test --profile debug-release --test parity_{module}_sweep -- --include-ignored --nocapture
    ```
-3. Re-run `parity_config_e2e_push` — must PASS:
+3. Re-run the `parity_config_e2e_push_*` test family — must PASS:
    ```bash
-   cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push -- --exact
+   cargo nextest run --cargo-profile debug-release --test parity_config_e2e -E 'test(/parity_config_e2e_push_/)' -j 10
    ```
 4. If additional (config, region) pairs still fail, loop back to Phase 2 for the next failure.
 5. When all config E2E tests pass → report CONFIG-E2E PASS.
@@ -168,7 +169,7 @@ Phase 1 → [for each failure:] Phase 2 → Phase 3 → Phase 4 → Phase 5 → 
 ```
 
 The loop terminates when:
-- All config E2E push tests pass (PASS verdict), OR
+- All `parity_config_e2e_push_*` tests pass (PASS verdict), OR
 - A fix introduces a regression requiring manual intervention (ESCALATE)
 
 ## Related Skills

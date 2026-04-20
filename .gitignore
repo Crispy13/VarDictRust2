@@ -16,3 +16,8 @@ copilot-office/missions
 # copilot-office/missions/*/*.md
 # copilot-office/missions/*/copilot-desk/completed-reports
 # copilot-office/missions/*/copilot-desk/completed-stages
+trashcan/
+
+.github/skills/**/evals.json
+.github/skills/**/benchmark.json
+.github/skills/**/review.html

@@ -5,7 +5,7 @@ description: >
   sequencing, enforcing parity gates, escalating modules to Module Analyst.
 name: 🥖Parity-Orchestrator
 tools: [vscode, read, agent, browser, edit, search, web, 'gitkraken/*', todo]
-model: 'Claude Opus 4.6 (copilot)'
+model: 'Claude Opus 4.7 (copilot)'
 user-invocable: true
 disable-model-invocation: true
 agents: [Port Engineer, Parity Verifier, Review Gate, Module Analyst, Gerneral-Purpose Agent, Planner, Explore]
