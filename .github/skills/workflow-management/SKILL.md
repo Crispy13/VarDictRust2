@@ -55,10 +55,11 @@ Read every `SKILL.md` under `.github/skills/*/`:
 |-------|-----------------|
 | Each skill | Name, description, which agents reference it, any agent names mentioned in the body, any file paths referenced, workflow phases |
 
-Current skills (12):
-`change-impact-review`, `codebase-doc-manage`, `faithful-port`, `git-commit`,
-`logic-parity-audit`, `mem-optimization`, `mismatch-repair`, `module-parity-test`,
-`perf-optimization`, `rust-freshness-verification`, `shard-diagnosis`, `tiered-config-test`
+Current skills (15):
+`change-impact-review`, `codebase-doc-manage`, `config-e2e-diagnosis`, `faithful-port`,
+`git-commit`, `logic-parity-audit`, `mem-optimization`, `mismatch-repair`,
+`module-parity-test`, `perf-optimization`, `rust-freshness-verification`,
+`shard-diagnosis`, `tiered-config-test`, `workflow-management`, `workflow-router`
 
 ### 1.3 Instruction Files
 

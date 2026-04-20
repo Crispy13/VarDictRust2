@@ -33,13 +33,13 @@ description: >
 Identify which (config, region) pairs produce mismatches at E2E level.
 
 ### Procedure
-1. Run `parity_config_e2e_push` (10 regions × 6 configs = 60 test cells):
+1. Run `parity_config_e2e_push` (10 regions × 44 configs = 440 test cells):
    ```bash
    cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push -- --exact
    ```
 2. If ALL PASS → config E2E gate passes. Report PASS.
 3. If any FAIL → record failing (config, region) pairs from test output.
-4. **Future expansion:** Promote to `parity_config_e2e_all` (100 regions × 6 configs) and eventually to 44-config coverage via `tiered-config-test` skill tiers.
+4. **Coverage promotion:** Re-run `parity_config_e2e_all` for broader region coverage and use `tiered-config-test` for nightly/sweep expansion across the existing 44-config matrix.
 
 ### Outputs
 - List of failing (config_name, region_str) pairs
@@ -50,19 +50,22 @@ Identify which (config, region) pairs produce mismatches at E2E level.
 ### Goal
 For each failing (config, region) pair, identify which pipeline module first produces divergent output.
 
-### Primary Method: Per-Module Sweep Tests
-Run each module's sweep test with the specific config applied, in pipeline order. The FIRST module whose output diverges from Java golden fixtures is the root cause.
+### Primary Method: `dual_run.py --debug-modules`
+Use `scripts/dual_run.py --debug-modules` to capture per-module JSONL intermediates for the failing region and config, then compare Java vs Rust outputs in pipeline order.
 
 ```bash
-# For each module in pipeline order, test with the failing config:
-PARITY_CONFIG={config_name} PARITY_REGION_INDEX={region_index} \
-  cargo test --profile debug-release --test parity_{module}_sweep -- --nocapture
+python scripts/dual_run.py --region {region} --bam {bam} --ref {ref} \
+    --config {config_name} --debug-modules cigar_parser realigner sv_processor tovars
 ```
 
-If a module's sweep test is not config-aware, run the module's standard parity test and inspect whether the failing region+config produces a mismatch at that module level.
+The script sets `VARDICT_PARITY_{MODULE}` env vars for both Java and Rust, captures JSONL snapshots, and reports the first divergent module in pipeline order.
 
-### Sequential Diagnosis
-Test modules in this order (stop at first failure):
+Supported by `dual_run.py`: `cigar_parser`, `realigner`, `sv_processor`, `tovars`.
+
+Rust-side ready, manual fallback required until `dual_run.py` support lands: `sam_file_parser`, `cigar_modifier`.
+
+### Sequential Diagnosis Order (reference)
+Use this order when narrowing the first divergent stage:
 1. `parity_sam_file_parser` / `parity_sam_file_parser_sweep`
 2. `parity_cigar_parser` / `parity_cigar_parser_sweep`
 3. `parity_cigar_modifier` / `parity_cigar_modifier_sweep`
@@ -70,16 +73,18 @@ Test modules in this order (stop at first failure):
 5. `parity_sv_processor` / `parity_sv_processor_sweep`
 6. `parity_tovars` / `parity_tovars_sweep`
 
-### Primary Method: --debug-modules
-Use `scripts/dual_run.py --debug-modules` to capture per-module JSONL intermediates for direct comparison:
-```bash
-python scripts/dual_run.py --region {region} --bam {bam} --ref {ref} \
-   --config {config_name} --debug-modules cigar_parser realigner sv_processor tovars
-```
-Supported modules: `cigar_parser`, `realigner`, `sv_processor`, `tovars`.
-Unsupported (deferred): `sam_file_parser`, `cigar_modifier`.
+### Secondary Method: Manual `VARDICT_PARITY_{MODULE}` fallback
+For `sam_file_parser` and `cigar_modifier`, use the same failing region and config but set the module env var manually because Rust supports these debug snapshots even though `dual_run.py` still marks them deferred:
 
-The script sets `VARDICT_PARITY_{MODULE}` env vars for both Java and Rust, captures JSONL snapshots, and reports the first divergent module in pipeline order.
+```bash
+VARDICT_PARITY_SAM_FILE_PARSER=1 VARDICT_IMPL=rust cargo test \
+   --profile debug-release --test parity_sam_file_parser_sweep -- --nocapture
+
+VARDICT_PARITY_CIGAR_MODIFIER=1 VARDICT_IMPL=rust cargo test \
+   --profile debug-release --test parity_cigar_modifier_sweep -- --nocapture
+```
+
+Mirror the same `VARDICT_PARITY_{MODULE}` variable on the Java side when comparing raw intermediates outside the Rust test harness.
 
 ### Outputs
 - Identified root-cause module name
@@ -169,7 +174,7 @@ The loop terminates when:
 ## Related Skills
 | Skill | Role |
 |-------|------|
-| tiered-config-test | Future: expand from 6 to 44 configs via tier promotion |
+| tiered-config-test | Expand nightly/sweep coverage and tier promotion across the 44-config matrix |
 | shard-diagnosis | Phase 4: field-level diagnosis within identified module |
 | mismatch-repair | Phase 4: fix methodology for Port Engineer |
 | module-parity-test | Phase 5: per-module regression check |

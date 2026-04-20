@@ -52,7 +52,7 @@ After ALL modules complete Steps 0-7 and are committed, run the cross-module E2E
   b. Re-dispatch **Parity Verifier** with `config-e2e-diagnosis`, Phase 5 (verify).
   c. Loop until all config E2E tests pass or escalate after 3 fix cycles.
 
-This gate uses the 6 config presets from `scripts/config_presets.tsv`. Future expansion to 44 configs via `tiered-config-test` tiers.
+This gate uses all 44 config presets from `scripts/config_presets.tsv` (T1, T2, T3, PW tiers). Tier promotion to nightly/sweep coverage flows through `tiered-config-test`.
 
 ### Workflow: Targeted Fix
 
