@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::{Arc, Mutex, RwLock};
@@ -147,6 +148,27 @@ static GLOBAL_READ_ONLY_SCOPE: Lazy<RwLock<Option<GlobalReadOnlyScope>>> =
     Lazy::new(|| RwLock::new(None));
 static GLOBAL_MODE: Lazy<RwLock<Option<SharedMode>>> = Lazy::new(|| RwLock::new(None));
 
+thread_local! {
+    static LOCAL_GROS: RefCell<Option<GlobalReadOnlyScope>> = RefCell::new(None);
+    static LOCAL_MODE: RefCell<Option<SharedMode>> = RefCell::new(None);
+}
+
+fn read_local_scope() -> Option<GlobalReadOnlyScope> {
+    LOCAL_GROS.with(|scope| scope.borrow().clone())
+}
+
+fn write_local_scope(scope: Option<GlobalReadOnlyScope>) {
+    LOCAL_GROS.with(|local_scope| *local_scope.borrow_mut() = scope);
+}
+
+fn read_local_mode() -> Option<SharedMode> {
+    LOCAL_MODE.with(|mode| mode.borrow().clone())
+}
+
+fn write_local_mode(mode: Option<SharedMode>) {
+    LOCAL_MODE.with(|local_mode| *local_mode.borrow_mut() = mode);
+}
+
 fn read_global_scope() -> Option<GlobalReadOnlyScope> {
     match GLOBAL_READ_ONLY_SCOPE.read() {
         Ok(guard) => guard.clone(),
@@ -206,7 +228,9 @@ impl GlobalReadOnlyScope {
     /// Ported from: GlobalReadOnlyScope.instance()
     /// Java source: GlobalReadOnlyScope.java:L15-L17
     pub fn instance() -> GlobalReadOnlyScope {
-        read_global_scope().expect("GlobalReadOnlyScope was not initialized.")
+        read_local_scope()
+            .or_else(read_global_scope)
+            .expect("GlobalReadOnlyScope was not initialized.")
     }
 
     /// Ported from: GlobalReadOnlyScope.init(...)
@@ -236,10 +260,38 @@ impl GlobalReadOnlyScope {
         )));
     }
 
+    /// Installs a thread-local scope override for the current thread only.
+    #[allow(clippy::too_many_arguments)]
+    pub fn init_thread_local(
+        conf: Configuration,
+        chr_lengths: HashMap<String, i32>,
+        sample: impl Into<String>,
+        samplem: Option<String>,
+        amplicon_based_calling: Option<String>,
+        adaptor_forward: HashMap<String, i32>,
+        adaptor_reverse: HashMap<String, i32>,
+    ) {
+        if read_local_scope().is_some() {
+            panic!(
+                "Thread-local GlobalReadOnlyScope was already initialized. Must be initialized only once per thread."
+            );
+        }
+
+        write_local_scope(Some(Self::new(
+            conf,
+            chr_lengths,
+            sample,
+            samplem,
+            amplicon_based_calling,
+            adaptor_forward,
+            adaptor_reverse,
+        )));
+    }
+
     /// Ported from: GlobalReadOnlyScope.getMode()
     /// Java source: GlobalReadOnlyScope.java:L31-L33
     pub fn get_mode() -> Option<SharedMode> {
-        read_global_mode()
+        read_local_mode().or_else(read_global_mode)
     }
 
     /// Ported from: GlobalReadOnlyScope.setMode(AbstractMode)
@@ -254,7 +306,32 @@ impl GlobalReadOnlyScope {
         write_global_mode(Some(run_mode));
     }
 
+    /// Installs a thread-local mode override for the current thread only.
+    pub fn set_mode_thread_local(run_mode: SharedMode) {
+        if read_local_mode().is_some() {
+            panic!(
+                "Thread-local mode was already initialized for GlobalReadOnlyScope. Must be initialized only once per thread."
+            );
+        }
+
+        write_local_mode(Some(run_mode));
+    }
+
     pub fn set_variant_printer(printer: VariantPrinter) {
+        let updated_local_scope = LOCAL_GROS.with(|local_scope| {
+            let mut local_scope = local_scope.borrow_mut();
+            if let Some(scope) = local_scope.as_mut() {
+                scope.variant_printer = printer.clone();
+                true
+            } else {
+                false
+            }
+        });
+
+        if updated_local_scope {
+            return;
+        }
+
         match GLOBAL_READ_ONLY_SCOPE.write() {
             Ok(mut guard) => {
                 let scope = guard
@@ -278,15 +355,72 @@ impl GlobalReadOnlyScope {
         write_global_scope(None);
         write_global_mode(None);
     }
+
+    /// Clears thread-local scope and mode overrides for the current thread only.
+    pub fn clear_thread_local() {
+        write_local_scope(None);
+        write_local_mode(None);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    static TEST_SCOPE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
     struct DummyMode;
 
+    struct AlternateDummyMode;
+
     impl AbstractMode for DummyMode {}
+
+    impl AbstractMode for AlternateDummyMode {}
+
+    struct ScopeStateGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ScopeStateGuard {
+        fn new() -> Self {
+            let lock = TEST_SCOPE_LOCK
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            GlobalReadOnlyScope::clear_thread_local();
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for ScopeStateGuard {
+        fn drop(&mut self) {
+            GlobalReadOnlyScope::clear_thread_local();
+        }
+    }
+
+    fn install_global_scope(sample: &str) {
+        write_global_scope(Some(GlobalReadOnlyScope::new(
+            Configuration::default(),
+            HashMap::new(),
+            sample,
+            None,
+            None,
+            HashMap::new(),
+            HashMap::new(),
+        )));
+        write_global_mode(None);
+    }
+
+    fn init_thread_local_scope(sample: &str) {
+        GlobalReadOnlyScope::init_thread_local(
+            Configuration::default(),
+            HashMap::new(),
+            sample,
+            None,
+            None,
+            HashMap::new(),
+            HashMap::new(),
+        );
+    }
 
     #[test]
     fn scope_with_data_preserves_shared_context() {
@@ -322,6 +456,8 @@ mod tests {
 
     #[test]
     fn global_read_only_scope_lifecycle_supports_clear_and_reinit() {
+        let _guard = ScopeStateGuard::new();
+
         GlobalReadOnlyScope::clear();
 
         let mut chr_lengths = HashMap::new();
@@ -368,6 +504,100 @@ mod tests {
         );
 
         assert_eq!(GlobalReadOnlyScope::instance().sample, "sample");
-        GlobalReadOnlyScope::clear();
+    }
+
+    #[test]
+    fn thread_local_scope_and_mode_override_global_fallback_on_current_thread() {
+        let _guard = ScopeStateGuard::new();
+
+        install_global_scope("global");
+        let global_mode: SharedMode = Arc::new(DummyMode);
+        GlobalReadOnlyScope::set_mode(global_mode);
+
+        init_thread_local_scope("local");
+        let local_mode: SharedMode = Arc::new(AlternateDummyMode);
+        GlobalReadOnlyScope::set_mode_thread_local(local_mode.clone());
+
+        assert_eq!(GlobalReadOnlyScope::instance().sample, "local");
+        let active_mode = GlobalReadOnlyScope::get_mode().expect("local mode should be visible");
+        assert!(Arc::ptr_eq(&active_mode, &local_mode));
+    }
+
+    #[test]
+    fn set_variant_printer_updates_local_scope_when_override_exists() {
+        let _guard = ScopeStateGuard::new();
+
+        init_thread_local_scope("local");
+
+        let output = Arc::new(Mutex::new(String::new()));
+        let local_printer = VariantPrinter::Buffer(output);
+        GlobalReadOnlyScope::set_variant_printer(local_printer.clone());
+
+        assert_eq!(GlobalReadOnlyScope::instance().variant_printer, local_printer);
+    }
+
+    #[test]
+    fn clear_thread_local_restores_global_fallback() {
+        let _guard = ScopeStateGuard::new();
+
+        install_global_scope("global");
+        let global_mode: SharedMode = Arc::new(DummyMode);
+        GlobalReadOnlyScope::set_mode(global_mode.clone());
+
+        init_thread_local_scope("local");
+        let local_mode: SharedMode = Arc::new(AlternateDummyMode);
+        GlobalReadOnlyScope::set_mode_thread_local(local_mode);
+
+        GlobalReadOnlyScope::clear_thread_local();
+
+        assert_eq!(GlobalReadOnlyScope::instance().sample, "global");
+        let active_mode = GlobalReadOnlyScope::get_mode().expect("global mode should be visible");
+        assert!(Arc::ptr_eq(&active_mode, &global_mode));
+    }
+
+    #[test]
+    fn fallback_without_thread_local_override_matches_existing_global_behavior() {
+        let _guard = ScopeStateGuard::new();
+
+        assert!(read_local_scope().is_none());
+        assert!(read_local_mode().is_none());
+
+        install_global_scope("global");
+        let global_mode: SharedMode = Arc::new(DummyMode);
+        GlobalReadOnlyScope::set_mode(global_mode.clone());
+
+        assert_eq!(GlobalReadOnlyScope::instance().sample, "global");
+        let active_mode = GlobalReadOnlyScope::get_mode().expect("global mode should be visible");
+        assert!(Arc::ptr_eq(&active_mode, &global_mode));
+
+        GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Err);
+        assert_eq!(GlobalReadOnlyScope::instance().variant_printer, VariantPrinter::Err);
+    }
+
+    #[test]
+    fn child_thread_does_not_inherit_parent_thread_local_scope() {
+        let _guard = ScopeStateGuard::new();
+
+        install_global_scope("global");
+        let global_mode: SharedMode = Arc::new(DummyMode);
+        GlobalReadOnlyScope::set_mode(global_mode.clone());
+
+        init_thread_local_scope("local");
+        let local_mode: SharedMode = Arc::new(AlternateDummyMode);
+        GlobalReadOnlyScope::set_mode_thread_local(local_mode.clone());
+
+        let child = std::thread::spawn(|| {
+            let scope = GlobalReadOnlyScope::instance();
+            let mode = GlobalReadOnlyScope::get_mode().expect("child should see global mode");
+            (scope.sample, mode)
+        });
+
+        let (child_sample, child_mode) = child.join().expect("child thread should finish");
+
+        assert_eq!(GlobalReadOnlyScope::instance().sample, "local");
+        let parent_mode = GlobalReadOnlyScope::get_mode().expect("parent should still see local mode");
+        assert!(Arc::ptr_eq(&parent_mode, &local_mode));
+        assert_eq!(child_sample, "global");
+        assert!(Arc::ptr_eq(&child_mode, &global_mode));
     }
 }
