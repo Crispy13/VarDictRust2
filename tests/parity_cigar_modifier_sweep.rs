@@ -111,10 +111,10 @@ fn parity_cigar_modifier_sweep() {
     }
 
     let total_archives = archives.len();
-    let (_, first_ref) = common::bam_tag_lookup(&archives[0].0);
+    let (first_bam, first_ref) = common::bam_tag_lookup(&archives[0].0);
     let fai_path = format!("{first_ref}.fai");
     let chr_lengths = common::load_chr_lengths(&fai_path);
-    let _guard = common::init_test_scope(chr_lengths.clone());
+    let _guard = common::init_test_scope_with_bam_global(first_bam, first_ref, chr_lengths.clone());
 
     let (sender, receiver) = bounded::<Tile>(10_000);
     let pool = rayon::ThreadPoolBuilder::new()

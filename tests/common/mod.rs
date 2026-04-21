@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::process::{Command, Output, Stdio};
-use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 use std::{
@@ -975,13 +974,26 @@ pub fn config_presets_for_tier(tier: u8) -> Vec<&'static str> {
 
 // ── Step 2.2: init_test_scope ───────────────────────────────────────────────
 
-static SCOPE_MUTEX: Mutex<()> = Mutex::new(());
+pub struct TestScopeGuard;
+
+impl Drop for TestScopeGuard {
+    fn drop(&mut self) {
+        GlobalReadOnlyScope::clear_thread_local();
+    }
+}
+
+pub struct GlobalTestScopeGuard;
+
+impl Drop for GlobalTestScopeGuard {
+    fn drop(&mut self) {
+        GlobalReadOnlyScope::clear();
+    }
+}
 
 #[allow(dead_code)]
-pub fn init_test_scope(chr_lengths: HashMap<String, i32>) -> MutexGuard<'static, ()> {
-    let guard = SCOPE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    GlobalReadOnlyScope::clear();
-    GlobalReadOnlyScope::init(
+pub fn init_test_scope(chr_lengths: HashMap<String, i32>) -> TestScopeGuard {
+    GlobalReadOnlyScope::clear_thread_local();
+    GlobalReadOnlyScope::init_thread_local(
         Configuration::default(),
         chr_lengths,
         "test_sample",
@@ -990,7 +1002,7 @@ pub fn init_test_scope(chr_lengths: HashMap<String, i32>) -> MutexGuard<'static,
         HashMap::new(),
         HashMap::new(),
     );
-    guard
+    TestScopeGuard
 }
 
 #[allow(dead_code)]
@@ -998,8 +1010,57 @@ pub fn init_test_scope_with_bam(
     bam_path: &str,
     ref_path: &str,
     chr_lengths: HashMap<String, i32>,
-) -> MutexGuard<'static, ()> {
-    let guard = SCOPE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+) -> TestScopeGuard {
+    GlobalReadOnlyScope::clear_thread_local();
+
+    let mut config = Configuration::default();
+    config.bam = Some(BamNames::new(bam_path));
+    config.fasta = ref_path.to_string();
+
+    GlobalReadOnlyScope::init_thread_local(
+        config,
+        chr_lengths,
+        "test_sample",
+        None,
+        None,
+        HashMap::new(),
+        HashMap::new(),
+    );
+
+    TestScopeGuard
+}
+
+#[allow(dead_code)]
+pub fn init_test_scope_with_config(
+    mut config: Configuration,
+    bam_path: &str,
+    reference: &str,
+    chr_lengths: HashMap<String, i32>,
+) -> TestScopeGuard {
+    GlobalReadOnlyScope::clear_thread_local();
+
+    config.bam = Some(BamNames::new(bam_path));
+    config.fasta = reference.to_string();
+
+    GlobalReadOnlyScope::init_thread_local(
+        config,
+        chr_lengths,
+        "test_sample",
+        None,
+        None,
+        HashMap::new(),
+        HashMap::new(),
+    );
+
+    TestScopeGuard
+}
+
+#[allow(dead_code)]
+pub fn init_test_scope_with_bam_global(
+    bam_path: &str,
+    ref_path: &str,
+    chr_lengths: HashMap<String, i32>,
+) -> GlobalTestScopeGuard {
     GlobalReadOnlyScope::clear();
 
     let mut config = Configuration::default();
@@ -1016,33 +1077,7 @@ pub fn init_test_scope_with_bam(
         HashMap::new(),
     );
 
-    guard
-}
-
-#[allow(dead_code)]
-pub fn init_test_scope_with_config(
-    mut config: Configuration,
-    bam_path: &str,
-    reference: &str,
-    chr_lengths: HashMap<String, i32>,
-) -> MutexGuard<'static, ()> {
-    let guard = SCOPE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    GlobalReadOnlyScope::clear();
-
-    config.bam = Some(BamNames::new(bam_path));
-    config.fasta = reference.to_string();
-
-    GlobalReadOnlyScope::init(
-        config,
-        chr_lengths,
-        "test_sample",
-        None,
-        None,
-        HashMap::new(),
-        HashMap::new(),
-    );
-
-    guard
+    GlobalTestScopeGuard
 }
 
 // ── Step 2.3: build_scope_for_test ──────────────────────────────────────────

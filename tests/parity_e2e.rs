@@ -64,8 +64,6 @@ fn run_e2e_suite(indices: Option<&[usize]>, regeneration_command: &str) {
                     run_simple_mode_region(&region_str, bam_str, ref_str, chr_lengths);
                 common::assert_tsv_parity(&rust_actual, &expected, &region_str);
 
-                GlobalReadOnlyScope::clear();
-
                 let java_actual =
                     common::run_java_region(&region_str, bam_str, ref_str, &java_flags);
                 common::assert_tsv_parity(&java_actual, &expected, &region_str);
@@ -118,10 +116,7 @@ fn run_simple_mode_region(
         let captured = Arc::new(Mutex::new(String::new()));
         GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Buffer(captured.clone()));
         simple_mode.not_parallel();
-        let captured = take_captured_output(&captured);
-
-        GlobalReadOnlyScope::clear();
-        captured
+        take_captured_output(&captured)
     };
 
     output
