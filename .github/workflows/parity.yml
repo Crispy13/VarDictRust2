@@ -40,12 +40,6 @@ jobs:
             bash scripts/gen_e2e_golden_tsv.sh --config default
           fi
 
-      - name: Install cargo-nextest
-        if: inputs.module == 'config_e2e'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
-
       - name: Run parity tests
         run: |
           if [ "${{ inputs.module }}" = "all" ]; then
@@ -53,7 +47,7 @@ jobs:
           elif [ "${{ inputs.module }}" = "e2e" ]; then
             cargo test --profile debug-release --test parity_e2e -- --include-ignored --test-threads=1
           elif [ "${{ inputs.module }}" = "config_e2e" ]; then
-            cargo nextest run --cargo-profile debug-release --test parity_config_e2e --run-ignored all -j 10
+            cargo test --profile debug-release --test parity_config_e2e -- --include-ignored --test-threads=10
           else
             cargo test --profile debug-release --test "parity_${{ inputs.module }}" -- --test-threads=1
           fi
@@ -73,11 +67,6 @@ jobs:
       - name: Build Java
         run: cd VarDictJava && ./gradlew installDist -q
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
-
       - name: Generate E2E golden fixtures
         run: bash scripts/gen_e2e_golden_tsv.sh --all-configs --push-only
 
@@ -90,4 +79,4 @@ jobs:
 
       - name: Run config E2E push parity with both implementations
         if: success() || failure()
-        run: VARDICT_IMPL=both cargo nextest run --cargo-profile debug-release --test parity_config_e2e -E 'test(/parity_config_e2e_push_/)' -j 10
+        run: VARDICT_IMPL=both cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push_ -- --test-threads=10

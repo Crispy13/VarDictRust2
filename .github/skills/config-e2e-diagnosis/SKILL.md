@@ -18,7 +18,7 @@ description: >
 - All 6 modules have passed per-module Tier 1 + Tier 2 gates
 - `parity_config_e2e.rs` tests exist and golden fixtures are generated
 - Java and Rust binaries are built
-- Install nextest first if it is not already available: `cargo install cargo-nextest --locked`.
+- `cargo test --test-threads=N` runs the 44 per-config tests in-process (thread-local `GlobalReadOnlyScope` isolation); no `cargo-nextest` install is required.
 
 ## Pipeline Module Order (diagnosis sequence)
 1. sam_file_parser
@@ -36,7 +36,7 @@ Identify which (config, region) pairs produce mismatches at E2E level.
 ### Procedure
 1. Run the `parity_config_e2e_push_*` test family (10 regions × 44 configs = 440 test cells):
    ```bash
-   cargo nextest run --cargo-profile debug-release --test parity_config_e2e -E 'test(/parity_config_e2e_push_/)' -j 10
+   cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push_ -- --test-threads=10
    ```
 2. If ALL PASS → config E2E gate passes. Report PASS.
 3. If any FAIL → record failing (config, region) pairs from test output.
@@ -151,7 +151,7 @@ Confirm the fix resolves the original failure without introducing regressions.
    ```
 3. Re-run the `parity_config_e2e_push_*` test family — must PASS:
    ```bash
-   cargo nextest run --cargo-profile debug-release --test parity_config_e2e -E 'test(/parity_config_e2e_push_/)' -j 10
+   cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push_ -- --test-threads=10
    ```
 4. If additional (config, region) pairs still fail, loop back to Phase 2 for the next failure.
 5. When all config E2E tests pass → report CONFIG-E2E PASS.
