@@ -11,7 +11,7 @@ description: >
 
 ## When to Use
 - After all pipeline modules pass their per-module parity cycle (Steps 0-7)
-- A config E2E test from the `parity_config_e2e_push_*` family or `parity_config_e2e_all` fails
+- A config E2E test from the `parity_config_e2e_push_*` family or `parity_config_e2e_all_*` family fails
 - You need to trace an E2E mismatch back to the responsible module
 
 ## Prerequisites
@@ -40,7 +40,7 @@ Identify which (config, region) pairs produce mismatches at E2E level.
    ```
 2. If ALL PASS → config E2E gate passes. Report PASS.
 3. If any FAIL → record failing (config, region) pairs from test output.
-4. **Coverage promotion:** Re-run `parity_config_e2e_all` for broader region coverage and use `tiered-config-test` for nightly/sweep expansion across the existing 44-config matrix.
+4. **Coverage promotion:** Re-run the `parity_config_e2e_all_*` family for broader region coverage and use `tiered-config-test` for nightly/sweep expansion across the existing 44-config matrix.
 
 ### Outputs
 - List of failing (config_name, region_str) pairs

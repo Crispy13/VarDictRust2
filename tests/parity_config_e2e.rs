@@ -16,7 +16,19 @@ macro_rules! declarative_test {
         $(
             #[test]
             fn $test_name() {
-                run_config_e2e_single($config_name, PUSH_INDICES);
+                run_config_e2e_single($config_name, Some(PUSH_INDICES));
+            }
+        )+
+    };
+}
+
+macro_rules! declarative_test_all {
+    ($(($test_name:ident, $config_name:literal)),+ $(,)?) => {
+        $(
+            #[test]
+            #[ignore = "Nightly: run with cargo nextest --run-ignored all"]
+            fn $test_name() {
+                run_config_e2e_single($config_name, None);
             }
         )+
     };
@@ -69,11 +81,52 @@ declarative_test!(
     (parity_config_e2e_push_pw_009, "PW-009"),
 );
 
-#[test]
-#[ignore = "Nightly config E2E - see parity_config_e2e_push_* for fast gate"]
-fn parity_config_e2e_all() {
-    run_config_e2e_suite(None, "bash scripts/gen_e2e_golden_tsv.sh --all-configs");
-}
+declarative_test_all!(
+    (parity_config_e2e_all_t1_01, "T1-01"),
+    (parity_config_e2e_all_t1_02, "T1-02"),
+    (parity_config_e2e_all_t1_03, "T1-03"),
+    (parity_config_e2e_all_t1_04, "T1-04"),
+    (parity_config_e2e_all_t1_05, "T1-05"),
+    (parity_config_e2e_all_t1_06, "T1-06"),
+    (parity_config_e2e_all_t1_07, "T1-07"),
+    (parity_config_e2e_all_t1_08, "T1-08"),
+    (parity_config_e2e_all_t1_09, "T1-09"),
+    (parity_config_e2e_all_t1_10, "T1-10"),
+    (parity_config_e2e_all_t1_11, "T1-11"),
+    (parity_config_e2e_all_t1_12, "T1-12"),
+    (parity_config_e2e_all_t1_13, "T1-13"),
+    (parity_config_e2e_all_t1_14, "T1-14"),
+    (parity_config_e2e_all_t2_01, "T2-01"),
+    (parity_config_e2e_all_t2_02, "T2-02"),
+    (parity_config_e2e_all_t2_03, "T2-03"),
+    (parity_config_e2e_all_t2_04, "T2-04"),
+    (parity_config_e2e_all_t2_05, "T2-05"),
+    (parity_config_e2e_all_t2_06, "T2-06"),
+    (parity_config_e2e_all_t2_07, "T2-07"),
+    (parity_config_e2e_all_t2_08, "T2-08"),
+    (parity_config_e2e_all_t2_09, "T2-09"),
+    (parity_config_e2e_all_t2_10, "T2-10"),
+    (parity_config_e2e_all_t3_01, "T3-01"),
+    (parity_config_e2e_all_t3_02, "T3-02"),
+    (parity_config_e2e_all_t3_03, "T3-03"),
+    (parity_config_e2e_all_t3_04, "T3-04"),
+    (parity_config_e2e_all_t3_05, "T3-05"),
+    (parity_config_e2e_all_t3_06, "T3-06"),
+    (parity_config_e2e_all_t3_07, "T3-07"),
+    (parity_config_e2e_all_t3_08, "T3-08"),
+    (parity_config_e2e_all_t3_09, "T3-09"),
+    (parity_config_e2e_all_t3_10, "T3-10"),
+    (parity_config_e2e_all_pw_000, "PW-000"),
+    (parity_config_e2e_all_pw_001, "PW-001"),
+    (parity_config_e2e_all_pw_002, "PW-002"),
+    (parity_config_e2e_all_pw_003, "PW-003"),
+    (parity_config_e2e_all_pw_004, "PW-004"),
+    (parity_config_e2e_all_pw_005, "PW-005"),
+    (parity_config_e2e_all_pw_006, "PW-006"),
+    (parity_config_e2e_all_pw_007, "PW-007"),
+    (parity_config_e2e_all_pw_008, "PW-008"),
+    (parity_config_e2e_all_pw_009, "PW-009"),
+);
 
 #[test]
 fn config_preset_alignment() {
@@ -93,6 +146,7 @@ fn config_preset_alignment() {
     }
 }
 
+#[allow(dead_code)]
 fn run_config_e2e_suite(indices: Option<&[usize]>, regeneration_command: &str) {
     let regions = common::load_region_config();
     let fixture_base = common::e2e_fixture_base();
@@ -161,16 +215,19 @@ fn run_config_e2e_suite(indices: Option<&[usize]>, regeneration_command: &str) {
     }
 }
 
-fn run_config_e2e_single(config_name: &str, indices: &[usize]) {
+fn run_config_e2e_single(config_name: &str, indices: Option<&[usize]>) {
     let regions = common::load_region_config();
     let fixture_base = common::e2e_fixture_base();
     let implementation = common::resolve_impl();
-    let regeneration_command = "bash scripts/gen_e2e_golden_tsv.sh --push-only --all-configs";
+    let regeneration_command = match indices {
+        Some(_) => "bash scripts/gen_e2e_golden_tsv.sh --push-only --all-configs",
+        None => "bash scripts/gen_e2e_golden_tsv.sh --all-configs",
+    };
 
     let config = common::config_preset(config_name);
     let java_flags = common::config_preset_java_flags(config_name);
 
-    for (_region_index, region_str, bam_path, ref_path) in select_regions(&regions, Some(indices)) {
+    for (_region_index, region_str, bam_path, ref_path) in select_regions(&regions, indices) {
         let bam_str = bam_path.to_str().unwrap_or_else(|| {
             panic!(
                 "BAM path for region {region_str} was not valid UTF-8: {}",
