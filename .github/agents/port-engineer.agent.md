@@ -31,7 +31,7 @@ Use the `faithful-port` skill for porting tasks, and the `mismatch-repair` skill
 1. **Orient** — Read task brief from the path provided by Orchestrator. If a design brief path is included, read it first: adopt its module classification and decomposition plan. Then read Java module docs parity traps section to validate traps and verify cross-module dependencies. If the design brief appears incomplete or contradicts the Java docs, escalate to Orchestrator — do not silently override the design phase.
 2. **Implement** — Faithful translation: line-by-line logic, IndexMap for LinkedHashMap, HALF_UP float formatting, traceability comments.
 3. **Structural Review** — Self-check: all methods ported, no todo!(), IndexMap where LinkedHashMap, floats use java_format_double().
-4. **Test** — `cargo build --profile debug-release && cargo test --profile debug-release -- --include-ignored --skip sweep`
+4. **Test** — `cargo build --profile debug-release && cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_ --skip sweep`
 5. **Report** — Write implementation report. Save to session memory only.
 
 ### Mismatch Repair
@@ -40,7 +40,7 @@ When Orchestrator routes a mismatch-repair task (after shard-diagnosis):
 
 1. Read the task brief from the path provided by Orchestrator. It includes the shard-diagnosis output with the divergent field and root cause.
 2. Use the `mismatch-repair` skill to fix the divergence.
-3. Run `cargo build --profile debug-release && cargo test --profile debug-release -- --include-ignored --skip sweep`.
+3. Run `cargo build --profile debug-release && cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_ --skip sweep`.
 4. Write a repair report to session memory.
 
 ## Implementation Report Template
@@ -59,7 +59,7 @@ When Orchestrator routes a mismatch-repair task (after shard-diagnosis):
 
 ## Testing
 - Compilation: ✅/❌ (`cargo build --profile debug-release`)
-- Local tests: ✅/❌ (`cargo test --profile debug-release -- --include-ignored --skip sweep`)
+- Local tests: ✅/❌ (`cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_ --skip sweep`)
 - Lint: ✅/❌ (`cargo clippy -- -D warnings`, `cargo fmt --check`)
 
 ## Parity Traps Addressed

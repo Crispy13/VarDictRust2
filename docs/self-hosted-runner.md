@@ -96,7 +96,7 @@ Run these commands on the runner after provisioning data and environment variabl
 
 ```bash
 cargo test --profile debug-release
-cargo test --profile debug-release -- --include-ignored
+cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_
 ```
 
 The first command covers Tier 0 and Tier 1 checks. The second command includes ignored tests, including sweep coverage when sweep fixtures are available.

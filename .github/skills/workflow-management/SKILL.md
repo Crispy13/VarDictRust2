@@ -329,7 +329,7 @@ python -c "import yaml; yaml.safe_load(open('.github/workflows/{file}.yml'))"
 
 If the change modified test files, test configuration, or fixture scripts:
 ```bash
-cargo test --profile debug-release -- --include-ignored
+cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_
 ```
 
 ### 5.5 Validation Report

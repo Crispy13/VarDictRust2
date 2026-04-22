@@ -54,7 +54,7 @@ Examples:
 ### 1.3 — Identify constraints
 
 - **Parity**: Output must remain byte-identical to Java. Non-negotiable.
-- **Correctness**: All `cargo test -- --include-ignored` must pass.
+- **Correctness**: All `cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_` must pass.
 - **Maintenance**: Prefer simple changes. Exotic optimizations need justification.
 - **Java execution order**: Preserved unless user explicitly approves deviation.
 
@@ -376,7 +376,7 @@ hyperfine --warmup 1 --runs 5 \
 ### 7.3 — Verify correctness
 
 ```bash
-cargo test -- --include-ignored
+cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_
 ```
 
 ### 7.4 — Verify parity

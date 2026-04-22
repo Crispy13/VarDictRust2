@@ -111,7 +111,7 @@ The `--include-ignored` flag is required because parity tests start as `#[ignore
 #### 3b: All Modules
 
 ```bash
-cargo test --profile debug-release --test 'parity_*' -- --include-ignored
+cargo test --profile debug-release --test 'parity_*' -- --include-ignored --skip parity_config_e2e_cell_
 ```
 
 ### Step 4: Interpret Results

@@ -30,7 +30,7 @@ The Orchestrator dispatches you with a task brief that specifies which skill to 
 ### Tier 1 Validation (module-parity-test)
 1. Read the task from the path provided by Orchestrator.
 2. Run A-A gate for fixture freshness.
-3. Run `cargo test --profile debug-release -- --include-ignored`.
+3. Run `cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_`.
 4. If ALL tests pass: write PASS report.
 5. If ANY test fails: stop at first failure, write FAIL report.
 

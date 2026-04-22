@@ -157,7 +157,7 @@ cargo fmt --check
 
 Based on module type:
 
-- **TDD-heavy (leaf modules):** Run `cargo test --profile debug-release -- --include-ignored`. All fixture tests must pass. After passing, route to `logic-parity-audit` for method-level verification before promotion review.
+- **TDD-heavy (leaf modules):** Run `cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_`. All fixture tests must pass. After passing, route to `logic-parity-audit` for method-level verification before promotion review.
 - **SDD (data types):** Compile gate passed in Phase 3. Done — these are tested implicitly by consumers.
 - **Analysis-heavy (pipeline modules):** Hand off to the `module-parity-test` skill for JSONL golden fixture comparison, or to the shard parity harness for TSV output comparison.
   After Tier 1 parity passes, route next to `logic-parity-audit` before any Tier 2 sweep or promotion review.

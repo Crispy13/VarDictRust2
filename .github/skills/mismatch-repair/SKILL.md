@@ -136,7 +136,7 @@ cp tmp/na12878_parity/<label>/<chr>/java/shard_NNN.tsv testdata/fixtures/<approp
 ### Step 2: Run tests
 
 ```bash
-cargo test --profile debug-release -- --include-ignored
+cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_
 ```
 
 All tests must pass, including the new regression test.

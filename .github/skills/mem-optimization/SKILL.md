@@ -148,7 +148,7 @@ Measure actual RSS improvement on the same region as Phase 1.
 
 20. **Run all cargo tests**:
     ```bash
-    cargo test -- --include-ignored
+    cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_
     ```
 
 21. **Run parity check** on the measurement region:

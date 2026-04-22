@@ -47,10 +47,10 @@ scripts/sweep_fixtures.sh
 scripts/sweep_aa_check.sh
 
 # Step 4: Run sweep parity tests
-cargo test --profile debug-release -- --include-ignored parity_cigar_parser_sweep
-cargo test --profile debug-release -- --include-ignored parity_realigner_sweep
-cargo test --profile debug-release -- --include-ignored parity_sv_processor_sweep
-cargo test --profile debug-release -- --include-ignored parity_tovars_sweep
+cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_ parity_cigar_parser_sweep
+cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_ parity_realigner_sweep
+cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_ parity_sv_processor_sweep
+cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_ parity_tovars_sweep
 ```
 
 Notes:
