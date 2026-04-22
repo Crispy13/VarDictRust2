@@ -8,6 +8,7 @@ use vardict_rs::data::Region;
 use vardict_rs::modes::SimpleMode;
 use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::GlobalReadOnlyScope;
+use vardict_rs::variations::{clear_variation_utils_scope, configure_variation_utils_scope};
 
 #[derive(Debug, Parser)]
 #[command(name = "vardict_rs")]
@@ -50,7 +51,8 @@ struct ScopeCleanup;
 
 impl Drop for ScopeCleanup {
     fn drop(&mut self) {
-        GlobalReadOnlyScope::clear()
+        GlobalReadOnlyScope::clear();
+        clear_variation_utils_scope();
     }
 }
 
@@ -89,6 +91,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     if let Some(threads) = cli.threads {
         config.threads = threads;
     }
+
+    configure_variation_utils_scope(config.clone(), HashMap::new(), HashMap::new());
 
     GlobalReadOnlyScope::init(
         config,

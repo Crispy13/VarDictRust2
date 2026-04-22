@@ -225,12 +225,18 @@ impl GlobalReadOnlyScope {
         }
     }
 
+    pub fn try_instance() -> Option<GlobalReadOnlyScope> {
+        read_local_scope().or_else(read_global_scope)
+    }
+
+    pub fn try_thread_local_instance() -> Option<GlobalReadOnlyScope> {
+        read_local_scope()
+    }
+
     /// Ported from: GlobalReadOnlyScope.instance()
     /// Java source: GlobalReadOnlyScope.java:L15-L17
     pub fn instance() -> GlobalReadOnlyScope {
-        read_local_scope()
-            .or_else(read_global_scope)
-            .expect("GlobalReadOnlyScope was not initialized.")
+        Self::try_instance().expect("GlobalReadOnlyScope was not initialized.")
     }
 
     /// Ported from: GlobalReadOnlyScope.init(...)

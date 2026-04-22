@@ -7,6 +7,7 @@ use once_cell::sync::Lazy;
 use crate::config::{ADSEED, Configuration, SEED_2};
 use crate::data::{Sclip, Variant, Variation, VariationMap, Vars};
 use crate::patterns::{B_A7, B_T7};
+use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{reverse_sequence, substr_with_len};
 
 #[derive(Clone, Debug, Default)]
@@ -76,6 +77,14 @@ pub enum VarMaybeArg<'a> {
 }
 
 fn current_scope() -> VariationUtilsScope {
+    if let Some(scope) = GlobalReadOnlyScope::try_thread_local_instance() {
+        return VariationUtilsScope {
+            conf: scope.conf,
+            adaptor_forward: scope.adaptor_forward,
+            adaptor_reverse: scope.adaptor_reverse,
+        };
+    }
+
     match VARIATION_UTILS_SCOPE.read() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
@@ -1005,6 +1014,39 @@ mod tests {
         assert!(cleared_scope.adaptor_forward.is_empty());
         assert!(cleared_scope.adaptor_reverse.is_empty());
         assert_eq!(cleared_scope.conf.bias, Configuration::default().bias);
+    }
+
+    #[test]
+    fn current_scope_prefers_thread_local_global_read_only_scope_configuration() {
+        let _guard = TEST_SCOPE_LOCK.lock().expect("test lock poisoned");
+
+        clear_variation_utils_scope();
+        GlobalReadOnlyScope::clear_thread_local();
+
+        let configuration = Configuration {
+            bias: 0.25,
+            min_bias_reads: 4,
+            ..Configuration::default()
+        };
+
+        GlobalReadOnlyScope::init_thread_local(
+            configuration,
+            HashMap::new(),
+            "test_sample",
+            None,
+            None,
+            HashMap::from([(String::from("AAAAAA"), 1)]),
+            HashMap::from([(String::from("TTTTTT"), 1)]),
+        );
+
+        let scope = current_scope();
+        assert_eq!(scope.conf.bias, 0.25);
+        assert_eq!(scope.conf.min_bias_reads, 4);
+        assert!(scope.adaptor_forward.contains_key("AAAAAA"));
+        assert!(scope.adaptor_reverse.contains_key("TTTTTT"));
+
+        GlobalReadOnlyScope::clear_thread_local();
+        clear_variation_utils_scope();
     }
 
     #[test]
