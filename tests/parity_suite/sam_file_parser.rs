@@ -1,5 +1,3 @@
-mod common;
-
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -71,13 +69,13 @@ fn collect_sam_file_parser_result(
 
 #[test]
 fn parity_sam_file_parser_all_regions() {
-    let regions = common::load_region_config();
+    let regions = super::common::load_region_config();
 
     for (region_str, bam_path, ref_path) in &regions {
-        let region = common::parse_region(region_str);
+        let region = super::common::parse_region(region_str);
         let fai_path = format!("{}.fai", ref_path.display());
-        let chr_lengths = common::load_chr_lengths(&fai_path);
-        let _guard = common::init_test_scope(chr_lengths.clone());
+        let chr_lengths = super::common::load_chr_lengths(&fai_path);
+        let _guard = super::common::init_test_scope(chr_lengths.clone());
 
         let reference_resource = Arc::new(ReferenceResource::new(
             ref_path.to_str().unwrap(),
@@ -91,6 +89,6 @@ fn parity_sam_file_parser_all_regions() {
         let actual_json = serde_json::to_string(&actual_result)
             .unwrap_or_else(|error| panic!("Failed to serialize output for {region_str}: {error}"));
 
-        common::assert_module_parity("sam_file_parser", region_str, &actual_json);
+        super::common::assert_module_parity("sam_file_parser", region_str, &actual_json);
     }
 }

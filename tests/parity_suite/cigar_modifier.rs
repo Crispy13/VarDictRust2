@@ -1,5 +1,3 @@
-mod common;
-
 use vardict_rs::data::Region;
 use vardict_rs::mods::cigar_modifier::modify_cigar;
 use vardict_rs::reference::{Reference, ReferenceResource};
@@ -65,13 +63,13 @@ fn rebuild_cigar_modifier_output(
 
 #[test]
 fn parity_cigar_modifier_all_regions() {
-    let regions = common::load_region_config();
+    let regions = super::common::load_region_config();
 
     for (region_str, _bam_path, ref_path) in &regions {
-        let region = common::parse_region(region_str);
+        let region = super::common::parse_region(region_str);
         let fai_path = format!("{}.fai", ref_path.display());
-        let chr_lengths = common::load_chr_lengths(&fai_path);
-        let _guard = common::init_test_scope(chr_lengths.clone());
+        let chr_lengths = super::common::load_chr_lengths(&fai_path);
+        let _guard = super::common::init_test_scope(chr_lengths.clone());
 
         let reference_resource =
             ReferenceResource::new(ref_path.to_str().unwrap(), 1200, 0, chr_lengths, false);
@@ -79,7 +77,7 @@ fn parity_cigar_modifier_all_regions() {
             .get_reference(&region)
             .unwrap_or_else(|error| panic!("Failed to load reference for {region_str}: {error}"));
 
-        let golden_json = common::load_golden_data("cigar_modifier", region_str);
+        let golden_json = super::common::load_golden_data("cigar_modifier", region_str);
         let golden_records: Vec<CigarModRecord> = serde_json::from_str(&golden_json)
             .unwrap_or_else(|error| {
                 panic!("Failed to parse golden fixture for {region_str}: {error}")
@@ -88,6 +86,6 @@ fn parity_cigar_modifier_all_regions() {
         let actual_json = serde_json::to_string(&actual_records)
             .unwrap_or_else(|error| panic!("Failed to serialize output for {region_str}: {error}"));
 
-        common::assert_module_parity("cigar_modifier", region_str, &actual_json);
+        super::common::assert_module_parity("cigar_modifier", region_str, &actual_json);
     }
 }

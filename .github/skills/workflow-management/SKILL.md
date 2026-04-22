@@ -72,6 +72,8 @@ Read every `.instructions.md` under `.github/instructions/`:
 
 Read every file under `tests/`:
 - All `parity_*.rs` test files
+- `tests/parity_suite.rs` and `tests/parity_sweep_suite.rs`
+- Every file under `tests/parity_suite/` and `tests/parity_sweep_suite/`
 - `tests/common/mod.rs`
 
 Note module names, fixture paths, test function names, `#[ignore]` annotations, and
@@ -285,7 +287,7 @@ When creating new files, follow existing conventions:
 - Agents: `.github/agents/{kebab-case}.agent.md`
 - Skills: `.github/skills/{kebab-case}/SKILL.md`
 - Instructions: `.github/instructions/{kebab-case}.instructions.md`
-- Tests: `tests/parity_{module_name}.rs`, `tests/parity_{module_name}_sweep.rs`
+- Tests: `tests/parity_suite/{module_name}.rs`, `tests/parity_sweep_suite/{module_name}_sweep.rs`
 - Scripts: `scripts/{snake_case}.sh` or `scripts/{snake_case}.py`
 
 ---

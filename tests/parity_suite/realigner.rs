@@ -1,5 +1,3 @@
-mod common;
-
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -26,13 +24,13 @@ fn load_chr_lengths(fai_path: &str) -> HashMap<String, i32> {
 
 #[test]
 fn parity_realigner_all_regions() {
-    let regions = common::load_region_config();
+    let regions = super::common::load_region_config();
 
     for (region_str, bam_path, ref_path) in &regions {
-        let region = common::parse_region(region_str);
+        let region = super::common::parse_region(region_str);
         let fai_path = format!("{}.fai", ref_path.display());
         let chr_lengths = load_chr_lengths(&fai_path);
-        let _guard = common::init_test_scope(chr_lengths.clone());
+        let _guard = super::common::init_test_scope(chr_lengths.clone());
 
         let reference_resource = Arc::new(ReferenceResource::new(
             ref_path.to_str().unwrap(),
@@ -49,7 +47,7 @@ fn parity_realigner_all_regions() {
         let reference = Arc::new(reference);
 
         // Load CigarParser golden as input
-        let cp_golden = common::load_golden_data("cigar_parser", region_str);
+        let cp_golden = super::common::load_golden_data("cigar_parser", region_str);
         let variation_data: VariationData = serde_json::from_str(&cp_golden).unwrap_or_else(|e| {
             panic!("Failed to deserialize cigar_parser golden for {region_str}: {e}")
         });
@@ -72,6 +70,6 @@ fn parity_realigner_all_regions() {
             panic!("Failed to serialize realigner output for {region_str}: {e}")
         });
 
-        common::assert_module_parity("realigner", region_str, &result_json);
+        super::common::assert_module_parity("realigner", region_str, &result_json);
     }
 }

@@ -99,22 +99,22 @@ Rust-side ready, manual fallback required until `dual_run.py` support lands: `sa
 
 ### Sequential Diagnosis Order (reference)
 Use this order when narrowing the first divergent stage:
-1. `parity_sam_file_parser` / `parity_sam_file_parser_sweep`
-2. `parity_cigar_parser` / `parity_cigar_parser_sweep`
-3. `parity_cigar_modifier` / `parity_cigar_modifier_sweep`
-4. `parity_realigner` / `parity_realigner_sweep`
-5. `parity_sv_processor` / `parity_sv_processor_sweep`
-6. `parity_tovars` / `parity_tovars_sweep`
+1. `parity_suite sam_file_parser::` / `parity_sweep_suite sam_file_parser_sweep::`
+2. `parity_suite cigar_parser::` / `parity_sweep_suite cigar_parser_sweep::`
+3. `parity_suite cigar_modifier::` / `parity_sweep_suite cigar_modifier_sweep::`
+4. `parity_suite realigner::` / `parity_sweep_suite realigner_sweep::`
+5. `parity_suite sv_processor::` / `parity_sweep_suite sv_processor_sweep::`
+6. `parity_suite tovars::` / `parity_sweep_suite tovars_sweep::`
 
 ### Secondary Method: Manual `VARDICT_PARITY_{MODULE}` fallback
 For `sam_file_parser` and `cigar_modifier`, use the same failing region and config but set the module env var manually because Rust supports these debug snapshots even though `dual_run.py` still marks them deferred:
 
 ```bash
 VARDICT_PARITY_SAM_FILE_PARSER=1 VARDICT_IMPL=rust cargo test \
-   --profile debug-release --test parity_sam_file_parser_sweep -- --nocapture
+   --profile debug-release --test parity_sweep_suite sam_file_parser_sweep:: -- --nocapture --test-threads=1
 
 VARDICT_PARITY_CIGAR_MODIFIER=1 VARDICT_IMPL=rust cargo test \
-   --profile debug-release --test parity_cigar_modifier_sweep -- --nocapture
+   --profile debug-release --test parity_sweep_suite cigar_modifier_sweep:: -- --nocapture --test-threads=1
 ```
 
 Mirror the same `VARDICT_PARITY_{MODULE}` variable on the Java side when comparing raw intermediates outside the Rust test harness.
@@ -132,7 +132,7 @@ Create a reproducible failing test that targets the identified module with the s
 ### Procedure
 1. Extract or generate a fixture for the failing (module, config, region) combination.
 2. Add the fixture to `testdata/fixtures/{module}/` with a config-specific name.
-3. Add a `#[test]` to the module's existing parity test file (e.g., `tests/parity_{module}.rs`):
+3. Add a `#[test]` to the module's existing parity test file (e.g., `tests/parity_suite/{module}.rs`):
    ```rust
    #[test]
    fn parity_{module}_config_{config_name}_{region_safe}() {
@@ -179,7 +179,7 @@ Confirm the fix resolves the original failure without introducing regressions.
 1. Run the Phase 3 test — must PASS.
 2. Run the full module sweep test — must PASS (no regression):
    ```bash
-   cargo test --profile debug-release --test parity_{module}_sweep -- --include-ignored --nocapture
+   cargo test --profile debug-release --test parity_sweep_suite {module}_sweep:: -- --include-ignored --nocapture --test-threads=1
    ```
 3. Re-run the `parity_config_e2e_push_*` test family — must PASS:
    ```bash

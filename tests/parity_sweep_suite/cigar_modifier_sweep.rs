@@ -1,5 +1,3 @@
-mod common;
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_channel::bounded;
@@ -91,7 +89,7 @@ fn parity_cigar_modifier_sweep() {
         return;
     }
 
-    common::check_sweep_manifest();
+    super::common::check_sweep_manifest();
     let archive_root = base.join("v2").join("cigar_modifier");
     if !archive_root.is_dir() {
         eprintln!(
@@ -101,7 +99,7 @@ fn parity_cigar_modifier_sweep() {
         return;
     }
 
-    let archives = common::discover_v2_archives(&base, "cigar_modifier");
+    let archives = super::common::discover_v2_archives(&base, "cigar_modifier");
     if archives.is_empty() {
         eprintln!(
             "parity_cigar_modifier_sweep: skipping, no v2 archives discovered under {}",
@@ -111,10 +109,11 @@ fn parity_cigar_modifier_sweep() {
     }
 
     let total_archives = archives.len();
-    let (first_bam, first_ref) = common::bam_tag_lookup(&archives[0].0);
+    let (first_bam, first_ref) = super::common::bam_tag_lookup(&archives[0].0);
     let fai_path = format!("{first_ref}.fai");
-    let chr_lengths = common::load_chr_lengths(&fai_path);
-    let _guard = common::init_test_scope_with_bam_global(first_bam, first_ref, chr_lengths.clone());
+    let chr_lengths = super::common::load_chr_lengths(&fai_path);
+    let _guard =
+        super::common::init_test_scope_with_bam_global(first_bam, first_ref, chr_lengths.clone());
 
     let (sender, receiver) = bounded::<Tile>(10_000);
     let pool = rayon::ThreadPoolBuilder::new()
@@ -127,7 +126,7 @@ fn parity_cigar_modifier_sweep() {
 
     let producer = std::thread::spawn(move || {
         for (idx, (bam_tag, _chrom, archive_path)) in archives.into_iter().enumerate() {
-            let mut archive_reader = common::V2ArchiveReader::new(&archive_path);
+            let mut archive_reader = super::common::V2ArchiveReader::new(&archive_path);
             for line in &mut archive_reader {
                 let tile = Tile {
                     bam_tag: bam_tag.clone(),
@@ -156,10 +155,10 @@ fn parity_cigar_modifier_sweep() {
                     return None;
                 }
 
-                let (_, ref_path) = common::bam_tag_lookup(&tile.bam_tag);
+                let (_, ref_path) = super::common::bam_tag_lookup(&tile.bam_tag);
                 let reference_resource =
                     ReferenceResource::new(ref_path, 1200, 0, chr_lengths.clone(), false);
-                let region = common::parse_region(&tile.region_str);
+                let region = super::common::parse_region(&tile.region_str);
                 let reference = reference_resource
                     .get_reference(&region)
                     .unwrap_or_else(|error| {
@@ -189,7 +188,7 @@ fn parity_cigar_modifier_sweep() {
                     );
                 }
 
-                if let Some(message) = common::assert_v2_module_parity(
+                if let Some(message) = super::common::assert_v2_module_parity(
                     "cigar_modifier",
                     &tile.region_str,
                     &actual_json,

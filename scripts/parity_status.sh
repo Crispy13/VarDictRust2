@@ -19,12 +19,7 @@ mkdir -p tmp
 
 cargo_output="$(
     cargo test --profile debug-release --color=never \
-        --test parity_cigar_parser \
-        --test parity_cigar_modifier \
-        --test parity_realigner \
-        --test parity_sam_file_parser \
-        --test parity_sv_processor \
-        --test parity_tovars \
+    --test parity_suite \
         2>&1 || true
 )"
 
@@ -37,7 +32,7 @@ ignored_count=0
 error_count=0
 
 for module in "${MODULES[@]}"; do
-    result_line="$(grep -E "^test[[:space:]]+parity_${module}_all_regions[[:space:]]+\.\.\.[[:space:]]+(ok|FAILED|ignored)$" "$OUTPUT_FILE" | tail -n 1 || true)"
+    result_line="$(grep -E "^test[[:space:]]+${module}::parity_${module}_all_regions[[:space:]]+\.\.\.[[:space:]]+(ok|FAILED|ignored)$" "$OUTPUT_FILE" | tail -n 1 || true)"
 
     if [[ -z "$result_line" ]]; then
         module_statuses["$module"]="ERROR"

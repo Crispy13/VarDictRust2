@@ -1,5 +1,3 @@
-mod common;
-
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -28,13 +26,13 @@ fn load_chr_lengths(fai_path: &str) -> HashMap<String, i32> {
 
 #[test]
 fn parity_cigar_parser_all_regions() {
-    let regions = common::load_region_config();
+    let regions = super::common::load_region_config();
 
     for (region_str, bam_path, ref_path) in &regions {
-        let region = common::parse_region(region_str);
+        let region = super::common::parse_region(region_str);
         let fai_path = format!("{}.fai", ref_path.display());
         let chr_lengths = load_chr_lengths(&fai_path);
-        let _guard = common::init_test_scope(chr_lengths.clone());
+        let _guard = super::common::init_test_scope(chr_lengths.clone());
 
         // Build ReferenceResource with real chr_lengths so FASTA loading works
         let reference_resource = ReferenceResource::new(
@@ -111,6 +109,6 @@ fn parity_cigar_parser_all_regions() {
             panic!("Failed to serialize CigarParser output for {region_str}: {e}")
         });
 
-        common::assert_module_parity("cigar_parser", region_str, &result_json);
+        super::common::assert_module_parity("cigar_parser", region_str, &result_json);
     }
 }

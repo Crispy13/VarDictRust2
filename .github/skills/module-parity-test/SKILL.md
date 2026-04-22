@@ -30,10 +30,10 @@ Before running parity tests, verify these are in place:
 
 | Module | Rust Test File | Java Writer | Fixture Dir |
 |--------|---------------|-------------|-------------|
-| `cigar_parser` | `tests/parity_cigar_parser.rs` | `CigarParserJsonl.java` | `testdata/fixtures/cigar_parser/` |
-| `realigner` | `tests/parity_realigner.rs` | `RealignerJsonl.java` | `testdata/fixtures/realigner/` |
-| `sv_processor` | `tests/parity_sv_processor.rs` | `SVProcessorJsonl.java` | `testdata/fixtures/sv_processor/` |
-| `tovars` | `tests/parity_tovars.rs` | `ToVarsBuilderJsonl.java` | `testdata/fixtures/tovars/` |
+| `cigar_parser` | `tests/parity_suite/cigar_parser.rs` | `CigarParserJsonl.java` | `testdata/fixtures/cigar_parser/` |
+| `realigner` | `tests/parity_suite/realigner.rs` | `RealignerJsonl.java` | `testdata/fixtures/realigner/` |
+| `sv_processor` | `tests/parity_suite/sv_processor.rs` | `SVProcessorJsonl.java` | `testdata/fixtures/sv_processor/` |
+| `tovars` | `tests/parity_suite/tovars.rs` | `ToVarsBuilderJsonl.java` | `testdata/fixtures/tovars/` |
 
 ## Procedure
 
@@ -103,7 +103,7 @@ On the benchmarked fixture corpus (8 MiB JSONL), zstd achieves ~95% compression 
 #### 3a: Single Module
 
 ```bash
-cargo test --profile debug-release --test parity_<module> -- --include-ignored
+cargo test --profile debug-release --test parity_suite <module>:: -- --include-ignored
 ```
 
 The `--include-ignored` flag is required because parity tests start as `#[ignore]` and get un-ignored as modules are implemented.
@@ -149,7 +149,7 @@ For each failing test:
 After `mismatch-repair` fixes a divergence, re-run the failing test:
 
 ```bash
-cargo test --profile debug-release --test parity_<module> -- --include-ignored <test_name>
+cargo test --profile debug-release --test parity_suite <module>:: -- --include-ignored <test_name>
 ```
 
 Repeat Steps 4-5 until all parity tests pass.
@@ -187,10 +187,10 @@ The test for module N+1 loads module N's golden JSONL, deserializes it as Rust t
 | `scripts/sample_regions.py` | Sample coverage-stratified regions from a BAM |
 | `testdata/parity_regions.tsv` | 100 sampled regions (3 BAMs × ~33 regions each) |
 | `tests/common/mod.rs` | Shared helpers: `load_region_config()`, `load_golden_data()`, `golden_fixture_path()`, and transparent zstd decompression |
-| `tests/parity_cigar_parser.rs` | CigarParser parity test (ignored until module is ported) |
-| `tests/parity_realigner.rs` | Realigner parity test (ignored) |
-| `tests/parity_sv_processor.rs` | SVProcessor parity test (ignored) |
-| `tests/parity_tovars.rs` | ToVars parity test (ignored) |
+| `tests/parity_suite/cigar_parser.rs` | CigarParser parity test (ignored until module is ported) |
+| `tests/parity_suite/realigner.rs` | Realigner parity test (ignored) |
+| `tests/parity_suite/sv_processor.rs` | SVProcessor parity test (ignored) |
+| `tests/parity_suite/tovars.rs` | ToVars parity test (ignored) |
 
 ## JSONL Format
 

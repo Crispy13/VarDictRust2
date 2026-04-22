@@ -1,10 +1,10 @@
 # Sweep gates - cost-gated, run via sweep.yml
-parity_cigar_modifier_sweep
-parity_cigar_parser_sweep
-parity_realigner_sweep
-parity_sam_file_parser_sweep
-parity_sv_processor_sweep
-parity_tovars_sweep
+prefix:cigar_modifier_sweep::
+prefix:cigar_parser_sweep::
+prefix:realigner_sweep::
+prefix:sam_file_parser_sweep::
+prefix:sv_processor_sweep::
+prefix:tovars_sweep::
 
 # E2E gates - nightly, run via sweep.yml or parity.yml
 parity_e2e_all

@@ -1,5 +1,3 @@
-mod common;
-
 use std::collections::HashMap;
 use vardict_rs::data::RealignedVariationData;
 use vardict_rs::mods::to_vars_builder;
@@ -47,19 +45,19 @@ fn reference_fetch_region(
 
 #[test]
 fn parity_tovars_all_regions() {
-    let regions = common::load_region_config();
+    let regions = super::common::load_region_config();
 
     for (region_str, _bam_path, ref_path) in &regions {
-        let region = common::parse_region(region_str);
+        let region = super::common::parse_region(region_str);
         let fai_path = format!("{}.fai", ref_path.display());
         let chr_lengths = load_chr_lengths(&fai_path);
-        let _guard = common::init_test_scope(chr_lengths.clone());
+        let _guard = super::common::init_test_scope(chr_lengths.clone());
 
         let reference_resource =
             ReferenceResource::new(ref_path.to_str().unwrap(), 1200, 0, chr_lengths, false);
 
         // Load sv_processor golden as input
-        let sv_golden = common::load_golden_data("sv_processor", region_str);
+        let sv_golden = super::common::load_golden_data("sv_processor", region_str);
         let data: RealignedVariationData = serde_json::from_str(&sv_golden).unwrap_or_else(|e| {
             panic!("Failed to deserialize sv_processor golden for {region_str}: {e}")
         });
@@ -91,6 +89,6 @@ fn parity_tovars_all_regions() {
         let result_json = serde_json::to_string(&result)
             .unwrap_or_else(|e| panic!("Failed to serialize tovars output for {region_str}: {e}"));
 
-        common::assert_module_parity("tovars", region_str, &result_json);
+        super::common::assert_module_parity("tovars", region_str, &result_json);
     }
 }

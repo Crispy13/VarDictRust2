@@ -141,7 +141,7 @@ Why the allow list is short: structural review is valuable precisely because it 
 After any auto-fix, validate the workspace before the report is handed off.
 
 - Non-behavioral fixes: run `cargo build --profile debug-release`
-- Behavioral fixes: run `cargo test --profile debug-release --test parity_{module} -- --include-ignored` inside Phase 4 after applying the fix
+- Behavioral fixes: run `cargo test --profile debug-release --test parity_suite {module}:: -- --include-ignored` inside Phase 4 after applying the fix
 
 Behavioral fixes require one extra guardrail: if the module's Tier 1 parity test regresses after the mechanical change, revert that auto-fix immediately and document the finding as `NEEDS_REVIEW` with a note that the mechanical fix caused a regression.
 
