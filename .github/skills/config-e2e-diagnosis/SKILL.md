@@ -20,6 +20,18 @@ description: >
 - Java and Rust binaries are built
 - `cargo test --test-threads=N` runs the 44 per-config tests in-process (thread-local `GlobalReadOnlyScope` isolation); no `cargo-nextest` install is required.
 
+### Single-Cell Invocation (Binary B)
+Run a single cell by its exact name; use this when a failure points to one (config, region) pair.
+
+```bash
+export VARDICT_IMPL=rust
+unset PARITY_REGION_INDEX
+cargo test --profile debug-release --test parity_config_e2e_cells \
+   parity_config_e2e_cell_t1_01_r042 -- --ignored --exact
+```
+
+Cells live in `parity_config_e2e_cells` (libtest-mimic harness, `--test parity_config_e2e_cells`); push tests live in `parity_config_e2e` (standard libtest harness, `--test parity_config_e2e`).
+
 ## Pipeline Module Order (diagnosis sequence)
 1. sam_file_parser
 2. cigar_parser

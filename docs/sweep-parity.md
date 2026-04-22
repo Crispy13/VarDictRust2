@@ -104,3 +104,25 @@ Point it at a directory with the same layout, including `manifest.json` and the 
 
 - `scripts/sweep_aa_check.sh` reports run failures or diffs
   Treat that as a VarDictJava determinism issue first; fix the A-A failure before trusting any Rust-vs-Java sweep result.
+
+## Config E2E Wall-Clock Expectations
+
+| Job | Tests / Cells | Threads | Wall |
+|-----|---------------|---------|------|
+| Binary A (push) | 46 tests | 4 | ~53 s |
+| Binary B (full matrix) | 4,400 cells | 10 | ~980 s |
+| Surface gate (parity.yml push) | push + matrix | 4 / 10 | ~17 min (dominated by the ~16 min full matrix) |
+
+## VARDICT_CELL_SHARD Scaling
+
+- Single-shard `0/1` is the default and is a no-op today; one job runs all 4,400 cells.
+- To fan out to N shards in CI, configure `strategy.matrix.shard: ["0/N", "1/N", ..., "(N-1)/N"]` with `env: VARDICT_CELL_SHARD: ${{ matrix.shard }}`.
+- Each shard runs `ceil(4400/N)` cells; shards are independent and can run in parallel.
+
+```yaml
+strategy:
+  matrix:
+    shard: ["0/4", "1/4", "2/4", "3/4"]
+env:
+  VARDICT_CELL_SHARD: ${{ matrix.shard }}
+```
