@@ -48,11 +48,11 @@ jobs:
             echo "=== E2E: full ==="
             cargo test --profile debug-release --test parity_e2e -- --include-ignored --test-threads=1 --nocapture
             echo "=== Config E2E: full ==="
-            cargo test --profile debug-release --test parity_config_e2e -- --include-ignored --test-threads=10
+            cargo test --profile debug-release --test parity_config_e2e_cells -- --include-ignored --test-threads=10
           elif [ "${{ inputs.module }}" = "e2e" ]; then
             cargo test --profile debug-release --test parity_e2e -- --include-ignored --test-threads=1 --nocapture
           elif [ "${{ inputs.module }}" = "config_e2e" ]; then
-            cargo test --profile debug-release --test parity_config_e2e -- --include-ignored --test-threads=10
+            cargo test --profile debug-release --test parity_config_e2e_cells -- --include-ignored --test-threads=10
           else
             cargo test --profile debug-release --test "parity_${{ inputs.module }}_sweep" -- --include-ignored --nocapture
           fi
