@@ -3,7 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ALLOWLIST_FILE="$SCRIPT_DIR/ignored_tests_allowlist.txt"
+export VARDICT_IMPL="${VARDICT_IMPL:-rust}"
+ALLOWLIST_FILE="${ALLOWLIST_FILE:-$SCRIPT_DIR/ignored_tests_allowlist.txt}"
 
 if [[ ! -f "$ALLOWLIST_FILE" ]]; then
     echo "ERROR: allowlist not found: $ALLOWLIST_FILE" >&2
@@ -17,11 +18,21 @@ echo "Running ignored tests audit..."
 cargo_output="$(cargo test --profile debug-release --color=never -- --ignored --test-threads=1 2>&1 || true)"
 
 declare -A allowlisted_tests=()
+declare -a allowlisted_prefixes=()
 declare -a passing_tests=()
 declare -a unexpected_passes=()
 
 while IFS= read -r test_name; do
     [[ -z "$test_name" ]] && continue
+    if [[ "$test_name" == prefix:* ]]; then
+        test_name="${test_name#prefix:}"
+        if [[ -z "$test_name" ]]; then
+            echo "ERROR: malformed prefix entry: prefix:" >&2
+            exit 1
+        fi
+        allowlisted_prefixes+=("$test_name")
+        continue
+    fi
     allowlisted_tests["$test_name"]=1
 done < <(grep -Ev '^[[:space:]]*($|#)' "$ALLOWLIST_FILE")
 
@@ -33,7 +44,16 @@ while IFS= read -r line; do
         total_results=$((total_results + 1))
         if [[ "$status" == "ok" ]]; then
             passing_tests+=("$test_name")
-            if [[ -z "${allowlisted_tests[$test_name]+x}" ]]; then
+            is_allowlisted="${allowlisted_tests[$test_name]+x}"
+            if [[ -z "$is_allowlisted" ]]; then
+                for prefix in "${allowlisted_prefixes[@]}"; do
+                    if [[ "$test_name" == "$prefix"* ]]; then
+                        is_allowlisted=1
+                        break
+                    fi
+                done
+            fi
+            if [[ -z "$is_allowlisted" ]]; then
                 unexpected_passes+=("$test_name")
             fi
         fi
