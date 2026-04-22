@@ -450,11 +450,11 @@ def build_module_env(modules: list, output_dir: Path, side: str) -> dict:
 def diff_module_outputs(output_dir: Path, modules: list, region: str) -> list:
     results = []
 
-    region_file_suffix = None
+    region_chrom_start_end = None
     if ":" in region and "-" in region:
         chrom, coordinates = region.split(":", 1)
         start, end = coordinates.split("-", 1)
-        region_file_suffix = "{}_{}-{}.jsonl".format(chrom, start, end)
+        region_chrom_start_end = (chrom, start, end)
 
     for mod_name in MODULE_PIPELINE_ORDER:
         if mod_name not in modules or mod_name not in SUPPORTED_DEBUG_MODULES:
@@ -462,13 +462,19 @@ def diff_module_outputs(output_dir: Path, modules: list, region: str) -> list:
 
         java_dir = output_dir / "module_snapshots" / "java" / mod_name
         rust_dir = output_dir / "module_snapshots" / "rust" / mod_name
-        if region_file_suffix:
-            pattern = "{}_{}".format(mod_name.upper(), region_file_suffix)
+        if region_chrom_start_end:
+            chrom, start, end = region_chrom_start_end
+            # Rust emits UPPERCASE module names with dash-separated end coordinates
+            # (src/parity/snapshot.rs). Java emits lowercase module names with
+            # underscore-separated coordinates (JsonlWriter.java sanitizes "-" -> "_").
+            rust_pattern = "{}_{}_{}-{}.jsonl".format(mod_name.upper(), chrom, start, end)
+            java_pattern = "{}_{}_{}_{}.jsonl".format(mod_name.lower(), chrom, start, end)
         else:
-            pattern = "{}*.jsonl".format(mod_name.upper())
+            rust_pattern = "{}*.jsonl".format(mod_name.upper())
+            java_pattern = "{}*.jsonl".format(mod_name.lower())
 
-        java_files = sorted(java_dir.glob(pattern))
-        rust_files = sorted(rust_dir.glob(pattern))
+        java_files = sorted(java_dir.glob(java_pattern))
+        rust_files = sorted(rust_dir.glob(rust_pattern))
 
         if not java_files and not rust_files:
             results.append(

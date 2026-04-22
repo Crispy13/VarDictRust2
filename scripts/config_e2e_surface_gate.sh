@@ -44,7 +44,7 @@ BASELINE="testdata/expected_failing_cells.txt"
 set +e
 cargo test --profile debug-release --test parity_config_e2e_cells -- --include-ignored --test-threads=10 2>&1 | tee tmp/surface-gate-run.log
 set -e
-grep -E '^test parity_config_e2e_cell_.* FAILED$' tmp/surface-gate-run.log | awk '{print $2}' | sort > tmp/surface-gate-fails.txt
+{ grep -E '^test parity_config_e2e_cell_.* FAILED$' tmp/surface-gate-run.log || true; } | awk '{print $2}' | sort > tmp/surface-gate-fails.txt
 diff -u <(sort "$BASELINE") tmp/surface-gate-fails.txt || { echo "FAIL: failing set diverged"; exit 1; }
 
 echo "OK: Binary A 44 push / 0 agg; Binary B 4400 cells; ignore contract verified; failing set matches baseline."
