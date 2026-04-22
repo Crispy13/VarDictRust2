@@ -275,7 +275,16 @@ fn binary_b_list_terse_format_regression() {
     );
 
     let stdout = String::from_utf8(output.stdout).expect("non-UTF8 stdout");
+    let expected_slugs: HashSet<String> = common::CONFIG_PRESETS
+        .iter()
+        .map(|name| common::config_name_to_slug(name))
+        .collect();
+    let expected_indices: HashSet<usize> = (0..100).collect();
+    let mut seen_names = HashSet::new();
+    let mut slug_counts: HashMap<String, usize> = HashMap::new();
+    let mut slug_indices: HashMap<String, HashSet<usize>> = HashMap::new();
     let mut trial_count = 0usize;
+
     for line in stdout.lines() {
         let line = line.trim();
         if let Some(name) = line.strip_suffix(": test") {
@@ -283,38 +292,86 @@ fn binary_b_list_terse_format_regression() {
                 is_valid_cell_name(name),
                 "trial name does not match contract: {name}"
             );
+
+            assert!(
+                seen_names.insert(name.to_string()),
+                "duplicate trial name emitted: {name}"
+            );
+
+            let (slug, region_idx) = parse_cell_slug_and_index(name)
+                .expect("valid trial name must parse into slug and region index");
+            *slug_counts.entry(slug.to_string()).or_default() += 1;
+            slug_indices
+                .entry(slug.to_string())
+                .or_default()
+                .insert(region_idx);
             trial_count += 1;
         }
     }
 
     assert_eq!(
-        trial_count, 100,
-        "Phase 3 smoke expects exactly 100 trials; got {trial_count}"
+        trial_count, 4400,
+        "Phase 4 expects exactly 4400 trials; got {trial_count}"
     );
+
+    assert_eq!(
+        seen_names.len(), 4400,
+        "Phase 4 expects 4400 unique trial names; got {}",
+        seen_names.len()
+    );
+    assert_eq!(
+        slug_counts.len(), expected_slugs.len(),
+        "unexpected slug cardinality in Binary B list output"
+    );
+    assert_eq!(
+        slug_indices.len(), expected_slugs.len(),
+        "unexpected slug coverage cardinality in Binary B list output"
+    );
+
+    for slug in &expected_slugs {
+        assert_eq!(
+            slug_counts.get(slug).copied(),
+            Some(100),
+            "slug {slug} must appear exactly 100 times"
+        );
+        assert_eq!(
+            slug_indices.get(slug),
+            Some(&expected_indices),
+            "slug {slug} must cover the complete region index set 000..=099"
+        );
+    }
 }
 
 fn is_valid_cell_name(name: &str) -> bool {
+    parse_cell_slug_and_index(name).is_some()
+}
+
+fn parse_cell_slug_and_index(name: &str) -> Option<(&str, usize)> {
     let prefix = "parity_config_e2e_cell_";
     let Some(rest) = name.strip_prefix(prefix) else {
-        return false;
+        return None;
     };
     let Some(index) = rest.rfind("_r") else {
-        return false;
+        return None;
     };
     let (slug, digits) = (&rest[..index], &rest[index + 2..]);
     if slug.is_empty() {
-        return false;
+        return None;
     }
     if !slug
         .chars()
         .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
     {
-        return false;
+        return None;
     }
     if digits.len() != 3 {
-        return false;
+        return None;
     }
-    digits.chars().all(|ch| ch.is_ascii_digit())
+    if !digits.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+
+    Some((slug, digits.parse().ok()?))
 }
 
 

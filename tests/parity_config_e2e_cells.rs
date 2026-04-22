@@ -55,19 +55,22 @@ fn parse_shard_env() -> Option<Shard> {
 }
 
 fn build_cell_trials() -> Vec<Trial> {
-    let config_name = "T1-01";
-    let slug = common::config_name_to_slug(config_name);
-    let region_count = common::load_region_config().len();
+    let regions = common::load_region_config();
+    let region_count = regions.len();
     let shard = parse_shard_env();
 
-    let mut trials: Vec<Trial> = (0..region_count)
-        .map(|region_idx| {
-            let trial_name = format!("parity_config_e2e_cell_{}_r{:03}", slug, region_idx);
-            let config_name = config_name.to_string();
-            Trial::test(trial_name, move || {
-                common::run_cell(&config_name, region_idx).map_err(Failed::from)
+    let mut trials: Vec<Trial> = common::CONFIG_PRESETS
+        .iter()
+        .flat_map(|&config_name| {
+            let slug = common::config_name_to_slug(config_name);
+            (0..region_count).map(move |region_idx| {
+                let trial_name = format!("parity_config_e2e_cell_{}_r{:03}", slug, region_idx);
+                let config_name = config_name.to_string();
+                Trial::test(trial_name, move || {
+                    common::run_cell(&config_name, region_idx).map_err(Failed::from)
+                })
+                .with_ignored_flag(true)
             })
-            .with_ignored_flag(true)
         })
         .collect();
 
