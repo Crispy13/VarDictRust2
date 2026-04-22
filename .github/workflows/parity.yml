@@ -20,6 +20,9 @@ jobs:
     name: Tier 1 Parity — ${{ inputs.module }}
     if: github.event_name == 'workflow_dispatch' && inputs.module != 'dual_run'
     runs-on: self-hosted
+    strategy:
+      matrix:
+        shard: ["0/1"]
     # NOTE: Self-hosted runner must have:
     # - testdata/ directory with BAMs, FASTA, and fixtures
     # - conda rust_build_env or equivalent system packages
@@ -40,7 +43,16 @@ jobs:
             bash scripts/gen_e2e_golden_tsv.sh --config default
           fi
 
+      - name: Config E2E surface gate
+        if: inputs.module == 'config_e2e' || inputs.module == 'all'
+        env:
+          VARDICT_IMPL: rust
+        run: bash scripts/config_e2e_surface_gate.sh
+
       - name: Run parity tests
+        env:
+          VARDICT_IMPL: rust
+          VARDICT_CELL_SHARD: ${{ matrix.shard }}
         run: |
           if [ "${{ inputs.module }}" = "all" ]; then
             cargo test --profile debug-release --test 'parity_*' -- --test-threads=1
@@ -62,6 +74,8 @@ jobs:
           submodules: recursive
 
       - name: Build Rust binary
+        env:
+          VARDICT_IMPL: rust
         run: cargo build --profile debug-release
 
       - name: Build Java
@@ -71,12 +85,18 @@ jobs:
         run: bash scripts/gen_e2e_golden_tsv.sh --all-configs --push-only
 
       - name: Run dual-run comparison
+        env:
+          VARDICT_IMPL: rust
         run: python3 scripts/dual_run.py --push-only --all-configs --verbose
 
       - name: Run E2E push parity with both implementations
         if: success() || failure()
-        run: VARDICT_IMPL=both cargo test --profile debug-release --test parity_e2e parity_e2e_push -- --exact --test-threads=1
+        env:
+          VARDICT_IMPL: both
+        run: cargo test --profile debug-release --test parity_e2e parity_e2e_push -- --exact --test-threads=1
 
       - name: Run config E2E push parity with both implementations
         if: success() || failure()
-        run: VARDICT_IMPL=both cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push_ -- --test-threads=10
+        env:
+          VARDICT_IMPL: rust
+        run: cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push_ -- --test-threads=10

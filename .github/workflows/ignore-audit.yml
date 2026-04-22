@@ -19,7 +19,11 @@ jobs:
           submodules: recursive
 
       - name: Build
+        env:
+          VARDICT_IMPL: rust
         run: cargo build --profile debug-release
 
       - name: Audit ignored tests
+        env:
+          VARDICT_IMPL: rust
         run: bash scripts/check_ignored_tests.sh
