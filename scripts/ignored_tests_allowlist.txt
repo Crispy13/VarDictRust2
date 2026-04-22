@@ -8,6 +8,8 @@ prefix:tovars_sweep::
 
 # E2E gates - nightly, run via sweep.yml or parity.yml
 parity_e2e_all
+# Full-BAM E2E sweep tier (3 tests in tests/parity_e2e_sweep.rs)
+prefix:parity_e2e_sweep_
 # Cell-level config E2E tests (4,400 trials in tests/parity_config_e2e_cells.rs)
 prefix:parity_config_e2e_cell_
 
