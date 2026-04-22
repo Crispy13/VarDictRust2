@@ -71,10 +71,13 @@ Read every `.instructions.md` under `.github/instructions/`:
 ### 1.4 Test Harness
 
 Read every file under `tests/`:
-- All `parity_*.rs` test files
-- `tests/parity_suite.rs` and `tests/parity_sweep_suite.rs`
-- Every file under `tests/parity_suite/` and `tests/parity_sweep_suite/`
+- All `parity_*.rs` test files, including the 6 parity harness binaries: `parity_suite`, `parity_sweep_suite`, `parity_e2e`, `parity_config_e2e`, `parity_config_e2e_cells`, and `parity_e2e_sweep`
+- `tests/parity_suite.rs`, `tests/parity_sweep_suite.rs`, and `tests/parity_e2e_sweep.rs`
+- Every file under `tests/parity_suite/`, `tests/parity_sweep_suite/`, and `tests/parity_e2e_sweep/`
 - `tests/common/mod.rs`
+
+`parity_e2e_sweep` is the full-BAM E2E parity tier, cost-gated, with 3 `#[ignore]`
+tests (one per BAM tag).
 
 Note module names, fixture paths, test function names, `#[ignore]` annotations, and
 which modules each test covers.

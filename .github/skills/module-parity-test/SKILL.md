@@ -158,6 +158,14 @@ Repeat Steps 4-5 until all parity tests pass.
 
 The module parity tests form Layer 2 of a three-layer test pyramid:
 
+### Tier Map
+
+| Tier | Scope | Binary | Cache | Regen | Sharding Env | Run |
+|------|-------|--------|-------|-------|--------------|-----|
+| 1 | Sampled module JSONL parity across 100 regions | `parity_suite` | `testdata/fixtures/<module>/` | `scripts/batch_fixtures.sh --mode generate` | `PARITY_REGION_INDEX=<i>` | `cargo test --profile debug-release --test parity_suite <module>:: -- --include-ignored` |
+| 2 | Sampled end-to-end TSV parity and config spread | `parity_e2e`, `parity_config_e2e`, `parity_config_e2e_cells` | `tmp/e2e_fixtures/` | `scripts/gen_e2e_golden_tsv.sh` | `VARDICT_CELL_SHARD=i/N` | `cargo test --profile debug-release --test parity_config_e2e_cells -- --include-ignored --test-threads=10` |
+| 3 (`e2e_sweep`) | Full BAM x all regions x 14 tier-1 configs | `parity_e2e_sweep` | `tmp/sweep_fixtures/output/` | `scripts/gen_e2e_sweep_golden.sh` | `VARDICT_E2E_SWEEP_SHARD=i/N` | `cargo test --profile debug-release --test parity_e2e_sweep -- --include-ignored --test-threads=1` |
+
 ```
 ┌──────────────────────────────────────┐
 │ Layer 3: End-to-End TSV Diff         │ ← Full pipeline. Final gate.
