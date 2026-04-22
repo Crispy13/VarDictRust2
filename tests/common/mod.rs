@@ -681,7 +681,12 @@ pub const CONFIG_PRESETS: &[&str] = &[
     "PW-009",
 ];
 
-fn load_config_presets_raw_tsv() -> Vec<(String, String)> {
+#[allow(dead_code)]
+pub fn config_name_to_slug(name: &str) -> String {
+    name.to_ascii_lowercase().replace('-', "_")
+}
+
+pub fn load_config_presets_raw_tsv() -> Vec<(String, String)> {
     let preset_path = project_root().join("scripts/config_presets.tsv");
     let tsv = std::fs::read_to_string(&preset_path)
         .unwrap_or_else(|error| panic!("Failed to read {}: {error}", preset_path.display()));
