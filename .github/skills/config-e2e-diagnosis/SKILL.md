@@ -63,6 +63,26 @@ Identify which (config, region) pairs produce mismatches at E2E level.
 ### Goal
 For each failing (config, region) pair, identify which pipeline module first produces divergent output.
 
+### Infrastructure-Issue Escalation (MANDATORY)
+
+If the Primary or Secondary Method produces ambiguous, missing, or
+silently-degraded output — e.g., `dual_run.py` reports `MISSING` for all
+modules, no JSONL files appear in the expected snapshot directory, or
+env-var propagation fails — the verifier MUST:
+
+1. **Stop Phase 2.** Do NOT infer the root-cause module from code-ownership
+   reasoning alone. Do NOT proceed to Phase 3.
+2. **Report the infrastructure defect explicitly** with: the exact command
+   run, the expected output, the observed output, and the inspected paths.
+3. **Escalate to the orchestrator for an infrastructure fix.** The fix
+   must land before Phase 2 resumes.
+
+Code-ownership inference is a last-resort fallback only when infrastructure
+is confirmed healthy and the tool still cannot reach a module boundary
+(e.g., the root-cause module truly is outside the `SUPPORTED_DEBUG_MODULES`
+set). In that case, the inference must be explicitly labeled as such in
+the report.
+
 ### Primary Method: `dual_run.py --debug-modules`
 Use `scripts/dual_run.py --debug-modules` to capture per-module JSONL intermediates for the failing region and config, then compare Java vs Rust outputs in pipeline order.
 
