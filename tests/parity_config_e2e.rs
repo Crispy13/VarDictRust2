@@ -1,13 +1,10 @@
 mod common;
 
 use std::collections::{HashMap, HashSet};
+use std::process::Command;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
 
 use vardict_rs::config::Configuration;
-use vardict_rs::modes::SimpleMode;
-use vardict_rs::reference::ReferenceResource;
-use vardict_rs::scope::{GlobalReadOnlyScope, VariantPrinter};
 
 const PUSH_INDICES: &[usize] = &[0, 1, 2, 3, 4, 35, 36, 37, 70, 71];
 
@@ -180,7 +177,7 @@ fn run_config_e2e_suite(indices: Option<&[usize]>, regeneration_command: &str) {
 
             match implementation {
                 common::VardictImpl::Rust => {
-                    let actual = run_simple_mode_region_with_config(
+                    let actual = common::run_simple_mode_region_with_config(
                         &region_str,
                         bam_str,
                         ref_str,
@@ -195,7 +192,7 @@ fn run_config_e2e_suite(indices: Option<&[usize]>, regeneration_command: &str) {
                     common::assert_tsv_parity(&actual, &expected, &region_str);
                 }
                 common::VardictImpl::Both => {
-                    let rust_actual = run_simple_mode_region_with_config(
+                    let rust_actual = common::run_simple_mode_region_with_config(
                         &region_str,
                         bam_str,
                         ref_str,
@@ -214,67 +211,15 @@ fn run_config_e2e_suite(indices: Option<&[usize]>, regeneration_command: &str) {
 }
 
 fn run_config_e2e_single(config_name: &str, indices: Option<&[usize]>) {
-    let regions = common::load_region_config();
-    let fixture_base = common::e2e_fixture_base();
-    let implementation = common::resolve_impl();
-    let regeneration_command = match indices {
-        Some(_) => "bash scripts/gen_e2e_golden_tsv.sh --push-only --all-configs",
-        None => "bash scripts/gen_e2e_golden_tsv.sh --all-configs",
+    let region_count = common::load_region_config().len();
+    let idx_list: Vec<usize> = match indices {
+        Some(slice) => slice.to_vec(),
+        None => (0..region_count).collect(),
     };
 
-    let config = common::config_preset(config_name);
-    let java_flags = common::config_preset_java_flags(config_name);
-
-    for (_region_index, region_str, bam_path, ref_path) in select_regions(&regions, indices) {
-        let bam_str = bam_path.to_str().unwrap_or_else(|| {
-            panic!(
-                "BAM path for region {region_str} was not valid UTF-8: {}",
-                bam_path.display()
-            )
-        });
-        let ref_str = ref_path.to_str().unwrap_or_else(|| {
-            panic!(
-                "Reference path for region {region_str} was not valid UTF-8: {}",
-                ref_path.display()
-            )
-        });
-        let fai_path = format!("{ref_str}.fai");
-        let chr_lengths = common::load_chr_lengths(&fai_path);
-        let expected = common::load_golden_tsv(
-            &fixture_base,
-            &region_str,
-            Some(config_name),
-            regeneration_command,
-        );
-
-        match implementation {
-            common::VardictImpl::Rust => {
-                let actual = run_simple_mode_region_with_config(
-                    &region_str,
-                    bam_str,
-                    ref_str,
-                    chr_lengths,
-                    config.clone(),
-                );
-                common::assert_tsv_parity(&actual, &expected, &region_str);
-            }
-            common::VardictImpl::Java => {
-                let actual = common::run_java_region(&region_str, bam_str, ref_str, &java_flags);
-                common::assert_tsv_parity(&actual, &expected, &region_str);
-            }
-            common::VardictImpl::Both => {
-                let rust_actual = run_simple_mode_region_with_config(
-                    &region_str,
-                    bam_str,
-                    ref_str,
-                    chr_lengths.clone(),
-                    config.clone(),
-                );
-                common::assert_tsv_parity(&rust_actual, &expected, &region_str);
-
-                let java_actual = common::run_java_region(&region_str, bam_str, ref_str, &java_flags);
-                common::assert_tsv_parity(&java_actual, &expected, &region_str);
-            }
+    for idx in idx_list {
+        if let Err(message) = common::run_cell(config_name, idx) {
+            panic!("{message}");
         }
     }
 }
@@ -305,34 +250,71 @@ fn select_regions(
     }
 }
 
-fn run_simple_mode_region_with_config(
-    region_str: &str,
-    bam_path: &str,
-    ref_path: &str,
-    chr_lengths: HashMap<String, i32>,
-    config: Configuration,
-) -> String {
-    let output = {
-        let _guard =
-            common::init_test_scope_with_config(config, bam_path, ref_path, chr_lengths.clone());
-        let mut region = common::parse_region(region_str);
+#[test]
+fn binary_b_list_terse_format_regression() {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "test",
+            "--profile",
+            "debug-release",
+            "--test",
+            "parity_config_e2e_cells",
+            "--",
+            "--list",
+            "--format=terse",
+        ])
+        .env_remove("PARITY_REGION_INDEX")
+        .env("VARDICT_IMPL", "rust")
+        .output()
+        .expect("failed to spawn cargo test --list");
 
-        region.gene = region.chr.clone();
+    assert!(
+        output.status.success(),
+        "child failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
-        let reference_resource = ReferenceResource::new(ref_path, 1200, 0, chr_lengths, false);
-        let simple_mode = SimpleMode::new(vec![vec![region]], reference_resource);
-        let captured = Arc::new(Mutex::new(String::new()));
-        GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Buffer(captured.clone()));
-        simple_mode.not_parallel();
-        take_captured_output(&captured)
-    };
+    let stdout = String::from_utf8(output.stdout).expect("non-UTF8 stdout");
+    let mut trial_count = 0usize;
+    for line in stdout.lines() {
+        let line = line.trim();
+        if let Some(name) = line.strip_suffix(": test") {
+            assert!(
+                is_valid_cell_name(name),
+                "trial name does not match contract: {name}"
+            );
+            trial_count += 1;
+        }
+    }
 
-    output
+    assert_eq!(
+        trial_count, 100,
+        "Phase 3 smoke expects exactly 100 trials; got {trial_count}"
+    );
 }
 
-fn take_captured_output(buffer: &Arc<Mutex<String>>) -> String {
-    let mut output = buffer.lock().unwrap_or_else(|error| error.into_inner());
-    std::mem::take(&mut *output)
+fn is_valid_cell_name(name: &str) -> bool {
+    let prefix = "parity_config_e2e_cell_";
+    let Some(rest) = name.strip_prefix(prefix) else {
+        return false;
+    };
+    let Some(index) = rest.rfind("_r") else {
+        return false;
+    };
+    let (slug, digits) = (&rest[..index], &rest[index + 2..]);
+    if slug.is_empty() {
+        return false;
+    }
+    if !slug
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+    {
+        return false;
+    }
+    if digits.len() != 3 {
+        return false;
+    }
+    digits.chars().all(|ch| ch.is_ascii_digit())
 }
 
 

@@ -11,6 +11,7 @@ use std::{
 use std::sync::Arc;
 use vardict_rs::config::{BamNames, Configuration};
 use vardict_rs::data::Region;
+use vardict_rs::modes::SimpleMode;
 use vardict_rs::reference::{Reference, ReferenceResource};
 use vardict_rs::scope::{GlobalReadOnlyScope, Scope, VariantPrinter};
 
@@ -681,9 +682,119 @@ pub const CONFIG_PRESETS: &[&str] = &[
     "PW-009",
 ];
 
-#[allow(dead_code)]
 pub fn config_name_to_slug(name: &str) -> String {
     name.to_ascii_lowercase().replace('-', "_")
+}
+
+const _: fn(&str) -> String = config_name_to_slug;
+
+#[allow(dead_code)]
+pub fn run_cell(config_name: &str, region_idx: usize) -> Result<(), String> {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let regions = load_region_config();
+    let (region_str, bam_path, ref_path) = regions
+        .get(region_idx)
+        .ok_or_else(|| {
+            format!(
+                "region index {region_idx} out of range ({} rows)",
+                regions.len()
+            )
+        })?
+        .clone();
+
+    let bam_str = bam_path
+        .to_str()
+        .ok_or_else(|| format!("non-UTF8 BAM path: {}", bam_path.display()))?
+        .to_string();
+    let ref_str = ref_path
+        .to_str()
+        .ok_or_else(|| format!("non-UTF8 ref path: {}", ref_path.display()))?
+        .to_string();
+    let fai_path = format!("{ref_str}.fai");
+    let chr_lengths = load_chr_lengths(&fai_path);
+
+    let fixture_base = e2e_fixture_base();
+    let implementation = resolve_impl();
+    let config = config_preset(config_name);
+    let java_flags = config_preset_java_flags(config_name);
+    let regeneration_command = "bash scripts/gen_e2e_golden_tsv.sh --all-configs";
+    let expected = load_golden_tsv(
+        &fixture_base,
+        &region_str,
+        Some(config_name),
+        regeneration_command,
+    );
+
+    let result = catch_unwind(AssertUnwindSafe(|| match implementation {
+        VardictImpl::Rust => {
+            let actual = run_simple_mode_region_with_config(
+                &region_str,
+                &bam_str,
+                &ref_str,
+                chr_lengths.clone(),
+                config.clone(),
+            );
+            assert_tsv_parity(&actual, &expected, &region_str);
+        }
+        VardictImpl::Java => {
+            let actual = run_java_region(&region_str, &bam_str, &ref_str, &java_flags);
+            assert_tsv_parity(&actual, &expected, &region_str);
+        }
+        VardictImpl::Both => {
+            let rust_actual = run_simple_mode_region_with_config(
+                &region_str,
+                &bam_str,
+                &ref_str,
+                chr_lengths.clone(),
+                config.clone(),
+            );
+            assert_tsv_parity(&rust_actual, &expected, &region_str);
+
+            let java_actual = run_java_region(&region_str, &bam_str, &ref_str, &java_flags);
+            assert_tsv_parity(&java_actual, &expected, &region_str);
+        }
+    }));
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(payload) => {
+            if let Some(message) = payload.downcast_ref::<&'static str>() {
+                return Err((*message).to_string());
+            }
+            if let Some(message) = payload.downcast_ref::<String>() {
+                return Err(message.clone());
+            }
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn run_simple_mode_region_with_config(
+    region_str: &str,
+    bam_path: &str,
+    ref_path: &str,
+    chr_lengths: HashMap<String, i32>,
+    config: Configuration,
+) -> String {
+    let _guard = init_test_scope_with_config(config, bam_path, ref_path, chr_lengths.clone());
+    let mut region = parse_region(region_str);
+
+    region.gene = region.chr.clone();
+
+    let reference_resource = ReferenceResource::new(ref_path, 1200, 0, chr_lengths, false);
+    let simple_mode = SimpleMode::new(vec![vec![region]], reference_resource);
+    let captured = Arc::new(std::sync::Mutex::new(String::new()));
+    GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Buffer(captured.clone()));
+    simple_mode.not_parallel();
+    take_captured_output(&captured)
+}
+
+#[allow(dead_code)]
+pub fn take_captured_output(buffer: &Arc<std::sync::Mutex<String>>) -> String {
+    let mut output = buffer.lock().unwrap_or_else(|error| error.into_inner());
+    std::mem::take(&mut *output)
 }
 
 pub fn load_config_presets_raw_tsv() -> Vec<(String, String)> {
