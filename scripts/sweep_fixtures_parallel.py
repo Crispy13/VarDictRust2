@@ -102,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        help="Tier-1 preset slug from scripts/config_presets.tsv to append to VarDict.",
+        help="Preset slug from scripts/config_presets.tsv to append to VarDict.",
     )
     parser.add_argument(
         "--sweep-bed-root",
@@ -175,7 +175,7 @@ def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def load_tier1_presets(root: Path) -> dict[str, ConfigPreset]:
+def load_all_presets(root: Path) -> dict[str, ConfigPreset]:
     preset_path = root / CONFIG_PRESETS_REL
     presets: dict[str, ConfigPreset] = {}
     with preset_path.open("r", encoding="utf-8", newline="") as handle:
@@ -184,15 +184,13 @@ def load_tier1_presets(root: Path) -> dict[str, ConfigPreset]:
             raise SystemExit(f"ERROR: missing header in {preset_path}")
         reader.fieldnames = [field.lstrip("#").strip() for field in reader.fieldnames]
         for row in reader:
-            if row["tier"].strip() != "1":
-                continue
             name = row["name"].strip()
             presets[name] = ConfigPreset(
                 name=name,
                 flags=tuple(shlex.split(row["flags"].strip())),
             )
     if not presets:
-        raise SystemExit(f"ERROR: no tier-1 presets found in {preset_path}")
+        raise SystemExit(f"ERROR: no presets found in {preset_path}")
     return presets
 
 
@@ -611,14 +609,14 @@ def main() -> int:
     root = project_root()
     output_root = root / OUTPUT_ROOT_REL
     sweep_bed_root = resolve_path(root, args.sweep_bed_root)
-    presets = load_tier1_presets(root)
+    presets = load_all_presets(root)
     config_name = None
     config_flags: tuple[str, ...] = ()
     if args.config:
         preset = presets.get(args.config)
         if preset is None:
             valid = ", ".join(sorted(presets))
-            parser.error(f"unknown config: {args.config}. Valid tier-1 configs: {valid}")
+            parser.error(f"unknown config: {args.config}. Valid configs: {valid}")
         config_name = preset.name
         config_flags = preset.flags
 
