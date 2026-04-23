@@ -897,22 +897,29 @@ pub fn load_config_presets_tsv() -> Vec<(String, HashMap<String, String>)> {
 
 fn parse_java_flags(flags: &str) -> HashMap<String, String> {
     let tokens: Vec<&str> = flags.split_whitespace().collect();
-    assert_eq!(
-        tokens.len() % 2,
-        0,
-        "Expected flag/value pairs in config preset flags: {flags}"
-    );
 
     let mut parsed = HashMap::new();
-    for pair in tokens.chunks(2) {
-        let flag = pair[0];
-        let value = pair[1];
+    let mut index = 0;
+    while index < tokens.len() {
+        let flag = tokens[index];
+        let mut value = "";
+
         assert!(flag.starts_with('-'), "Invalid flag token in preset flags: {flag}");
+
+        if let Some(next) = tokens.get(index + 1) {
+            if !next.starts_with('-') {
+                value = next;
+                index += 1;
+            }
+        }
+
         let previous = parsed.insert(flag.to_string(), value.to_string());
         assert!(
             previous.is_none(),
             "Duplicate flag {flag} in config preset flags: {flags}"
         );
+
+        index += 1;
     }
 
     parsed
@@ -985,19 +992,18 @@ pub fn config_preset(name: &str) -> Configuration {
             config.vext = 5;
             config.goodq = 15.0;
         }
-        "T2-04" => {
-            config.freq = 0.001;
-            config.min_bias_reads = 1;
+        "CM-FISHER" => {
+            config.fisher = true;
         }
         "T2-05" => {
             config.minr = 4;
             config.goodq = 30.0;
             config.mismatch = 4;
         }
-        "T2-06" => {
-            config.freq = 0.02;
-            config.mismatch = 12;
-            config.vext = 3;
+        "CM-PILEUP" => {
+            config.do_pileup = true;
+            config.freq = -1.0;
+            config.minr = 0;
         }
         "T2-07" => {
             config.freq = 0.05;
@@ -1008,10 +1014,8 @@ pub fn config_preset(name: &str) -> Configuration {
             config.goodq = 25.0;
             config.mismatch = 15;
         }
-        "T2-09" => {
-            config.freq = 0.005;
-            config.minr = 4;
-            config.goodq = 20.0;
+        "CM-NOSV" => {
+            config.disable_sv = true;
         }
         "T2-10" => {
             config.min_bias_reads = 1;
@@ -1029,11 +1033,8 @@ pub fn config_preset(name: &str) -> Configuration {
             config.goodq = 30.0;
             config.mismatch = 4;
         }
-        "T3-03" => {
-            config.freq = 0.001;
-            config.mismatch = 20;
-            config.vext = 5;
-            config.min_bias_reads = 1;
+        "CM-NOREAL" => {
+            config.perform_local_realignment = false;
         }
         "T3-04" => {
             config.freq = 0.05;
@@ -1046,10 +1047,8 @@ pub fn config_preset(name: &str) -> Configuration {
             config.mismatch = 4;
             config.vext = 1;
         }
-        "T3-06" => {
-            config.freq = 0.005;
-            config.goodq = 30.0;
-            config.mismatch = 15;
+        "CM-CHIMERIC" => {
+            config.chimeric = true;
         }
         "T3-07" => {
             config.minr = 8;
@@ -1063,11 +1062,8 @@ pub fn config_preset(name: &str) -> Configuration {
             config.vext = 3;
             config.min_bias_reads = 4;
         }
-        "T3-09" => {
-            config.freq = 0.001;
-            config.minr = 4;
-            config.goodq = 15.0;
-            config.mismatch = 20;
+        "CM-MAPQ30" => {
+            config.mapping_quality = Some(30);
         }
         "T3-10" => {
             config.freq = 0.1;
