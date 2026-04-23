@@ -816,6 +816,54 @@ pub fn load_config_presets_raw_tsv() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Load (name, flags, applies_to) tuples from the preset TSV.
+///
+/// `applies_to` is one of `germline`, `somatic`, or `both`. Rows missing the column
+/// are treated as `both` for backward compatibility with the 4-column format.
+#[allow(dead_code)]
+pub fn load_config_presets_with_applies_to() -> Vec<(String, String, String)> {
+    let preset_path = project_root().join("scripts/config_presets.tsv");
+    let tsv = std::fs::read_to_string(&preset_path)
+        .unwrap_or_else(|error| panic!("Failed to read {}: {error}", preset_path.display()));
+
+    tsv.lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert!(
+                fields.len() >= 3,
+                "expected at least 3 tab-separated fields in {}: {line}",
+                preset_path.display()
+            );
+            let applies_to = fields.get(4).map(|s| s.to_string()).unwrap_or_else(|| "both".to_string());
+            assert!(
+                matches!(applies_to.as_str(), "germline" | "somatic" | "both"),
+                "invalid applies_to value {applies_to:?} in {}: {line}",
+                preset_path.display()
+            );
+            (fields[0].to_string(), fields[1].to_string(), applies_to)
+        })
+        .collect()
+}
+
+/// Filter the preset matrix by mode. `mode` must be `"germline"` or `"somatic"`.
+///
+/// Returns preset names whose `applies_to` column is `mode` or `both`. Use this in
+/// sweep harnesses to skip presets that don't apply to the current lane.
+#[allow(dead_code)]
+pub fn config_presets_for_mode(mode: &str) -> Vec<String> {
+    assert!(
+        matches!(mode, "germline" | "somatic"),
+        "config_presets_for_mode: mode must be 'germline' or 'somatic', got {mode:?}"
+    );
+    load_config_presets_with_applies_to()
+        .into_iter()
+        .filter_map(|(name, _flags, applies_to)| {
+            (applies_to == mode || applies_to == "both").then_some(name)
+        })
+        .collect()
+}
+
 #[allow(dead_code)]
 pub fn load_config_presets_with_tier() -> Vec<(String, String, u8)> {
     let preset_path = project_root().join("scripts/config_presets.tsv");

@@ -143,4 +143,23 @@ if [[ "$SCOPE_TOTAL" != "$TSV_COUNT" ]]; then
 fi
 log "parity-scope.md total: OK ($TSV_COUNT rows)"
 
+# Phase 9: applies_to column validation (if present)
+# Schema: col 5 = applies_to, must be in {germline, somatic, both}. Absent column
+# (4-col row) is treated as "both" for backward compat.
+INVALID_APPLIES=$(awk -F'\t' '
+  NR>1 && !/^[[:space:]]*$/ && $1 !~ /^#/ {
+    a = (NF >= 5 ? $5 : "both")
+    if (a != "germline" && a != "somatic" && a != "both") {
+      print NR": "$1" applies_to=\""a"\""
+    }
+  }
+' "$TSV")
+if [[ -n "$INVALID_APPLIES" ]]; then
+  echo "[check_preset_drift] FAIL: invalid applies_to values in TSV:" >&2
+  echo "$INVALID_APPLIES" | sed 's/^/    /' >&2
+  echo "  Fix: applies_to must be one of: germline, somatic, both" >&2
+  exit 1
+fi
+log "applies_to column: OK"
+
 echo "[check_preset_drift] PASS ($TSV_COUNT presets: T1=$T1_COUNT T2=$T2_COUNT T3=$T3_COUNT PW=$PW_COUNT CM=$CM_COUNT)"
