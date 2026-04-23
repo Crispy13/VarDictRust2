@@ -366,7 +366,7 @@ impl SimpleMode {
 /// Ported from: SomaticMode.java:L27-L140
 #[derive(Clone, Debug)]
 pub struct SomaticMode {
-    segments: Vec<Vec<Region>>,
+    regions: Vec<Region>,
     reference_resource: ReferenceResource,
 }
 
@@ -374,22 +374,18 @@ impl AbstractMode for SomaticMode {}
 
 impl ParallelMode for SomaticMode {
     fn regions(&self) -> &[Region] {
-        &[]
+        &self.regions
     }
 
-    fn process_region_to_buffer(&self, _region: &Region, _out: &mut Vec<u8>) {
-        panic!("not yet implemented");
-    }
-
-    fn not_parallel(&self) {
-        SomaticMode::not_parallel(self);
+    fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>) {
+        SomaticMode::process_region_to_buffer(self, region, out);
     }
 }
 
 impl SomaticMode {
     pub fn new(segments: Vec<Vec<Region>>, reference_resource: ReferenceResource) -> Self {
         let mode = Self {
-            segments,
+            regions: segments.into_iter().flatten().collect(),
             reference_resource,
         };
         mode.print_header();
@@ -397,43 +393,53 @@ impl SomaticMode {
     }
 
     pub fn not_parallel(&self) {
-        let printer = GlobalReadOnlyScope::instance().variant_printer;
+        <Self as ParallelMode>::not_parallel(self);
+    }
+
+    pub fn parallel(&self, threads: usize) {
+        <Self as ParallelMode>::parallel(self, threads);
+    }
+
+    /// Ported from: SomaticMode.processBothBamsInPipeline()
+    /// Java source: SomaticMode.java:L97-L130
+    pub fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>) {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let printer = VariantPrinter::Buffer(buffer.clone());
         let bam_names = GlobalReadOnlyScope::instance()
             .conf
             .bam
             .as_ref()
             .expect("BAM names must be configured")
             .clone();
+        let splice = HashSet::new();
+        let reference = try_to_get_reference(&self.reference_resource, region);
+        let bam1_scope = Scope::new(
+            bam_names.get_bam1(),
+            region.clone(),
+            Arc::new(reference.clone()),
+            Arc::new(self.reference_resource.clone()),
+            0,
+            splice.clone(),
+            printer.clone(),
+            InitialData::default(),
+        );
+        let bam1_aligned = run_pipeline(bam1_scope);
+        let bam2_scope = Scope::new(
+            bam_names.get_bam2().expect("Somatic mode requires BAM2"),
+            region.clone(),
+            Arc::new(reference),
+            Arc::new(self.reference_resource.clone()),
+            bam1_aligned.max_read_length,
+            splice,
+            printer,
+            InitialData::default(),
+        );
+        let bam2_aligned = run_pipeline(bam2_scope);
+        somatic_post_process(bam2_aligned, bam1_aligned, &self.reference_resource);
 
-        for regions in &self.segments {
-            for region in regions {
-                let splice = HashSet::new();
-                let reference = try_to_get_reference(&self.reference_resource, region);
-                let bam1_scope = Scope::new(
-                    bam_names.get_bam1(),
-                    region.clone(),
-                    Arc::new(reference.clone()),
-                    Arc::new(self.reference_resource.clone()),
-                    0,
-                    splice.clone(),
-                    printer.clone(),
-                    InitialData::default(),
-                );
-                let bam1_aligned = run_pipeline(bam1_scope);
-                let bam2_scope = Scope::new(
-                    bam_names.get_bam2().expect("Somatic mode requires BAM2"),
-                    region.clone(),
-                    Arc::new(reference),
-                    Arc::new(self.reference_resource.clone()),
-                    bam1_aligned.max_read_length,
-                    splice,
-                    printer.clone(),
-                    InitialData::default(),
-                );
-                let bam2_aligned = run_pipeline(bam2_scope);
-                somatic_post_process(bam2_aligned, bam1_aligned, &self.reference_resource);
-            }
-        }
+        let mut rendered = buffer.lock().unwrap_or_else(|error| error.into_inner());
+        let mut bytes = std::mem::take(&mut *rendered).into_bytes();
+        out.append(&mut bytes);
     }
 
     pub fn print_header(&self) {

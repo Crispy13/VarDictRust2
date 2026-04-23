@@ -3,11 +3,19 @@
 
 mod common;
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use vardict_rs::config::Configuration;
+use vardict_rs::data::Region;
+use vardict_rs::modes::SomaticMode;
+use vardict_rs::reference::ReferenceResource;
+use vardict_rs::scope::{GlobalReadOnlyScope, VariantPrinter};
 
 const THREAD_COUNTS: [usize; 4] = [1, 2, 4, 8];
 const RUN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -52,6 +60,46 @@ fn parity_parallel_determinism_t1_14_th8() {
     assert_parallel_matches_serial("T1-14", 8);
 }
 
+#[test]
+fn parity_parallel_determinism_somatic_default_th1() {
+    assert_somatic_parallel_matches_serial("default", 1);
+}
+
+#[test]
+fn parity_parallel_determinism_somatic_default_th2() {
+    assert_somatic_parallel_matches_serial("default", 2);
+}
+
+#[test]
+fn parity_parallel_determinism_somatic_default_th4() {
+    assert_somatic_parallel_matches_serial("default", 4);
+}
+
+#[test]
+fn parity_parallel_determinism_somatic_default_th8() {
+    assert_somatic_parallel_matches_serial("default", 8);
+}
+
+#[test]
+fn parity_parallel_determinism_somatic_t1_14_th1() {
+    assert_somatic_parallel_matches_serial("T1-14", 1);
+}
+
+#[test]
+fn parity_parallel_determinism_somatic_t1_14_th2() {
+    assert_somatic_parallel_matches_serial("T1-14", 2);
+}
+
+#[test]
+fn parity_parallel_determinism_somatic_t1_14_th4() {
+    assert_somatic_parallel_matches_serial("T1-14", 4);
+}
+
+#[test]
+fn parity_parallel_determinism_somatic_t1_14_th8() {
+    assert_somatic_parallel_matches_serial("T1-14", 8);
+}
+
 fn assert_parallel_matches_serial(config_name: &str, thread_count: usize) {
     assert!(
         THREAD_COUNTS.contains(&thread_count),
@@ -74,11 +122,49 @@ fn assert_parallel_matches_serial(config_name: &str, thread_count: usize) {
     );
 }
 
+fn assert_somatic_parallel_matches_serial(config_name: &str, thread_count: usize) {
+    assert!(
+        THREAD_COUNTS.contains(&thread_count),
+        "unsupported thread count {thread_count}; expected one of {THREAD_COUNTS:?}"
+    );
+
+    let fixture = somatic_fixture();
+    let case_name = format!("somatic {config_name} x th={thread_count}");
+
+    let started = Instant::now();
+    let serial = run_somatic_mode(&fixture, config_name, 1);
+    let parallel = run_somatic_mode(&fixture, config_name, thread_count);
+    assert_bytes_equal(&serial, &parallel, &case_name, &fixture.region_label);
+
+    eprintln!(
+        "determinism case passed: {case_name} region={} elapsed={:?}",
+        fixture.region_label,
+        started.elapsed()
+    );
+}
+
 #[derive(Clone, Debug)]
 struct FixtureRegion {
     region: String,
     bam_path: PathBuf,
     reference_path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct SomaticFixtureRegion {
+    region: Region,
+    region_label: String,
+    tumor_bam_path: PathBuf,
+    normal_bam_path: PathBuf,
+    reference_path: PathBuf,
+}
+
+struct GlobalScopeGuard;
+
+impl Drop for GlobalScopeGuard {
+    fn drop(&mut self) {
+        GlobalReadOnlyScope::clear();
+    }
 }
 
 fn fastest_region_fixture() -> FixtureRegion {
@@ -92,6 +178,21 @@ fn fastest_region_fixture() -> FixtureRegion {
             reference_path: manifest_dir.join(reference_path),
         })
         .unwrap_or_else(|| panic!("testdata/parity_regions.tsv did not contain any regions"))
+}
+
+fn somatic_fixture() -> SomaticFixtureRegion {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let chrom = String::from("chr1");
+    let start = 10_353;
+    let end = 10_461;
+
+    SomaticFixtureRegion {
+        region: Region::new(chrom.clone(), start, end, chrom.clone()),
+        region_label: format!("{chrom}:{start}-{end}"),
+        tumor_bam_path: manifest_dir.join("testdata/WES_IL_T_1.bwa.dedup.bam"),
+        normal_bam_path: manifest_dir.join("testdata/WES_IL_N_1.bwa.dedup.bam"),
+        reference_path: manifest_dir.join("testdata/GRCh38.d1.vd1.fa"),
+    }
 }
 
 fn region_span_len(region: &str) -> i32 {
@@ -115,6 +216,75 @@ fn config_flags(config_name: &str) -> Vec<String> {
         "default" => Vec::new(),
         other => common::config_preset_java_flags(other),
     }
+}
+
+fn run_somatic_mode(
+    fixture: &SomaticFixtureRegion,
+    config_name: &str,
+    thread_count: usize,
+) -> Vec<u8> {
+    let tumor = path_as_str(&fixture.tumor_bam_path, "tumor BAM", &fixture.region_label);
+    let normal = path_as_str(&fixture.normal_bam_path, "normal BAM", &fixture.region_label);
+    let reference = path_as_str(&fixture.reference_path, "reference", &fixture.region_label);
+    let chr_lengths = load_chr_lengths_for_reference(reference);
+    let mut config = match config_name {
+        "default" => Configuration::default(),
+        other => common::config_preset(other),
+    };
+    config.bam = Some(vardict_rs::config::BamNames::new(format!("{tumor}|{normal}")));
+    config.fasta = reference.to_string();
+    config.threads = i32::try_from(thread_count)
+        .unwrap_or_else(|error| panic!("invalid thread count {thread_count}: {error}"));
+
+    GlobalReadOnlyScope::clear();
+    let _guard = GlobalScopeGuard;
+    GlobalReadOnlyScope::init(
+        config,
+        chr_lengths.clone(),
+        "test_sample",
+        None,
+        None,
+        HashMap::new(),
+        HashMap::new(),
+    );
+
+    let captured = Arc::new(Mutex::new(String::new()));
+    GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Buffer(captured.clone()));
+    let reference_resource = ReferenceResource::new(reference, 1200, 0, chr_lengths, false);
+    let somatic_mode = SomaticMode::new(vec![vec![fixture.region.clone()]], reference_resource);
+
+    if thread_count > 1 {
+        somatic_mode.parallel(thread_count);
+    } else {
+        somatic_mode.not_parallel();
+    }
+
+    common::take_captured_output(&captured).into_bytes()
+}
+
+fn load_chr_lengths_for_reference(reference: &str) -> HashMap<String, i32> {
+    let fai_path = format!("{reference}.fai");
+    let content = std::fs::read_to_string(&fai_path).unwrap_or_else(|error| {
+        panic!("Failed to read FAI file {fai_path}: {error}")
+    });
+
+    content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert!(fields.len() >= 2, "Malformed FAI line in {fai_path}: {line}");
+
+            let len = fields[1].parse::<i32>().unwrap_or_else(|error| {
+                panic!(
+                    "Invalid chromosome length '{}' in {fai_path}: {error}",
+                    fields[1]
+                )
+            });
+
+            (fields[0].to_string(), len)
+        })
+        .collect()
 }
 
 fn run_vardict_subprocess(
