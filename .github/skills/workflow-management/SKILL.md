@@ -71,13 +71,14 @@ Read every `.instructions.md` under `.github/instructions/`:
 ### 1.4 Test Harness
 
 Read every file under `tests/`:
-- All `parity_*.rs` test files, including the 6 parity harness binaries: `parity_suite`, `parity_sweep_suite`, `parity_e2e`, `parity_config_e2e`, `parity_config_e2e_cells`, and `parity_e2e_sweep`
-- `tests/parity_suite.rs`, `tests/parity_sweep_suite.rs`, and `tests/parity_e2e_sweep.rs`
-- Every file under `tests/parity_suite/`, `tests/parity_sweep_suite/`, and `tests/parity_e2e_sweep/`
+- All `parity_*.rs` test files, including the 7 parity harness binaries: `parity_suite`, `parity_sweep_suite`, `parity_e2e`, `parity_config_e2e`, `parity_config_e2e_cells`, `parity_e2e_sweep`, and `parity_e2e_sweep_somatic`
+- `tests/parity_suite.rs`, `tests/parity_sweep_suite.rs`, `tests/parity_e2e_sweep.rs`, and `tests/parity_e2e_sweep_somatic.rs`
+- Every file under `tests/parity_suite/`, `tests/parity_sweep_suite/`, `tests/parity_e2e_sweep/`, and `tests/parity_e2e_sweep_somatic/`
 - `tests/common/mod.rs`
 
 `parity_e2e_sweep` is the full-BAM E2E parity tier, cost-gated, with 3 `#[ignore]`
-tests (one per BAM tag).
+tests (one per BAM tag). `parity_e2e_sweep_somatic` is the full-pair somatic sweep
+tier, also cost-gated, with 1 `#[ignore]` test for `wes_il_pair`.
 
 Note module names, fixture paths, test function names, `#[ignore]` annotations, and
 which modules each test covers.
