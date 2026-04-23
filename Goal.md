@@ -19,3 +19,10 @@ In this phase, we will refactor the code to make it more idiomatic Rust and opti
 
 
 We hope this will be cost-effective improved version for the bioinformatics community.
+
+## Parity scope
+
+The formal claim boundary for "byte-identical output" is defined in
+[docs/parity-scope.md](docs/parity-scope.md). Out-of-scope items (multi-threaded
+execution, AmpliconMode, SplicingMode, CRAM input) are enumerated there and linked to
+their respective handoff docs.

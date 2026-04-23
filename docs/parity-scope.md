@@ -1,0 +1,166 @@
+# VarDict-rs Parity Scope
+
+**Status:** Authoritative. This document defines the exact surface of behavior for which
+VarDict-rs claims byte-identical parity with VarDictJava.
+
+**Last updated:** This commit. Updates require a corresponding commit to
+[scripts/config_presets.tsv](scripts/config_presets.tsv) or
+[tests/common/mod.rs](tests/common/mod.rs) that changes what is covered, verified by
+[scripts/check_preset_drift.sh](scripts/check_preset_drift.sh).
+
+---
+
+## What "100% parity" means, operationally
+
+**Byte-identical output**: for every covered `(mode, config, lane, chromosome, region)`
+tuple, the Rust binary's stdout (and stderr where asserted) must match Java's stdout
+byte-for-byte.
+
+No statistical agreement. No column-set agreement. No "mostly matches". Exact byte
+equality. The parity harness under [tests/](tests/) compares with `assert_eq!` on byte
+slices.
+
+Non-goals are listed below. Behavior outside this scope is explicitly unclaimed.
+
+---
+
+## Covered surface
+
+### Modes
+- **SimpleMode** — germline single-BAM variant calling.
+- **SomaticMode** — tumor/normal paired calling.
+
+### Execution model
+- **Single-threaded only.** The `-th` / `--threads` flag is accepted but currently
+  ignored in Rust. Multi-threaded parity is **out of scope** — see
+  [docs/handoff-multithreading.md](docs/handoff-multithreading.md).
+
+### Input format
+- **BAM** (indexed, `.bai` present).
+- CRAM is out of scope.
+
+### Reference
+- **GRCh37/hg19** via `testdata/hs37d5.fa`.
+- **GRCh38** via `testdata/GRCh38.d1.vd1.fa` (somatic lane only).
+
+### Flag surface
+The 44 presets in [scripts/config_presets.tsv](scripts/config_presets.tsv) cover the
+following flags. Any flag not in this list is unclaimed:
+
+| Flag | Axis | Coverage |
+|------|------|----------|
+| `-f` | Allele-frequency threshold | T1-02, T1-03, T1-05, T1-06, T1-07 + T2/T3/PW combinations |
+| `-r` | Minimum variant reads | T1-08 + T2/T3/PW combinations |
+| `-q` | Minimum base quality | T1-03, T1-09, T1-10 + T2/T3/PW combinations |
+| `-m` | Mismatch limit | T1-04, T1-11, T1-12 + T2/T3/PW combinations |
+| `-X` | Vext (realignment window) | T1-04, T1-13 + T2/T3/PW combinations |
+| `-B` | Bias-read requirement | T1-05, T1-14 + T2/T3/PW combinations |
+
+Additional single-threaded flags exercised at runtime by the harness but not in the
+preset matrix (coverage via default behavior only): `--fisher`, `-p`, `-U`, `-k`,
+`--chimeric`, `-Q`, `-M`, `-V`, `-I`. These are **candidates for future CM-* preset
+addition** — see `/memories/repo/preset-redundancy-audit.md`.
+
+### Sweep lanes
+| Tag | Mode | Reference | BAM(s) |
+|-----|------|-----------|--------|
+| `hg002_agilent_v5` | Simple | hs37d5 | HG002 Agilent v5 exome |
+| `na12878_chrom20_exome` | Simple | hs37d5 | NA12878 chrom20 exome |
+| `na12878_low_coverage` | Simple | hs37d5 | NA12878 whole-genome low-coverage |
+| `wes_il_pair` | Somatic | GRCh38 | WES tumor/normal pair |
+
+### Preset tiers
+- **T1-01..T1-14** (14 rows) — single-axis threshold variation.
+- **T2-01..T2-10** (10 rows) — dual-axis combinations.
+- **T3-01..T3-10** (10 rows) — three-to-five-axis combinations.
+- **PW-000..PW-009** (10 rows) — pairwise interaction coverage across 6 threshold
+  flags.
+
+**Total: 44 rows.**
+
+Drift between the TSV, the `CONFIG_PRESETS` constant in
+[tests/common/mod.rs](tests/common/mod.rs), and the
+[tiered-config-test skill](.github/skills/tiered-config-test/SKILL.md) is enforced by
+`scripts/check_preset_drift.sh`, wired into
+[.github/workflows/parity.yml](.github/workflows/parity.yml).
+
+---
+
+## Explicitly out of scope (non-goals)
+
+These are acknowledged gaps. They do **not** count against the parity claim.
+
+### Modes
+- **AmpliconMode** — no handoff doc yet; Rust has `AmpliconMode` struct but no parity
+  harness.
+- **SplicingMode** — not implemented in Rust. Java has
+  [SplicingMode.java](VarDictJava/src/main/java/com/astrazeneca/vardict/modes/SplicingMode.java).
+
+### Execution
+- **Multi-threaded execution** (`parallel()` path). Rust has no implementation.
+  Port plan: [docs/handoff-multithreading.md](docs/handoff-multithreading.md).
+- **Distributed / multi-process execution** — not in Java either.
+
+### Input
+- **CRAM input** — not supported in Rust.
+- **Stream stdin BAM** — not tested.
+
+### Flag surface (unclaimed)
+Any flag not in the coverage table above — including but not limited to `-E`, `-G`,
+`-z`, `-S`, `-R`, `-a`, `-o`, `-O`, `-s`, `-t`, `-g`, `-L`, `-P`, `-N` — is unclaimed.
+Individual flags may happen to work; none are asserted byte-identical.
+
+### Platform
+- **Non-Linux targets** (macOS, Windows) — build may succeed but no parity assertions
+  on those platforms.
+
+### Output format
+- **VCF output** via `-v` — unclaimed. Primary output format is tab-separated text.
+
+---
+
+## Verification gates
+
+A claim of "100% parity" is substantiated by the following CI gates, **all green**:
+
+| Gate | Workflow | Test target |
+|------|----------|-------------|
+| Module-level JSONL parity | `parity.yml` | `parity_*.rs` binaries (cigar, realigner, tovars, etc.) |
+| E2E surface gate | `parity.yml` | `scripts/config_e2e_surface_gate.sh` |
+| E2E config cells | `parity.yml` | `parity_config_e2e_cells` |
+| E2E full sweep (single-BAM) | `sweep.yml` nightly | `parity_e2e_sweep` with `--include-ignored` on all 3 single-BAM tags |
+| E2E full sweep (somatic) | `sweep.yml` nightly | `parity_e2e_sweep_somatic` with `--include-ignored` on `wes_il_pair` |
+| Preset drift gate | `parity.yml` pre-test | `scripts/check_preset_drift.sh` |
+
+Full parity claim requires all rows × all covered chromosomes × all 44 presets to be
+green in at least one `sweep.yml` nightly run. Partial coverage (e.g., smoke tier
+only) does **not** support the full claim.
+
+---
+
+## Scope changes
+
+Adding a new mode, new input format, or new flag to the claimed surface requires:
+
+1. Parity harness addition (new test binary or new test function under
+   `parity_e2e_sweep` / `parity_e2e_sweep_somatic`).
+2. Golden fixture generation via `scripts/gen_e2e_sweep_golden.sh`.
+3. TSV + `CONFIG_PRESETS` + skill-doc update (enforced by
+   `scripts/check_preset_drift.sh`).
+4. This document updated.
+5. CI nightly green for 3 consecutive runs before the claim expands.
+
+Removing from scope requires: document update + explicit note in the commit message
+explaining why. Removed scope should remain in this doc's "Previously covered" section
+(not yet present; add if/when removal happens).
+
+---
+
+## Related documents
+
+- [docs/handoff-multithreading.md](docs/handoff-multithreading.md) — port plan for
+  multi-threaded execution.
+- [.github/skills/tiered-config-test/SKILL.md](.github/skills/tiered-config-test/SKILL.md) — preset tier execution policy.
+- [.github/skills/workflow-management/SKILL.md](.github/skills/workflow-management/SKILL.md) — process for changing test infrastructure.
+- [/memories/repo/preset-redundancy-audit.md](../memories/repo/preset-redundancy-audit.md) — redundant-row analysis for future CM-* swap.
+- [Goal.md](Goal.md) — project goal narrative.

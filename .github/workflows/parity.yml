@@ -32,6 +32,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Preset drift gate
+        run: bash scripts/check_preset_drift.sh --verbose
+
       - name: Generate E2E golden fixtures
         if: inputs.module == 'e2e' || inputs.module == 'config_e2e' || inputs.module == 'all'
         run: |

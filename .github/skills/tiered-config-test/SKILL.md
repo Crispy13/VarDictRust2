@@ -24,7 +24,7 @@ Verify the `logic-parity-audit` report is all-VERIFIED or explicitly user-approv
 | 1 | `tier1` | 14 (all `T1-*`) | 3 (`20`, `22`, `MT`) | 42 | ~5 min | After any parity fix |
 | 2 | `config-spread` | 44 (all configs) | 3 (`20`, `22`, `MT`) | 132 | ~15 min | After CLI wiring changes, weekly |
 | 3 | `core-wide` | 14 (all `T1-*`) | 25 (all real) | 350 | ~45 min | Pre-merge of major SV or pipeline changes |
-| 4 | `pairwise` | 20 (`PW-000`..`PW-019`) | 10 (representative) | 200 | ~1-2 hr | Pre-release interaction testing |
+| 4 | `pairwise` | 10 (`PW-000`..`PW-009`) | 10 (representative) | 100 | ~30-60 min | Pre-release interaction testing |
 | 5 | `release` | 44 (all configs) | 25 (all real) | 1100 | ~8-12 hr | Release candidate validation |
 
 Note: the existing `dev` preset is 10 configs x 10 chromosomes = 100 cells, which places it between Testing Pyramid Tier `1` and Tier `2` in coverage and runtime.
@@ -108,17 +108,17 @@ bash <harness> --chr 20 --chr 22 --chr MT --rust-only
 bash <harness> --tier 1 --all-chr --rust-only --parallel 5
 ```
 
-- Pairwise: use `--preset pairwise` so the harness loads `tests/pairwise_configs.tsv` directly.
+- Pairwise: use `--preset pairwise` so the harness filters `scripts/config_presets.tsv` to `PW-*` rows.
 - Full-gate: use `--preset full-gate` for the standard chained promotion path, or run tiers `0` -> `1` -> `2` -> `3` manually when you need to inspect each gate separately.
 
 ## Pairwise Integration
 
-- Pairwise configs live in `tests/pairwise_configs.tsv` and currently cover `PW-000` through `PW-019`.
-- Generate or refresh the TSV with `tests/generate_pairwise_configs.py` when the option matrix changes.
-- The TSV carries the exact `cli_flags` payload for each pairwise config.
-- The harness should load `--preset pairwise` from the TSV at runtime rather than duplicating entries in shell arrays.
+- Pairwise configs live in `scripts/config_presets.tsv` (rows with tier `4`), currently `PW-000` through `PW-009`.
+- The TSV row carries the exact `cli_flags` payload for each pairwise config in its second column.
+- The harness loads `--preset pairwise` by filtering the TSV at runtime rather than duplicating entries in shell arrays.
 - Pairwise runs target option interactions that single-option configs and core-tier presets can miss.
-- Fifteen of the twenty pairwise configs use pileup mode, so cap pairwise parallelism at `5`.
+- The current PW-000..PW-009 cover 10 two-flag combinations across the six threshold axes (`-f`, `-r`, `-q`, `-m`, `-X`, `-B`). See [/memories/repo/preset-redundancy-audit.md](/memories/repo/preset-redundancy-audit.md) for future expansion plans.
+- Drift between this doc, the TSV, and `tests/common/mod.rs::CONFIG_PRESETS` is enforced by `scripts/check_preset_drift.sh` (see `.github/workflows/parity.yml`).
 
 ## Blocked Config Management
 
