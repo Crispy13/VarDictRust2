@@ -61,9 +61,9 @@ pub const CHUNK_SIZE: usize = 20_000;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TileKey {
-    chrom: String,
-    start: u32,
-    end: u32,
+    pub(crate) chrom: String,
+    pub(crate) start: u32,
+    pub(crate) end: u32,
 }
 
 #[derive(Clone, Debug)]
