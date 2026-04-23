@@ -25,6 +25,19 @@
 //!
 //! Phase 0a note: the sample name is derived from the BAM file stem, not `test_sample`; keep
 //! that behavior unchanged.
+//!
+//! ## Manifest cache_entries schema
+//!
+//! Single-BAM cache entries use key shape `{config}:{tag}` and record
+//! `bam_stat=[{path,size,mtime_unix}]` with `reference_sha256` fingerprinted from
+//! `testdata/hs37d5.fa.fai`.
+//!
+//! Somatic cache entries use key shape `{config}:somatic:{tag}` and record
+//! `bam_stat=[{path,size,mtime_unix,role:"tumor"},{path,size,mtime_unix,role:"normal"}]`
+//! with `reference_sha256` fingerprinted from `testdata/GRCh38.d1.vd1.fa.fai`.
+//!
+//! Backward-compatibility guarantee: this R2 harness only looks up `{config}:{tag}` keys, so
+//! `:somatic:` entries are ignored here and consumed by the Phase 5 somatic validator instead.
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};

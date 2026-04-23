@@ -23,6 +23,16 @@ BAM_MAP = {
     "hg002": "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam",
     "na12878_lowcov": "testdata/NA12878.mapped.ILLUMINA.bwa.CEU.low_coverage.20121211.bam",
 }
+SOMATIC_PAIR_MAP = {
+    "wes_il_pair": (
+        "testdata/WES_IL_T_1.bwa.dedup.bam",
+        "testdata/WES_IL_N_1.bwa.dedup.bam",
+    ),
+}
+SOMATIC_REF_MAP = {
+    "wes_il_pair": "testdata/GRCh38.d1.vd1.fa",
+}
+ALL_SOMATIC_TAGS = list(SOMATIC_PAIR_MAP.keys())
 MODULES = (
     ("cigar_parser", "VARDICT_PARITY_CIGAR_PARSER"),
     ("realigner", "VARDICT_PARITY_REALIGNER"),
@@ -42,6 +52,7 @@ class Shard:
     tag: str
     chrom: str
     bed_path: Path
+    kind: str = "single"
 
 
 @dataclass(frozen=True)
@@ -72,8 +83,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tags",
-        default=",".join(ALL_BAM_TAGS),
-        help="Comma-separated BAM tags to process.",
+        help="Comma-separated single-sample BAM tags to process. Defaults to all single tags when omitted.",
+    )
+    parser.add_argument(
+        "--pair-tags",
+        default="",
+        help="Comma-separated tumor/normal pair tags to process.",
     )
     parser.add_argument(
         "--force",
@@ -111,7 +126,15 @@ def positive_int(value: str) -> int:
     return parsed
 
 
-def parse_tags(raw_tags: str, parser: argparse.ArgumentParser) -> list[str]:
+def parse_tags(
+    raw_tags: str | None,
+    parser: argparse.ArgumentParser,
+    *,
+    allow_empty: bool = False,
+) -> list[str]:
+    if raw_tags is None:
+        return [] if allow_empty else list(ALL_BAM_TAGS)
+
     selected: list[str] = []
     seen: set[str] = set()
     for part in raw_tags.split(","):
@@ -124,7 +147,27 @@ def parse_tags(raw_tags: str, parser: argparse.ArgumentParser) -> list[str]:
             seen.add(tag)
             selected.append(tag)
     if not selected:
+        if allow_empty:
+            return []
         parser.error("no BAM tags selected")
+    return selected
+
+
+def parse_pair_tags(raw_tags: str | None, parser: argparse.ArgumentParser) -> list[str]:
+    if raw_tags is None:
+        return []
+
+    selected: list[str] = []
+    seen: set[str] = set()
+    for part in raw_tags.split(","):
+        tag = part.strip()
+        if not tag:
+            continue
+        if tag not in SOMATIC_PAIR_MAP:
+            parser.error(f"unknown pair tag: {tag}")
+        if tag not in seen:
+            seen.add(tag)
+            selected.append(tag)
     return selected
 
 
@@ -160,7 +203,12 @@ def resolve_path(root: Path, raw_path: str) -> Path:
     return path.resolve()
 
 
-def discover_shards(root: Path, tags: list[str], sweep_bed_root: Path) -> list[Shard]:
+def discover_shards(
+    root: Path,
+    tags: list[str],
+    pair_tags: list[str],
+    sweep_bed_root: Path,
+) -> list[Shard]:
     shards: list[Shard] = []
     for tag in tags:
         tag_dir = sweep_bed_root / tag
@@ -170,7 +218,20 @@ def discover_shards(root: Path, tags: list[str], sweep_bed_root: Path) -> list[S
         if not bed_files:
             raise SystemExit(f"ERROR: no BED files found for {tag}: {tag_dir}")
         for bed_file in bed_files:
-            shards.append(Shard(tag=tag, chrom=bed_file.stem, bed_path=bed_file.resolve()))
+            shards.append(
+                Shard(tag=tag, chrom=bed_file.stem, bed_path=bed_file.resolve(), kind="single")
+            )
+    for tag in pair_tags:
+        tag_dir = sweep_bed_root / tag
+        if not tag_dir.is_dir():
+            raise SystemExit(f"ERROR: sweep BED directory not found for {tag}: {tag_dir}")
+        bed_files = sorted(tag_dir.glob("*.bed"))
+        if not bed_files:
+            raise SystemExit(f"ERROR: no BED files found for {tag}: {tag_dir}")
+        for bed_file in bed_files:
+            shards.append(
+                Shard(tag=tag, chrom=bed_file.stem, bed_path=bed_file.resolve(), kind="pair")
+            )
     return shards
 
 
@@ -287,8 +348,14 @@ def run_shard(
     root = Path(root_str)
     output_root = (root / OUTPUT_ROOT_REL).resolve()
     vardict_bin = (root / VARDICT_BIN_REL).resolve()
-    reference = (root / REF_REL).resolve()
-    bam_path = (root / BAM_MAP[shard.tag]).resolve()
+    effective_output_only = output_only or shard.kind == "pair"
+    if shard.kind == "pair":
+        tumor_rel, normal_rel = SOMATIC_PAIR_MAP[shard.tag]
+        bam_arg = f"{(root / tumor_rel).resolve()}|{(root / normal_rel).resolve()}"
+        reference = (root / SOMATIC_REF_MAP[shard.tag]).resolve()
+    else:
+        bam_arg = str((root / BAM_MAP[shard.tag]).resolve())
+        reference = (root / REF_REL).resolve()
     output_file = output_dir(output_root, config_name, shard.chrom) / f"{shard.tag}_{shard.chrom}.tsv.zst"
     log_path = log_file_path(output_root, config_name, shard)
 
@@ -297,7 +364,7 @@ def run_shard(
 
     module_staging: dict[str, Path] = {}
     staging_dirs: list[Path] = []
-    if not output_only:
+    if not effective_output_only:
         for module_name, _ in MODULES:
             staging_dir = module_staging_dir(output_root, module_name, config_name, shard)
             if staging_dir.exists():
@@ -315,7 +382,7 @@ def run_shard(
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path = output_staging / f"{shard.tag}_{shard.chrom}.tsv"
     env = os.environ.copy()
-    if not output_only:
+    if not effective_output_only:
         for module_name, env_name in MODULES:
             env[env_name] = str(module_staging[module_name].resolve())
 
@@ -336,7 +403,7 @@ def run_shard(
                 "-G",
                 str(reference),
                 "-b",
-                str(bam_path),
+                bam_arg,
                 "-th",
                 "1",
                 "-c",
@@ -379,7 +446,7 @@ def run_shard(
                 )
 
             # Compress JSONL files after each chunk to bound disk usage.
-            if not output_only:
+            if not effective_output_only:
                 for module_name, _ in MODULES:
                     jsonl_files = sorted(module_staging[module_name].glob("*.jsonl"))
                     fixture_count += len(jsonl_files)
@@ -391,7 +458,7 @@ def run_shard(
 
         compress_paths([stdout_path])
 
-        if not output_only:
+        if not effective_output_only:
             for module_name, _ in MODULES:
                 promote_files(
                     module_staging[module_name],
@@ -421,6 +488,8 @@ def run_shard(
 def collect_region_bams(shards: list[Shard]) -> dict[str, set[str]]:
     region_bams: dict[str, set[str]] = {}
     for shard in shards:
+        if shard.kind != "single":
+            continue
         bam_rel = BAM_MAP[shard.tag]
         with shard.bed_path.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -489,6 +558,7 @@ def get_vardict_commit(root: Path) -> str:
 def write_manifest(
     output_root: Path,
     selected_tags: list[str],
+    selected_pair_tags: list[str],
     shard_count: int,
     failed_shards: list[ShardResult],
     vardict_commit: str,
@@ -501,7 +571,17 @@ def write_manifest(
         "vardictjava_commit": vardict_commit,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "bam_tags": selected_tags,
+        "pair_tags": selected_pair_tags,
         "bam_paths": {tag: BAM_MAP[tag] for tag in selected_tags},
+        "pair_bam_paths": {
+            tag: {"tumor": tumor, "normal": normal}
+            for tag, (tumor, normal) in SOMATIC_PAIR_MAP.items()
+            if tag in selected_pair_tags
+        },
+        "tag_modes": {
+            **{tag: "single" for tag in selected_tags},
+            **{tag: "somatic" for tag in selected_pair_tags},
+        },
         "mode": mode,
         "config": config_name,
         "region_count": region_count,
@@ -524,7 +604,10 @@ def emit(message: str, log_handle: TextIO, stream: TextIO = sys.stdout) -> None:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    selected_tags = parse_tags(args.tags, parser)
+    selected_pair_tags = parse_pair_tags(args.pair_tags, parser)
+    selected_tags = parse_tags(args.tags, parser, allow_empty=bool(selected_pair_tags))
+    if not selected_tags and not selected_pair_tags:
+        parser.error("at least one of --tags or --pair-tags must select a shard family")
     root = project_root()
     output_root = root / OUTPUT_ROOT_REL
     sweep_bed_root = resolve_path(root, args.sweep_bed_root)
@@ -542,20 +625,25 @@ def main() -> int:
     output_root.mkdir(parents=True, exist_ok=True)
     run_log_path = root / RUN_LOG_REL
     run_log_path.parent.mkdir(parents=True, exist_ok=True)
+    run_output_only = args.output_only or (bool(selected_pair_tags) and not bool(selected_tags))
 
     ensure_dependencies(root)
-    shards = discover_shards(root, selected_tags, sweep_bed_root)
-    region_bams = collect_region_bams(shards) if not args.output_only else {}
+    shards = discover_shards(root, selected_tags, selected_pair_tags, sweep_bed_root)
+    region_bams = collect_region_bams(shards) if not run_output_only else {}
 
     with run_log_path.open("w", encoding="utf-8") as run_log:
         emit("=== sweep_fixtures_parallel ===", run_log)
         emit(f"Project root:  {root}", run_log)
         emit(f"Sweep BEDs:    {sweep_bed_root}", run_log)
         emit(f"Output root:   {output_root}", run_log)
-        emit(f"BAM tags:      {','.join(selected_tags)}", run_log)
+        emit(f"BAM tags:      {','.join(selected_tags) if selected_tags else '(none)'}", run_log)
+        emit(
+            f"Pair tags:     {','.join(selected_pair_tags) if selected_pair_tags else '(none)'}",
+            run_log,
+        )
         emit(f"Workers:       {args.workers}", run_log)
         emit(f"Force:         {1 if args.force else 0}", run_log)
-        emit(f"Mode:          {'output_only' if args.output_only else 'full'}", run_log)
+        emit(f"Mode:          {'output_only' if run_output_only else 'full'}", run_log)
         emit(f"Config:        {config_name or 'default'}", run_log)
         emit(f"Chunk size:    {args.chunk_size}", run_log)
         emit("", run_log)
@@ -567,7 +655,7 @@ def main() -> int:
                     run_shard,
                     shard,
                     args.force,
-                    args.output_only,
+                    run_output_only,
                     config_name,
                     config_flags,
                     str(root),
@@ -605,20 +693,21 @@ def main() -> int:
         completed_shards = sum(1 for result in results if result.status == "success")
 
         region_count = 0
-        if not args.output_only:
+        if not run_output_only:
             region_count = write_regions_tsv(output_root, region_bams)
 
-        fixture_count = 0 if args.output_only else count_fixture_files(output_root)
+        fixture_count = 0 if run_output_only else count_fixture_files(output_root)
         vardict_commit = get_vardict_commit(root)
         write_manifest(
             output_root=output_root,
             selected_tags=selected_tags,
+            selected_pair_tags=selected_pair_tags,
             shard_count=len(shards),
             failed_shards=failed_shards,
             vardict_commit=vardict_commit,
             region_count=region_count,
             fixture_count=fixture_count,
-            mode="output_only" if args.output_only else "full",
+            mode="output_only" if run_output_only else "full",
             config_name=config_name,
         )
 
