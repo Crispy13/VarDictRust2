@@ -110,6 +110,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override sweep BED root for testing (default: tmp/sweep_beds).",
     )
     parser.add_argument(
+        "--manifest-path",
+        default=None,
+        help="Override manifest.json output path (default: <output_root>/manifest.json). "
+        "Use a per-invocation staging path when running multiple presets in parallel.",
+    )
+    parser.add_argument(
         "--chunk-size",
         type=positive_int,
         default=CHUNK_SIZE,
@@ -564,6 +570,7 @@ def write_manifest(
     fixture_count: int,
     mode: str,
     config_name: str | None,
+    manifest_path: Path | None = None,
 ) -> None:
     manifest = {
         "vardictjava_commit": vardict_commit,
@@ -587,8 +594,9 @@ def write_manifest(
         "shard_count": shard_count,
         "failed_shards": [f"{result.tag}/{result.chrom}" for result in failed_shards],
     }
-    manifest_path = output_root / "manifest.json"
-    with manifest_path.open("w", encoding="utf-8") as handle:
+    target_path = manifest_path if manifest_path is not None else output_root / "manifest.json"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    with target_path.open("w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=2, sort_keys=False)
         handle.write("\n")
 
@@ -696,6 +704,9 @@ def main() -> int:
 
         fixture_count = 0 if run_output_only else count_fixture_files(output_root)
         vardict_commit = get_vardict_commit(root)
+        manifest_override = Path(args.manifest_path) if args.manifest_path else None
+        if manifest_override is not None and not manifest_override.is_absolute():
+            manifest_override = (root / manifest_override).resolve()
         write_manifest(
             output_root=output_root,
             selected_tags=selected_tags,
@@ -707,6 +718,7 @@ def main() -> int:
             fixture_count=fixture_count,
             mode="output_only" if run_output_only else "full",
             config_name=config_name,
+            manifest_path=manifest_override,
         )
 
         emit("", run_log)

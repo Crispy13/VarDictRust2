@@ -29,7 +29,7 @@ declare -Ar TILE_COUNTS=(
 
 usage() {
     cat <<'EOF'
-Usage: scripts/gen_e2e_sweep_golden.sh [--config <name> | --all-configs] [--config-tier <N|N-M>] [--tags <csv>] [--somatic] [--force] [--output-only] [--dry-run]
+Usage: scripts/gen_e2e_sweep_golden.sh [--config <name> | --all-configs] [--config-tier <N|N-M>] [--tags <csv>] [--somatic] [--force] [--output-only] [--dry-run] [--parallel <N>]
 
 Regenerate Java e2e sweep cache shards through scripts/sweep_fixtures_parallel.py.
 Wall estimates are order-of-magnitude only and assume about 250 tiles/sec at 10 workers.
@@ -40,6 +40,9 @@ Options:
                         applies_to matches the current lane (germline or somatic).
                         Mutually exclusive with --config. Respects --config-tier filter.
   --config-tier <N|N-M> Filter --all-configs to a tier or tier range (e.g., 1, 2, 1-3).
+  --parallel <N>        With --all-configs, run up to N preset generations concurrently.
+                        Default: 1 (sequential). Manifest merges are serialized via flock;
+                        each invocation writes to a per-PID manifest staging file.
   --tags <csv>      Comma-separated subset of hg002,na12878_exome,na12878_lowcov.
                     Default: hg002,na12878_exome,na12878_lowcov
                                         With --somatic, this is treated as pair tags.
@@ -433,6 +436,172 @@ with preserve_path.open("w", encoding="utf-8") as handle:
 PY
 }
 
+# Parallel-mode additive merge: read the real manifest.json (if present) to
+# preserve accumulated cache_entries from peer invocations, compute this
+# invocation's new cache_entry, and write the merged manifest. Caller MUST
+# hold the flock on $OUTPUT_ROOT/.manifest.lock for the duration of this call.
+merge_staging_manifest_into_real() {
+    local config="$1"
+    local tags_csv="$2"
+    local logical_flags="$3"
+    local project_root="$4"
+    local sweep_bed_root="$5"
+    local staging_manifest="$6"
+    local somatic="$7"
+    local real_manifest="$project_root/$OUTPUT_ROOT/manifest.json"
+
+    CONFIG_NAME="$config" \
+    TAGS_CSV="$tags_csv" \
+    LOGICAL_FLAGS="$logical_flags" \
+    PROJECT_ROOT="$project_root" \
+    REAL_MANIFEST="$real_manifest" \
+    STAGING_MANIFEST="$staging_manifest" \
+    SWEEP_BED_ROOT="$sweep_bed_root" \
+    SOMATIC="$somatic" \
+    python3 <<'PY'
+import glob
+import hashlib
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+project_root = Path(os.environ["PROJECT_ROOT"])
+real_manifest_path = Path(os.environ["REAL_MANIFEST"])
+staging_manifest_path = Path(os.environ["STAGING_MANIFEST"])
+config_name = os.environ["CONFIG_NAME"]
+logical_flags = " ".join(os.environ["LOGICAL_FLAGS"].split())
+sweep_bed_root = Path(os.environ["SWEEP_BED_ROOT"])
+tags = [tag for tag in os.environ["TAGS_CSV"].split(",") if tag]
+somatic = os.environ["SOMATIC"] == "1"
+
+bam_paths = {
+    "hg002": "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam",
+    "na12878_exome": "testdata/NA12878.chrom20.ILLUMINA.bwa.CEU.exome.20121211.bam",
+    "na12878_lowcov": "testdata/NA12878.mapped.ILLUMINA.bwa.CEU.low_coverage.20121211.bam",
+}
+somatic_pair_paths = {
+    "wes_il_pair": {
+        "tumor": "testdata/WES_IL_T_1.bwa.dedup.bam",
+        "normal": "testdata/WES_IL_N_1.bwa.dedup.bam",
+    },
+}
+somatic_ref = {
+    "wes_il_pair": "testdata/GRCh38.d1.vd1.fa",
+}
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+def sha256_concat(paths: list) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+if not staging_manifest_path.exists():
+    raise SystemExit(f"ERROR: staging manifest missing: {staging_manifest_path}")
+with staging_manifest_path.open("r", encoding="utf-8") as handle:
+    staging = json.load(handle)
+
+# Start from the current real manifest (accumulated cache_entries from peers).
+if real_manifest_path.exists():
+    with real_manifest_path.open("r", encoding="utf-8") as handle:
+        merged = json.load(handle)
+    cache_entries = dict(merged.get("cache_entries", {}))
+else:
+    merged = {}
+    cache_entries = {}
+
+# Top-level fields: last-writer-wins from the latest staging manifest.
+for key in (
+    "vardictjava_commit", "generated_at", "bam_tags", "pair_tags",
+    "bam_paths", "pair_bam_paths", "tag_modes", "mode", "config",
+    "region_count", "fixture_count", "shard_count", "failed_shards",
+):
+    if key in staging:
+        merged[key] = staging[key]
+
+# Compute new cache_entry for this invocation.
+vardict_commit = merged.get("vardictjava_commit") or staging.get("vardictjava_commit")
+if not vardict_commit:
+    vardict_commit = subprocess.run(
+        ["git", "-C", str(project_root / "VarDictJava"), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+generator_flags_hash = hashlib.sha256(logical_flags.encode("utf-8")).hexdigest()
+
+if somatic:
+    reference_sha256 = sha256_file(project_root / "testdata/GRCh38.d1.vd1.fa.fai")
+    for tag in tags:
+        bed_paths = sorted(
+            Path(p) for p in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed"))
+        )
+        if not bed_paths:
+            raise SystemExit(f"ERROR: no BED files found for {tag}")
+        pair = somatic_pair_paths[tag]
+        bam_stat = []
+        for role in ("tumor", "normal"):
+            bp = project_root / pair[role]
+            bam_stat.append({
+                "path": pair[role], "role": role,
+                "size": bp.stat().st_size,
+                "mtime_unix": int(bp.stat().st_mtime),
+            })
+        key = f"{config_name}:somatic:{tag}"
+        cache_entries[key] = {
+            "config": config_name, "tag": tag, "mode": "somatic",
+            "bed_sha256": sha256_concat(bed_paths),
+            "bam_stat": bam_stat,
+            "reference_sha256": reference_sha256,
+            "reference_path": somatic_ref[tag],
+            "generator_flags_hash": generator_flags_hash,
+            "vardictjava_commit": vardict_commit,
+        }
+else:
+    reference_sha256 = sha256_file(project_root / "testdata/hs37d5.fa.fai")
+    for tag in tags:
+        bed_paths = sorted(
+            Path(p) for p in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed"))
+        )
+        if not bed_paths:
+            raise SystemExit(f"ERROR: no BED files found for {tag}")
+        bam_path = project_root / bam_paths[tag]
+        bam_stat = [{
+            "path": bam_paths[tag],
+            "size": bam_path.stat().st_size,
+            "mtime_unix": int(bam_path.stat().st_mtime),
+        }]
+        key = f"{config_name}:{tag}"
+        cache_entries[key] = {
+            "config": config_name, "tag": tag,
+            "bed_sha256": sha256_concat(bed_paths),
+            "bam_stat": bam_stat,
+            "reference_sha256": reference_sha256,
+            "generator_flags_hash": generator_flags_hash,
+            "vardictjava_commit": vardict_commit,
+        }
+
+merged["cache_entries"] = cache_entries
+
+real_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile(
+    "w", encoding="utf-8", dir=real_manifest_path.parent, delete=False
+) as handle:
+    json.dump(merged, handle, indent=2, sort_keys=False)
+    handle.write("\n")
+    temp_name = handle.name
+os.replace(temp_name, real_manifest_path)
+PY
+}
+
 config="$DEFAULT_CONFIG"
 tags_csv="$DEFAULT_TAGS"
 force=0
@@ -442,6 +611,10 @@ tags_provided=0
 sweep_bed_root="$DEFAULT_SWEEP_BED_ROOT"
 all_configs=0
 config_tier_filter=""
+parallel_jobs=1
+# Internal flag: when set, this invocation was spawned by --all-configs --parallel,
+# and must use a per-PID manifest staging path with flock-serialized merge.
+internal_parallel_mode=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -457,6 +630,15 @@ while [[ $# -gt 0 ]]; do
             shift
             [[ $# -gt 0 ]] || die "--config-tier requires a value (e.g., 1 or 1-2)"
             config_tier_filter="$1"
+            ;;
+        --parallel)
+            shift
+            [[ $# -gt 0 ]] || die "--parallel requires a positive integer"
+            [[ "$1" =~ ^[1-9][0-9]*$ ]] || die "--parallel must be a positive integer, got: $1"
+            parallel_jobs="$1"
+            ;;
+        --_internal-parallel-mode)
+            internal_parallel_mode=1
             ;;
         --tags)
             shift
@@ -528,7 +710,7 @@ if [[ $all_configs -eq 1 ]]; then
         echo "#   $name"
     done
 
-    # Forward flags (excluding --all-configs / --config / --config-tier)
+    # Forward flags (excluding --all-configs / --config / --config-tier / --parallel)
     forward_flags=()
     [[ -n "$tags_csv" && $tags_provided -eq 1 ]] && forward_flags+=(--tags "$tags_csv")
     [[ $somatic -eq 1 ]] && forward_flags+=(--somatic)
@@ -536,6 +718,72 @@ if [[ $all_configs -eq 1 ]]; then
     [[ $dry_run -eq 1 ]] && forward_flags+=(--dry-run)
 
     script_path="${BASH_SOURCE[0]}"
+
+    if [[ $parallel_jobs -gt 1 ]]; then
+        # Parallel mode: run up to $parallel_jobs recursive invocations concurrently.
+        # Each invocation uses a per-PID manifest staging file; manifest merges are
+        # serialized via flock on $OUTPUT_ROOT/.manifest.lock.
+        project_root_abs="$(git rev-parse --show-toplevel)"
+        mkdir -p "$project_root_abs/$OUTPUT_ROOT"
+        : > "$project_root_abs/$OUTPUT_ROOT/.manifest.lock"
+        echo "# Running ${#candidate_names[@]} presets with --parallel=$parallel_jobs"
+
+        # Per-preset log dir so concurrent stdout doesn't interleave in console.
+        parallel_log_root="$project_root_abs/$LOG_ROOT/parallel_$(date -u +%Y%m%dT%H%M%SZ)"
+        mkdir -p "$parallel_log_root"
+        echo "# Per-preset logs: $parallel_log_root/<preset>.log"
+
+        exit_code=0
+        active=0
+        pids=()
+        preset_by_pid=()
+        for name in "${candidate_names[@]}"; do
+            # Throttle: wait for a slot when at capacity.
+            while [[ $active -ge $parallel_jobs ]]; do
+                if wait -n 2>/dev/null; then
+                    :
+                else
+                    # Fallback: wait for the first pid in the list.
+                    wait "${pids[0]}" || exit_code=1
+                    pids=("${pids[@]:1}")
+                    preset_by_pid=("${preset_by_pid[@]:1}")
+                fi
+                active=$((active - 1))
+            done
+            log_file="$parallel_log_root/$name.log"
+            (
+                bash "$script_path" \
+                    --config "$name" \
+                    --force \
+                    --_internal-parallel-mode \
+                    "${forward_flags[@]}" \
+                    >"$log_file" 2>&1
+            ) &
+            pid=$!
+            pids+=("$pid")
+            preset_by_pid+=("$name")
+            active=$((active + 1))
+            echo "  launched $name (pid=$pid, log=$log_file)"
+        done
+
+        # Drain remaining jobs.
+        for pid in "${pids[@]}"; do
+            if ! wait "$pid"; then
+                exit_code=1
+            fi
+        done
+
+        echo ""
+        echo "=== Parallel regeneration complete (parallel=$parallel_jobs) ==="
+        for i in "${!preset_by_pid[@]}"; do
+            :
+        done
+        if [[ $exit_code -ne 0 ]]; then
+            echo "::error::--all-configs: one or more presets failed; check $parallel_log_root/<preset>.log" >&2
+        fi
+        exit "$exit_code"
+    fi
+
     exit_code=0
     for name in "${candidate_names[@]}"; do
         echo ""
@@ -595,7 +843,14 @@ fi
 mkdir -p "$LOG_ROOT"
 log_file="$LOG_ROOT/e2e_sweep_${config}_$(date -u +%Y%m%dT%H%M%SZ).log"
 
-save_existing_cache_entries "$project_root"
+if [[ $internal_parallel_mode -eq 1 ]]; then
+    # Parallel mode: python writes its manifest to a per-PID staging path,
+    # and we merge into the real manifest.json under flock.
+    staging_manifest="$project_root/$OUTPUT_ROOT/manifest.staging.$$.json"
+    actual_cmd+=(--manifest-path "$staging_manifest")
+else
+    save_existing_cache_entries "$project_root"
+fi
 
 set +e
 "${actual_cmd[@]}" 2>&1 | tee "$log_file"
@@ -604,10 +859,21 @@ set -e
 
 if [[ $cmd_status -ne 0 ]]; then
     echo "::error::e2e sweep cache regeneration failed; logfile=$log_file" >&2
+    [[ $internal_parallel_mode -eq 1 ]] && rm -f "$staging_manifest"
     exit "$cmd_status"
 fi
 
-if [[ $somatic -eq 1 ]]; then
+if [[ $internal_parallel_mode -eq 1 ]]; then
+    # Flock-serialized additive merge of staging manifest into real manifest.json.
+    lock_file="$project_root/$OUTPUT_ROOT/.manifest.lock"
+    (
+        flock 9
+        merge_staging_manifest_into_real \
+            "$config" "$tags_csv" "$logical_flags" "$project_root" \
+            "$sweep_bed_root" "$staging_manifest" "$somatic"
+    ) 9>"$lock_file"
+    rm -f "$staging_manifest"
+elif [[ $somatic -eq 1 ]]; then
     merge_manifest_somatic_cache_entries "$config" "$tags_csv" "$logical_flags" "$project_root" "$sweep_bed_root"
 else
     merge_manifest_cache_entries "$config" "$tags_csv" "$logical_flags" "$project_root" "$sweep_bed_root"
