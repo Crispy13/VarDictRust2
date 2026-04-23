@@ -153,6 +153,16 @@ thread_local! {
     static LOCAL_MODE: RefCell<Option<SharedMode>> = RefCell::new(None);
 }
 
+const _: fn() = {
+    fn check() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<GlobalReadOnlyScope>();
+    }
+
+    check
+};
+
 fn read_local_scope() -> Option<GlobalReadOnlyScope> {
     LOCAL_GROS.with(|scope| scope.borrow().clone())
 }

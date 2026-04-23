@@ -11,6 +11,16 @@ use rust_htslib::bam::{self, HeaderView, Read as BamRead};
 use crate::data::{InitialData, Region};
 use crate::scope::{GlobalReadOnlyScope, Scope};
 
+const _: fn() = {
+    fn check() {
+        fn assert_send<T: Send>() {}
+
+        assert_send::<bam::IndexedReader>();
+    }
+
+    check
+};
+
 // ─── Integer.decode() equivalent ──────────────────────────────────────────────
 // Java: SamView constructor calls Integer.decode(samfilter) which handles
 // hex (0x/0X/#), octal (leading 0), and decimal.

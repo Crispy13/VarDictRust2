@@ -19,6 +19,17 @@ thread_local! {
     static THREAD_LOCAL_FASTA_FILES: RefCell<HashMap<String, faidx::Reader>> = RefCell::new(HashMap::new());
 }
 
+const _: fn() = {
+    fn check() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<Reference>();
+        assert_send_sync::<ReferenceResource>();
+    }
+
+    check
+};
+
 fn wrong_fasta_or_bam_message(chr: &str) -> String {
     format!(
         "The name of this chromosome \"{}\" is missing in your fasta file. Please be sure that chromosome names in BAM, fasta and BED are in correspondence with each other and you use correct fasta for your BAM (can be checked in BAM header).",
