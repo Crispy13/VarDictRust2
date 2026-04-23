@@ -10,6 +10,8 @@ prefix:tovars_sweep::
 parity_e2e_all
 # Full-BAM E2E sweep tier (3 tests in tests/parity_e2e_sweep.rs)
 prefix:parity_e2e_sweep_
+# E2E somatic-mode full-pair sweep — cost-gated, run via sweep.yml --module=e2e_sweep_somatic
+prefix:parity_e2e_sweep_somatic_
 # Cell-level config E2E tests (4,400 trials in tests/parity_config_e2e_cells.rs)
 prefix:parity_config_e2e_cell_
 
