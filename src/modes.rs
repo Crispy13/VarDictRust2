@@ -1,5 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::io::Write;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::data::{
     AlignedVarsData, InitialData, RealignedVariationData, Region, Sclip, VariationMap,
@@ -12,7 +14,7 @@ use crate::mods::somatic_post_process::somatic_post_process;
 use crate::mods::{structural_variants_processor, to_vars_builder, variation_realigner};
 use crate::parity::snapshot::maybe_write_module_snapshot;
 use crate::reference::{Reference, ReferenceResource};
-use crate::scope::{AbstractMode, GlobalReadOnlyScope, Scope};
+use crate::scope::{AbstractMode, GlobalReadOnlyScope, Scope, VariantPrinter};
 use crate::utils::tsv_join;
 
 fn try_to_get_reference(reference_resource: &ReferenceResource, region: &Region) -> Reference {
@@ -25,6 +27,30 @@ fn try_to_get_reference(reference_resource: &ReferenceResource, region: &Region)
                 error
             )
         })
+}
+
+fn write_mode_output(printer: &VariantPrinter, buffer: &[u8]) {
+    match printer {
+        VariantPrinter::Out => {
+            let stdout = std::io::stdout();
+            let mut handle = stdout.lock();
+            handle
+                .write_all(buffer)
+                .expect("failed to write mode output to stdout");
+        }
+        VariantPrinter::Err => {
+            let stderr = std::io::stderr();
+            let mut handle = stderr.lock();
+            handle
+                .write_all(buffer)
+                .expect("failed to write mode output to stderr");
+        }
+        VariantPrinter::Buffer(captured) => {
+            let rendered = std::str::from_utf8(buffer).expect("mode output must be valid UTF-8");
+            let mut output = captured.lock().unwrap_or_else(|error| error.into_inner());
+            output.push_str(rendered);
+        }
+    }
 }
 
 fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
@@ -162,7 +188,6 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
 }
 
 /// Ported from: AbstractMode.java:L100-L105 and AbstractMode.AbstractParallelMode.
-/// Stage 2 keeps `parallel()` behavior-identical by delegating to `not_parallel()`.
 pub trait ParallelMode: AbstractMode {
     fn parallel(&self, _threads: usize) {
         self.not_parallel();
@@ -181,6 +206,10 @@ pub struct SimpleMode {
 impl AbstractMode for SimpleMode {}
 
 impl ParallelMode for SimpleMode {
+    fn parallel(&self, threads: usize) {
+        SimpleMode::parallel(self, threads);
+    }
+
     fn not_parallel(&self) {
         SimpleMode::not_parallel(self);
     }
@@ -198,29 +227,85 @@ impl SimpleMode {
 
     pub fn not_parallel(&self) {
         let printer = GlobalReadOnlyScope::instance().variant_printer;
-        // TODO(Stage 4 multithreading): switch each region to a per-region buffer
-        // before ordered emission so `parallel()` can stay byte-identical.
         for regions in &self.segments {
             for region in regions {
-                let reference = try_to_get_reference(&self.reference_resource, region);
-                let initial_scope = Scope::new(
-                    GlobalReadOnlyScope::instance()
-                        .conf
-                        .bam
-                        .as_ref()
-                        .expect("BAM names must be configured")
-                        .get_bam1(),
-                    region.clone(),
-                    Arc::new(reference),
-                    Arc::new(self.reference_resource.clone()),
-                    0,
-                    HashSet::new(),
-                    printer.clone(),
-                    InitialData::default(),
-                );
-                simple_post_process(run_pipeline(initial_scope));
+                let mut buffer = Vec::new();
+                self.process_region_to_buffer(region, &mut buffer);
+                write_mode_output(&printer, &buffer);
             }
         }
+    }
+
+    /// Ported from: SimpleMode.processBamInPipeline()
+    /// Java source: SimpleMode.java:L90-L104
+    pub fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>) {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let printer = VariantPrinter::Buffer(buffer.clone());
+        let reference = try_to_get_reference(&self.reference_resource, region);
+        let initial_scope = Scope::new(
+            GlobalReadOnlyScope::instance()
+                .conf
+                .bam
+                .as_ref()
+                .expect("BAM names must be configured")
+                .get_bam1(),
+            region.clone(),
+            Arc::new(reference),
+            Arc::new(self.reference_resource.clone()),
+            0,
+            HashSet::new(),
+            printer,
+            InitialData::default(),
+        );
+        simple_post_process(run_pipeline(initial_scope));
+
+        let mut rendered = buffer.lock().unwrap_or_else(|error| error.into_inner());
+        let mut bytes = std::mem::take(&mut *rendered).into_bytes();
+        out.append(&mut bytes);
+    }
+
+    /// Ported from: AbstractMode.AbstractParallelMode.process() and
+    /// SimpleMode.createParallelMode()
+    /// Java source: AbstractMode.java:L114-L136 and SimpleMode.java:L53-L83
+    pub fn parallel(&self, threads: usize) {
+        use crossbeam_channel::{bounded, Receiver};
+        use rayon::ThreadPoolBuilder;
+
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("failed to build simple-mode rayon pool");
+        let (outer_tx, outer_rx) = bounded::<Receiver<Vec<u8>>>(threads.max(10));
+        let printer = GlobalReadOnlyScope::instance().variant_printer;
+
+        let consumer = std::thread::spawn(move || {
+            while let Ok(inner_rx) = outer_rx.recv() {
+                let buffer = inner_rx.recv().expect("worker dropped buffered output");
+                write_mode_output(&printer, &buffer);
+            }
+        });
+
+        pool.scope(|scope| {
+            for regions in &self.segments {
+                for region in regions {
+                    let (inner_tx, inner_rx) = bounded::<Vec<u8>>(1);
+                    outer_tx
+                        .send(inner_rx)
+                        .expect("consumer dropped outer simple-mode queue");
+                    let self_ref = self;
+                    scope.spawn(move |_| {
+                        let mut buffer = Vec::new();
+                        self_ref.process_region_to_buffer(region, &mut buffer);
+                        inner_tx
+                            .send(buffer)
+                            .expect("consumer dropped inner simple-mode queue");
+                    });
+                }
+            }
+        });
+
+        drop(outer_tx);
+        consumer.join().expect("parallel consumer thread panicked");
     }
 
     pub fn print_header(&self) {

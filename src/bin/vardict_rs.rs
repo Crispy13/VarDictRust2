@@ -5,7 +5,7 @@ use std::io::{self, ErrorKind};
 use clap::Parser;
 use vardict_rs::config::{BamNames, Configuration};
 use vardict_rs::data::Region;
-use vardict_rs::modes::{ParallelMode, SimpleMode};
+use vardict_rs::modes::SimpleMode;
 use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::GlobalReadOnlyScope;
 use vardict_rs::variations::{clear_variation_utils_scope, configure_variation_utils_scope};
