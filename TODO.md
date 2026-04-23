@@ -56,6 +56,77 @@ Does not block the multithreading port. Does not affect Binary B. Only relevant 
 
 If added before the port is complete, every CM-TH4 cell will be byte-identical to default — parity passes but coverage is fake. The handoff doc (§5) calls this out explicitly.
 
+**Multithreading port status (2026-04-23):** Stages 1–5 complete (commits `9248efc` → `a4c7916`). SimpleMode + SomaticMode `parallel()` are both byte-identical to `not_parallel()` across 16 determinism test cases including `-B 4` (TLS-scope guard). The port is functionally complete; this item is now an optional *validation* step rather than a blocker.
+
+---
+
+## 0.7 Multithreading Stage 6: full sweep validation + CM-TH4 preset
+
+**Status:** 🟢 Optional validation step (multithreading port complete)
+**Location:** [scripts/config_presets.tsv](scripts/config_presets.tsv) + [scripts/gen_e2e_golden_tsv.sh](scripts/gen_e2e_golden_tsv.sh)
+**Introduced:** 2026-04-23, handoff-multithreading.md §§ Stage 6
+
+### Unblock Path
+
+1. Run Binary A + Binary B full sweep with `-th 1,4,8` against all 44 configs × all regions. Confirm byte-identical across thread counts.
+2. Add `CM-TH4\t-th 4\tFour-thread parallel execution\t2\tboth` row to `scripts/config_presets.tsv`.
+3. Regenerate goldens via `scripts/gen_e2e_golden_tsv.sh --push-only --all-configs`.
+4. Confirm Binary B 4400 → 4840 cells, baseline stays at zero failures.
+
+### Why Not Blocking
+
+The 16 determinism test cases (`tests/parity_parallel_determinism.rs`) already gate nondeterminism across both modes including the `-B 4` TLS-scope regression guard. Stage 6 would increase config × region breadth but is not required for correctness.
+
+---
+
+## 0.8 SomaticMode CLI dispatch in `src/bin/vardict_rs.rs`
+
+**Status:** ⛔ Blocked on M5 / combine_analysis (TODO #1)
+**Location:** [src/bin/vardict_rs.rs](src/bin/vardict_rs.rs)
+**Introduced:** 2026-04-23, Stage 5 of multithreading port
+
+### Current Rust Behavior
+
+`src/bin/vardict_rs.rs` constructs only `SimpleMode` regardless of how many BAM paths the CLI receives. `-th` flag works correctly but only dispatches through SimpleMode's `parallel()`. SomaticMode's `parallel()` impl (Stage 5, commit `a4c7916`) is exercised only by `tests/parity_parallel_determinism.rs`.
+
+### Unblock Path
+
+1. Un-stub `combine_analysis` (TODO #1). Without it, somatic CLI output would lack rescue/downgrade labels.
+2. Wire mode selection in `src/bin/vardict_rs.rs`: single BAM path → SimpleMode; two BAM paths separated by `|` → SomaticMode; amplicon designations → AmpliconMode.
+3. Match Java `main()`'s mode-selection logic from `VarDictLauncher.java` / `com.astrazeneca.vardict.Main`.
+
+### Why It Is Blocked
+
+Same dependency chain as TODO #1. Wiring the CLI before `combine_analysis` lands would produce output missing somatic rescue labels — Binary B would fail on every somatic cell.
+
+---
+
+## 0.9 AmpliconMode + SplicingMode `parallel()` implementations
+
+**Status:** 🟡 Optional; deferred from multithreading handoff
+**Location:** [src/modes.rs](src/modes.rs) — `impl ParallelMode for AmpliconMode`, `SplicingMode`
+**Introduced:** 2026-04-23, multithreading port
+
+### Current State
+
+After Stage 4.5 (`8d7d150`), `ParallelMode` is a trait with default implementations of `parallel()` + `not_parallel()`. AmpliconMode and SplicingMode compile with stub `regions()` returning `&[]` and `process_region_to_buffer()` that panics. The crossbeam/rayon topology is already inherited from the trait default — these modes just need their per-region work wired in.
+
+### Unblock Path (AmpliconMode)
+
+1. Read Java `AmpliconMode.createParallelMode()` + per-region task body to determine whether amplicon post-merge runs inside the per-region task (safe, no extra work) or across regions after all tasks complete (needs `post_parallel_hook()` override).
+2. Port the per-region amplicon pipeline into `process_region_to_buffer()`.
+3. Optional: override `post_parallel_hook()` for cross-region merge.
+4. Extend `tests/parity_parallel_determinism.rs` with amplicon fixtures.
+
+### Unblock Path (SplicingMode)
+
+1. Similar to AmpliconMode but with splicing-specific pipeline.
+2. Verify the splicing variant-call path is fully ported in Rust (may hit pre-existing porting gaps in splicing logic itself, not just parallel).
+
+### Why Not Blocking
+
+Neither mode is in the original multithreading handoff scope. AmpliconMode + SplicingMode users can use `-th 1` (serial) path which routes to `not_parallel()` default. Parity is unaffected.
+
 ---
 
 ## 1. `somatic_post_process::combine_analysis` is stubbed
