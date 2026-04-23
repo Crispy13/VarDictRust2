@@ -188,37 +188,87 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
 }
 
 /// Ported from: AbstractMode.java:L100-L105 and AbstractMode.AbstractParallelMode.
-pub trait ParallelMode: AbstractMode {
-    fn parallel(&self, _threads: usize) {
-        self.not_parallel();
+pub trait ParallelMode: AbstractMode + Sync {
+    fn regions(&self) -> &[Region];
+
+    fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>);
+
+    fn post_parallel_hook(&self) {}
+
+    fn parallel(&self, threads: usize) {
+        use crossbeam_channel::{bounded, Receiver};
+        use rayon::ThreadPoolBuilder;
+
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("failed to build simple-mode rayon pool");
+        let (outer_tx, outer_rx) = bounded::<Receiver<Vec<u8>>>(threads.max(10));
+        let printer = GlobalReadOnlyScope::instance().variant_printer;
+
+        let consumer = std::thread::spawn(move || {
+            while let Ok(inner_rx) = outer_rx.recv() {
+                let buffer = inner_rx.recv().expect("worker dropped buffered output");
+                write_mode_output(&printer, &buffer);
+            }
+        });
+
+        pool.scope(|scope| {
+            for region in self.regions() {
+                let (inner_tx, inner_rx) = bounded::<Vec<u8>>(1);
+                outer_tx
+                    .send(inner_rx)
+                    .expect("consumer dropped outer simple-mode queue");
+                let self_ref = self;
+                scope.spawn(move |_| {
+                    let mut buffer = Vec::new();
+                    self_ref.process_region_to_buffer(region, &mut buffer);
+                    inner_tx
+                        .send(buffer)
+                        .expect("consumer dropped inner simple-mode queue");
+                });
+            }
+        });
+
+        drop(outer_tx);
+        consumer.join().expect("parallel consumer thread panicked");
+        self.post_parallel_hook();
     }
 
-    fn not_parallel(&self);
+    fn not_parallel(&self) {
+        let printer = GlobalReadOnlyScope::instance().variant_printer;
+        for region in self.regions() {
+            let mut buffer = Vec::new();
+            self.process_region_to_buffer(region, &mut buffer);
+            write_mode_output(&printer, &buffer);
+        }
+        self.post_parallel_hook();
+    }
 }
 
 /// Ported from: SimpleMode.java:L25-L118
 #[derive(Clone, Debug)]
 pub struct SimpleMode {
-    segments: Vec<Vec<Region>>,
+    regions: Vec<Region>,
     reference_resource: ReferenceResource,
 }
 
 impl AbstractMode for SimpleMode {}
 
 impl ParallelMode for SimpleMode {
-    fn parallel(&self, threads: usize) {
-        SimpleMode::parallel(self, threads);
+    fn regions(&self) -> &[Region] {
+        &self.regions
     }
 
-    fn not_parallel(&self) {
-        SimpleMode::not_parallel(self);
+    fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>) {
+        SimpleMode::process_region_to_buffer(self, region, out);
     }
 }
 
 impl SimpleMode {
     pub fn new(segments: Vec<Vec<Region>>, reference_resource: ReferenceResource) -> Self {
         let mode = Self {
-            segments,
+            regions: segments.into_iter().flatten().collect(),
             reference_resource,
         };
         mode.print_header();
@@ -226,14 +276,7 @@ impl SimpleMode {
     }
 
     pub fn not_parallel(&self) {
-        let printer = GlobalReadOnlyScope::instance().variant_printer;
-        for regions in &self.segments {
-            for region in regions {
-                let mut buffer = Vec::new();
-                self.process_region_to_buffer(region, &mut buffer);
-                write_mode_output(&printer, &buffer);
-            }
-        }
+        <Self as ParallelMode>::not_parallel(self);
     }
 
     /// Ported from: SimpleMode.processBamInPipeline()
@@ -264,48 +307,8 @@ impl SimpleMode {
         out.append(&mut bytes);
     }
 
-    /// Ported from: AbstractMode.AbstractParallelMode.process() and
-    /// SimpleMode.createParallelMode()
-    /// Java source: AbstractMode.java:L114-L136 and SimpleMode.java:L53-L83
     pub fn parallel(&self, threads: usize) {
-        use crossbeam_channel::{bounded, Receiver};
-        use rayon::ThreadPoolBuilder;
-
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .expect("failed to build simple-mode rayon pool");
-        let (outer_tx, outer_rx) = bounded::<Receiver<Vec<u8>>>(threads.max(10));
-        let printer = GlobalReadOnlyScope::instance().variant_printer;
-
-        let consumer = std::thread::spawn(move || {
-            while let Ok(inner_rx) = outer_rx.recv() {
-                let buffer = inner_rx.recv().expect("worker dropped buffered output");
-                write_mode_output(&printer, &buffer);
-            }
-        });
-
-        pool.scope(|scope| {
-            for regions in &self.segments {
-                for region in regions {
-                    let (inner_tx, inner_rx) = bounded::<Vec<u8>>(1);
-                    outer_tx
-                        .send(inner_rx)
-                        .expect("consumer dropped outer simple-mode queue");
-                    let self_ref = self;
-                    scope.spawn(move |_| {
-                        let mut buffer = Vec::new();
-                        self_ref.process_region_to_buffer(region, &mut buffer);
-                        inner_tx
-                            .send(buffer)
-                            .expect("consumer dropped inner simple-mode queue");
-                    });
-                }
-            }
-        });
-
-        drop(outer_tx);
-        consumer.join().expect("parallel consumer thread panicked");
+        <Self as ParallelMode>::parallel(self, threads);
     }
 
     pub fn print_header(&self) {
@@ -370,6 +373,14 @@ pub struct SomaticMode {
 impl AbstractMode for SomaticMode {}
 
 impl ParallelMode for SomaticMode {
+    fn regions(&self) -> &[Region] {
+        &[]
+    }
+
+    fn process_region_to_buffer(&self, _region: &Region, _out: &mut Vec<u8>) {
+        panic!("not yet implemented");
+    }
+
     fn not_parallel(&self) {
         SomaticMode::not_parallel(self);
     }
@@ -502,6 +513,14 @@ pub struct AmpliconMode {
 impl AbstractMode for AmpliconMode {}
 
 impl ParallelMode for AmpliconMode {
+    fn regions(&self) -> &[Region] {
+        &[]
+    }
+
+    fn process_region_to_buffer(&self, _region: &Region, _out: &mut Vec<u8>) {
+        panic!("not yet implemented");
+    }
+
     fn not_parallel(&self) {
         AmpliconMode::not_parallel(self);
     }
