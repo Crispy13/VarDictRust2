@@ -37,7 +37,8 @@ for arg in "$@"; do
 done
 
 log() {
-  [[ "$VERBOSE" -eq 1 ]] && echo "[check_preset_drift] $*"
+  if [[ "$VERBOSE" -eq 1 ]]; then echo "[check_preset_drift] $*"; fi
+  return 0
 }
 fail() {
   echo "[check_preset_drift] FAIL: $*" >&2
