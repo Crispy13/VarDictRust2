@@ -161,6 +161,16 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
     }
 }
 
+/// Ported from: AbstractMode.java:L100-L105 and AbstractMode.AbstractParallelMode.
+/// Stage 2 keeps `parallel()` behavior-identical by delegating to `not_parallel()`.
+pub trait ParallelMode: AbstractMode {
+    fn parallel(&self, _threads: usize) {
+        self.not_parallel();
+    }
+
+    fn not_parallel(&self);
+}
+
 /// Ported from: SimpleMode.java:L25-L118
 #[derive(Clone, Debug)]
 pub struct SimpleMode {
@@ -169,6 +179,12 @@ pub struct SimpleMode {
 }
 
 impl AbstractMode for SimpleMode {}
+
+impl ParallelMode for SimpleMode {
+    fn not_parallel(&self) {
+        SimpleMode::not_parallel(self);
+    }
+}
 
 impl SimpleMode {
     pub fn new(segments: Vec<Vec<Region>>, reference_resource: ReferenceResource) -> Self {
@@ -182,6 +198,8 @@ impl SimpleMode {
 
     pub fn not_parallel(&self) {
         let printer = GlobalReadOnlyScope::instance().variant_printer;
+        // TODO(Stage 4 multithreading): switch each region to a per-region buffer
+        // before ordered emission so `parallel()` can stay byte-identical.
         for regions in &self.segments {
             for region in regions {
                 let reference = try_to_get_reference(&self.reference_resource, region);
@@ -265,6 +283,12 @@ pub struct SomaticMode {
 }
 
 impl AbstractMode for SomaticMode {}
+
+impl ParallelMode for SomaticMode {
+    fn not_parallel(&self) {
+        SomaticMode::not_parallel(self);
+    }
+}
 
 impl SomaticMode {
     pub fn new(segments: Vec<Vec<Region>>, reference_resource: ReferenceResource) -> Self {
@@ -391,6 +415,12 @@ pub struct AmpliconMode {
 }
 
 impl AbstractMode for AmpliconMode {}
+
+impl ParallelMode for AmpliconMode {
+    fn not_parallel(&self) {
+        AmpliconMode::not_parallel(self);
+    }
+}
 
 impl AmpliconMode {
     pub fn new(segments: Vec<Vec<Region>>, reference_resource: ReferenceResource) -> Self {

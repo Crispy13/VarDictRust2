@@ -5,7 +5,7 @@ use std::io::{self, ErrorKind};
 use clap::Parser;
 use vardict_rs::config::{BamNames, Configuration};
 use vardict_rs::data::Region;
-use vardict_rs::modes::SimpleMode;
+use vardict_rs::modes::{ParallelMode, SimpleMode};
 use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::GlobalReadOnlyScope;
 use vardict_rs::variations::{clear_variation_utils_scope, configure_variation_utils_scope};
@@ -61,6 +61,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
+    let requested_threads = cli
+        .threads
+        .and_then(|threads| usize::try_from(threads).ok())
+        .unwrap_or(1);
     let fai_path = format!("{}.fai", cli.reference);
     let chr_lengths = load_chr_lengths(&fai_path)?;
 
@@ -110,7 +114,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 
     let reference_resource = ReferenceResource::new(&cli.reference, 1200, 0, chr_lengths, false);
     let simple_mode = SimpleMode::new(vec![vec![region]], reference_resource);
-    simple_mode.not_parallel();
+    if requested_threads > 1 {
+        simple_mode.parallel(requested_threads);
+    } else {
+        simple_mode.not_parallel();
+    }
 
     Ok(())
 }
