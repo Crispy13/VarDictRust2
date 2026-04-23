@@ -16,22 +16,22 @@ T1-14	-B 4	High bias read requirement	1	both
 T2-01	-f 0.005 -q 10	Sensitive freq with low quality	2	both
 T2-02	-f 0.1 -r 8	High freq with high reads	2	both
 T2-03	-m 20 -X 5 -q 15	Relaxed realignment with low quality	2	both
-T2-04	-f 0.001 -B 1	Ultra-sensitive with low bias	2	both
+CM-FISHER	--fisher	Call-mode: enable Fisher's exact test (61-col output)	2	both
 T2-05	-r 4 -q 30 -m 4	Strict across multiple params	2	both
-T2-06	-f 0.02 -m 12 -X 3	Moderate freq with relaxed realignment	2	both
+CM-PILEUP	-p	Call-mode: pileup mode (emit every reference position)	2	both
 T2-07	-f 0.05 -r 1 -B 4	Medium freq with min reads 1 and high bias	2	both
 T2-08	-q 25 -m 15	Elevated quality with relaxed mismatch	2	both
-T2-09	-f 0.005 -r 4 -q 20	Sensitive freq with elevated reads and quality	2	both
+CM-NOSV	-U	Call-mode: bypass structural-variant module	2	both
 T2-10	-B 1 -m 20 -X 5	Low bias with very relaxed realignment	2	both
 T3-01	-f 0.001 -r 1 -q 10	Ultra-sensitive everything	3	both
 T3-02	-f 0.1 -r 8 -q 30 -m 4	Ultra-strict everything	3	both
-T3-03	-f 0.001 -m 20 -X 5 -B 1	Max sensitivity with max realignment tolerance	3	both
+CM-NOREAL	-k 0	Call-mode: bypass local realignment module	3	both
 T3-04	-f 0.05 -r 4 -q 25 -B 4	Medium-strict with high bias bar	3	both
 T3-05	-r 1 -m 4 -X 1	Min reads with strict realignment	3	both
-T3-06	-f 0.005 -q 30 -m 15	Sensitive freq but strict quality	3	both
+CM-CHIMERIC	--chimeric	Call-mode: allow chimeric reads (soft-clip extension)	3	both
 T3-07	-r 8 -q 10 -B 1	High reads with low quality and low bias	3	both
 T3-08	-f 0.02 -r 1 -m 12 -X 3 -B 4	Five-param combo	3	both
-T3-09	-f 0.001 -r 4 -q 15 -m 20	Sensitive with moderate stringency	3	both
+CM-MAPQ30	-Q 30	Call-mode: MAPQ floor 30 (distinct filter path)	3	both
 T3-10	-f 0.1 -B 1 -m 4 -X 1	High freq with strict realignment and low bias	3	both
 PW-000	-f 0.005 -r 4	Pairwise: freq x minr	4	both
 PW-001	-f 0.05 -q 10	Pairwise: freq x goodq	4	both

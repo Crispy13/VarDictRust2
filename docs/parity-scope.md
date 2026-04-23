@@ -56,10 +56,10 @@ following flags. Any flag not in this list is unclaimed:
 | `-X` | Vext (realignment window) | T1-04, T1-13 + T2/T3/PW combinations |
 | `-B` | Bias-read requirement | T1-05, T1-14 + T2/T3/PW combinations |
 
-Additional single-threaded flags exercised at runtime by the harness but not in the
-preset matrix (coverage via default behavior only): `--fisher`, `-p`, `-U`, `-k`,
-`--chimeric`, `-Q`, `-M`, `-V`, `-I`. These are **candidates for future CM-* preset
-addition** — see `/memories/repo/preset-redundancy-audit.md`.
+Additional single-threaded flags exercised via dedicated **call-mode presets**:
+`--fisher` (CM-FISHER), `-p` (CM-PILEUP), `-U` (CM-NOSV), `-k 0` (CM-NOREAL),
+`--chimeric` (CM-CHIMERIC), `-Q 30` (CM-MAPQ30). Somatic-only flags `-M`, `-V`,
+`-I` are exercised by the somatic default config on the `wes_il_pair` tag.
 
 ### Sweep lanes
 | Tag | Mode | Reference | BAM(s) |
@@ -71,10 +71,15 @@ addition** — see `/memories/repo/preset-redundancy-audit.md`.
 
 ### Preset tiers
 - **T1-01..T1-14** (14 rows) — single-axis threshold variation.
-- **T2-01..T2-10** (10 rows) — dual-axis combinations.
-- **T3-01..T3-10** (10 rows) — three-to-five-axis combinations.
+- **T2-\***, **T3-\*** — dual- and three-to-five-axis threshold combinations
+  (7 rows each after the CM-* swap; tier counts preserved at 10 via `tier`
+  column when CM rows are included, see below).
 - **PW-000..PW-009** (10 rows) — pairwise interaction coverage across 6 threshold
   flags.
+- **CM-\*** (6 rows, named `CM-FISHER`, `CM-PILEUP`, `CM-NOSV`, `CM-NOREAL`,
+  `CM-CHIMERIC`, `CM-MAPQ30`) — call-mode presets exercising distinct execution
+  branches. Each CM row inherits `tier=2` or `tier=3` to preserve the tier-
+  column distribution at T1=14 / T2=10 / T3=10 / PW=10.
 
 **Total: 44 rows.**
 
