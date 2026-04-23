@@ -38,6 +38,7 @@
 //!
 //! Backward-compatibility guarantee: this R2 harness only looks up `{config}:{tag}` keys, so
 //! `:somatic:` entries are ignored here and consumed by the Phase 5 somatic validator instead.
+// Phase 4 (somatic): pub(crate) visibility on helpers cross-binary somatic reuse.
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
@@ -221,7 +222,7 @@ fn check_e2e_sweep_manifest(config: &str, tag: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn compare_manifest_field(entry: &Value, field: &str, expected: &Value) -> Result<(), String> {
+pub(crate) fn compare_manifest_field(entry: &Value, field: &str, expected: &Value) -> Result<(), String> {
     let actual = entry
         .get(field)
         .ok_or_else(|| format!("Missing {field} in cache entry"))?;
@@ -234,7 +235,7 @@ fn compare_manifest_field(entry: &Value, field: &str, expected: &Value) -> Resul
     Ok(())
 }
 
-fn parse_shard_env() -> Option<(u64, u64)> {
+pub(crate) fn parse_shard_env() -> Option<(u64, u64)> {
     let value = std::env::var("VARDICT_E2E_SWEEP_SHARD").ok()?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -255,7 +256,7 @@ fn parse_shard_env() -> Option<(u64, u64)> {
     Some((index, total))
 }
 
-fn chunk_id(tag: &str, chrom: &str, ordinal: u64) -> u64 {
+pub(crate) fn chunk_id(tag: &str, chrom: &str, ordinal: u64) -> u64 {
     let mut hasher = DefaultHasher::new();
     (tag, chrom, ordinal).hash(&mut hasher);
     hasher.finish()
@@ -519,18 +520,18 @@ fn empty_tile_map(chunk_tiles: &[TileKey]) -> BTreeMap<TileKey, Vec<String>> {
         .collect()
 }
 
-fn detect_region_column(columns: &[&str]) -> Option<usize> {
+pub(crate) fn detect_region_column(columns: &[&str]) -> Option<usize> {
     columns
         .iter()
         .position(|field| parse_tile_key(field).is_some())
 }
 
-fn parse_region_column_value(value: &str) -> io::Result<TileKey> {
+pub(crate) fn parse_region_column_value(value: &str) -> io::Result<TileKey> {
     parse_tile_key(value)
         .ok_or_else(|| invalid_data(format!("Invalid Region column value: {value}")))
 }
 
-fn parse_tile_key(value: &str) -> Option<TileKey> {
+pub(crate) fn parse_tile_key(value: &str) -> Option<TileKey> {
     let (chrom, range) = value.split_once(':')?;
     let (start, end) = range.split_once('-')?;
     Some(TileKey {
@@ -540,7 +541,7 @@ fn parse_tile_key(value: &str) -> Option<TileKey> {
     })
 }
 
-fn live_vardictjava_commit() -> Result<String, String> {
+pub(crate) fn live_vardictjava_commit() -> Result<String, String> {
     let output = Command::new("git")
         .args(["-C", "VarDictJava", "rev-parse", "HEAD"])
         .output()
@@ -621,7 +622,7 @@ fn compute_generator_flags_hash(config: &str, tag: &str) -> Value {
     Value::String(format!("{:016x}", hasher.finish()))
 }
 
-fn chrom_sort_key(chrom: &str) -> (u8, u32, &str) {
+pub(crate) fn chrom_sort_key(chrom: &str) -> (u8, u32, &str) {
     match chrom.parse::<u32>() {
         Ok(value) => (0, value, ""),
         Err(_) => (1, 0, chrom),
@@ -648,6 +649,6 @@ fn format_rows(rows: &[String]) -> String {
     }
 }
 
-fn invalid_data(message: impl Into<String>) -> io::Error {
+pub(crate) fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
