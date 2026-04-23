@@ -1,3 +1,30 @@
+//! Full-BAM end-to-end parity harness against cached Java TSV shards.
+//!
+//! This module streams large BAM-backed regions in chunked tile windows, dispatches by BAM tag,
+//! and compares Rust output against the pre-generated Java cache under
+//! `tmp/sweep_fixtures/output/`.
+//!
+//! Prerequisites:
+//! - `tmp/sweep_fixtures/output/` must exist and contain a valid `manifest.json`.
+//! - Regenerate the cache with `bash scripts/gen_e2e_sweep_golden.sh` when fixtures are missing
+//!   or stale.
+//!
+//! Environment:
+//! - `VARDICT_E2E_SWEEP_CONFIG=<name>` selects the cache layout; defaults to `default`.
+//! - `VARDICT_E2E_SWEEP_SHARD=i/N` optionally runs only one shard of the tile set.
+//! - `CI=true` converts missing-cache handling into a hard panic instead of a local skip.
+//!
+//! Run with:
+//! `cargo test --profile debug-release --test parity_e2e_sweep -- --include-ignored --test-threads=1`
+//!
+//! To add a new BAM tag:
+//! 1. Add the lookup entry in `tests/common/mod.rs::bam_tag_lookup`.
+//! 2. Add a `<tag>_sweep.rs` stub plus its `#[path]` line in `tests/parity_e2e_sweep.rs`.
+//! 3. Append the tag in `scripts/gen_e2e_sweep_golden.sh`.
+//! 4. Regenerate the cache before running this harness.
+//!
+//! Phase 0a note: the sample name is derived from the BAM file stem, not `test_sample`; keep
+//! that behavior unchanged.
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
