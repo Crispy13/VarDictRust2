@@ -29,13 +29,17 @@ declare -Ar TILE_COUNTS=(
 
 usage() {
     cat <<'EOF'
-Usage: scripts/gen_e2e_sweep_golden.sh [--config <name>] [--tags <csv>] [--somatic] [--force] [--output-only] [--dry-run]
+Usage: scripts/gen_e2e_sweep_golden.sh [--config <name> | --all-configs] [--config-tier <N|N-M>] [--tags <csv>] [--somatic] [--force] [--output-only] [--dry-run]
 
 Regenerate Java e2e sweep cache shards through scripts/sweep_fixtures_parallel.py.
 Wall estimates are order-of-magnitude only and assume about 250 tiles/sec at 10 workers.
 
 Options:
-  --config <name>   Preset label forwarded to Python. Use "default" for the legacy layout.
+  --config <name>       Preset label forwarded to Python. Use "default" for the legacy layout.
+  --all-configs         Iterate over all presets in scripts/config_presets.tsv whose
+                        applies_to matches the current lane (germline or somatic).
+                        Mutually exclusive with --config. Respects --config-tier filter.
+  --config-tier <N|N-M> Filter --all-configs to a tier or tier range (e.g., 1, 2, 1-3).
   --tags <csv>      Comma-separated subset of hg002,na12878_exome,na12878_lowcov.
                     Default: hg002,na12878_exome,na12878_lowcov
                                         With --somatic, this is treated as pair tags.
@@ -436,6 +440,8 @@ dry_run=0
 somatic=0
 tags_provided=0
 sweep_bed_root="$DEFAULT_SWEEP_BED_ROOT"
+all_configs=0
+config_tier_filter=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -443,6 +449,14 @@ while [[ $# -gt 0 ]]; do
             shift
             [[ $# -gt 0 ]] || die "--config requires a value"
             config="$1"
+            ;;
+        --all-configs)
+            all_configs=1
+            ;;
+        --config-tier)
+            shift
+            [[ $# -gt 0 ]] || die "--config-tier requires a value (e.g., 1 or 1-2)"
+            config_tier_filter="$1"
             ;;
         --tags)
             shift
@@ -477,6 +491,63 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+
+# --all-configs: loop over all TSV presets applicable to the current lane.
+# Invokes this script recursively with --config <name> --force for each.
+# Respects --dry-run, --tags, --sweep-bed-root, --somatic, --config-tier.
+if [[ $all_configs -eq 1 ]]; then
+    project_root="$(git rev-parse --show-toplevel)"
+    preset_tsv="$project_root/scripts/config_presets.tsv"
+    [[ -f "$preset_tsv" ]] || die "preset TSV not found: $preset_tsv"
+
+    # applies_to filter: somatic lane takes rows with 'somatic' or 'both';
+    # germline takes 'germline' or 'both'.
+    if [[ $somatic -eq 1 ]]; then
+        applies_filter='somatic|both'
+    else
+        applies_filter='germline|both'
+    fi
+
+    # Build list of (name, tier) from TSV, filtered by applies_to and optional tier.
+    mapfile -t candidate_names < <(awk -F'\t' -v af="$applies_filter" -v tf="$config_tier_filter" '
+        NR>1 && !/^[[:space:]]*$/ && $1 !~ /^#/ {
+            applies = (NF >= 5 ? $5 : "both")
+            tier = $4
+            if (applies ~ "^("af")$") {
+                if (tf == "" || tier == tf || tf ~ ("(^|-)"tier"(-|$)")) {
+                    print $1
+                }
+            }
+        }
+    ' "$preset_tsv")
+
+    [[ ${#candidate_names[@]} -gt 0 ]] || die "--all-configs: no presets matched (applies_to=$applies_filter, tier=$config_tier_filter)"
+
+    echo "# --all-configs will invoke this script for ${#candidate_names[@]} preset(s):"
+    for name in "${candidate_names[@]}"; do
+        echo "#   $name"
+    done
+
+    # Forward flags (excluding --all-configs / --config / --config-tier)
+    forward_flags=()
+    [[ -n "$tags_csv" && $tags_provided -eq 1 ]] && forward_flags+=(--tags "$tags_csv")
+    [[ $somatic -eq 1 ]] && forward_flags+=(--somatic)
+    [[ -n "$sweep_bed_root" && "$sweep_bed_root" != "$DEFAULT_SWEEP_BED_ROOT" ]] && forward_flags+=(--sweep-bed-root "$sweep_bed_root")
+    [[ $dry_run -eq 1 ]] && forward_flags+=(--dry-run)
+
+    script_path="${BASH_SOURCE[0]}"
+    exit_code=0
+    for name in "${candidate_names[@]}"; do
+        echo ""
+        echo "=== Regenerating for config: $name ==="
+        if ! bash "$script_path" --config "$name" --force "${forward_flags[@]}"; then
+            echo "::error::--all-configs: regeneration failed for $name" >&2
+            exit_code=1
+            # Continue on failure to produce a full report; caller decides whether to retry.
+        fi
+    done
+    exit "$exit_code"
+fi
 
 [[ -n "$config" ]] || die "--config must not be empty"
 

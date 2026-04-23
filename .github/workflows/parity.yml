@@ -35,6 +35,9 @@ jobs:
       - name: Preset drift gate
         run: bash scripts/check_preset_drift.sh --verbose
 
+      - name: Preset applicability gate
+        run: bash scripts/check_preset_applicability.sh
+
       - name: Generate E2E golden fixtures
         if: inputs.module == 'e2e' || inputs.module == 'config_e2e' || inputs.module == 'all'
         run: |
