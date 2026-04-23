@@ -6,7 +6,7 @@ on:
         description: 'Module to sweep'
         required: true
         type: choice
-        options: [cigar_modifier, cigar_parser, realigner, sam_file_parser, sv_processor, tovars, e2e, config_e2e, e2e_sweep]
+        options: [cigar_modifier, cigar_parser, realigner, sam_file_parser, sv_processor, tovars, e2e, config_e2e, e2e_sweep, e2e_sweep_somatic]
       shard_scope:
         description: 'Shard-scoped (na12878_exome only, fast)'
         required: false
@@ -18,6 +18,11 @@ on:
         type: choice
         options: [all, hg002, na12878_exome, na12878_lowcov]
         default: all
+      e2e_sweep_somatic_tag:
+        description: 'Pair tag (default: wes_il_pair)'
+        required: false
+        type: string
+        default: wes_il_pair
   schedule:
     - cron: '0 2 * * *'  # Nightly at 2 AM UTC — shard-scoped
 
@@ -25,6 +30,7 @@ jobs:
   sweep:
     name: Sweep — ${{ inputs.module || 'all' }}
     runs-on: self-hosted
+    timeout-minutes: 180
     strategy:
       matrix:
         shard: ["0/1"]
@@ -84,6 +90,12 @@ jobs:
             else
               cargo test --profile debug-release --test parity_e2e_sweep "${tag}_sweep::" -- --include-ignored --test-threads=1 --nocapture
             fi
+          elif [ "${{ inputs.module }}" = "e2e_sweep_somatic" ]; then
+            # TODO: enable e2e_sweep_somatic in nightly schedule after first green manual-dispatch run
+            CI=true VARDICT_IMPL=rust \
+              cargo test --profile debug-release --test parity_e2e_sweep_somatic \
+              "${{ inputs.e2e_sweep_somatic_tag }}_sweep::" \
+              -- --include-ignored --test-threads=1 --nocapture
           else
             cargo test --profile debug-release --test parity_sweep_suite "${{ inputs.module }}_sweep::" -- --include-ignored --nocapture --test-threads=1
           fi
