@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import csv
+import hashlib
 import json
 import math
 import os
@@ -103,6 +104,7 @@ TIMINGS_HEADER = [
     "jvm_invocations",
     "status",
 ]
+VARDICT_COMMIT_CACHE: dict[Path, str] = {}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -154,6 +156,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--sweep-bed-root",
         default=SWEEP_BED_ROOT_REL.as_posix(),
         help="Override sweep BED root for testing (default: tmp/sweep_beds).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=OUTPUT_ROOT_REL.as_posix(),
+        help=f"Override output root for testing (default: {OUTPUT_ROOT_REL}).",
     )
     parser.add_argument(
         "--shm-root",
@@ -318,9 +325,12 @@ def parse_presets(
         name = part.strip()
         if not name:
             continue
-        preset = presets.get(name)
+        if name == "DEFAULT":
+            preset = ConfigPreset(name="DEFAULT", flags=())
+        else:
+            preset = presets.get(name)
         if preset is None:
-            valid = ", ".join(sorted(presets))
+            valid = ", ".join(["DEFAULT", *sorted(presets)])
             parser.error(f"unknown preset: {name}. Valid presets: {valid}")
         if name not in seen:
             seen.add(name)
@@ -339,6 +349,41 @@ def resolve_path(root: Path, raw_path: str) -> Path:
 
 def compress_path(path: Path) -> None:
     subprocess.run(["zstd", "--rm", "-q", str(path)], check=True)
+
+
+def compute_file_md5(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_chunks_json(
+    path: Path,
+    *,
+    monolithic_md5: str,
+    monolithic_bytes: int,
+    num_chunks: int,
+    chunk_size: int,
+    chunks: list[dict[str, object]],
+    vardict_commit: str,
+) -> None:
+    payload = {
+        "monolithic_md5": monolithic_md5,
+        "monolithic_bytes": monolithic_bytes,
+        "num_chunks": num_chunks,
+        "chunk_size": chunk_size,
+        "chunks": chunks,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "vardict_commit": vardict_commit,
+    }
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=False)
+        handle.write("\n")
+    os.replace(tmp_path, path)
 
 
 def resolve_direct_inputs(root: Path, shard: Shard) -> tuple[str, Path]:
@@ -607,6 +652,7 @@ def execute_shard_run(
     config_name: str | None,
     config_flags: tuple[str, ...],
     root: Path,
+    output_root: Path,
     chunk_size: int,
     bam_arg: str,
     reference: Path,
@@ -617,7 +663,6 @@ def execute_shard_run(
     sample_name_override: str | None = None,
 ) -> ShardResult:
     t_shard_start = time.monotonic()
-    output_root = (root / OUTPUT_ROOT_REL).resolve()
     vardict_bin = (root / VARDICT_BIN_REL).resolve()
     effective_output_only = output_only or shard.kind == "pair"
     output_file = output_dir(output_root, config_name, shard.chrom) / f"{shard.tag}_{shard.chrom}.tsv.zst"
@@ -650,13 +695,15 @@ def execute_shard_run(
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path = output_staging / f"{shard.tag}_{shard.chrom}.tsv"
+    chunks_path = stdout_path.with_suffix(".chunks.json")
     env = os.environ.copy()
     env["JAVA_OPTS"] = "-Xms512m -Xmx4g"
     if not effective_output_only:
         for module_name, env_name in MODULES:
             env[env_name] = str(module_staging[module_name].resolve())
 
-    need_chunking = chunk_size > 0 and count_bed_lines(shard.bed_path) > chunk_size
+    total_bed_lines = count_bed_lines(shard.bed_path)
+    need_chunking = chunk_size > 0 and total_bed_lines > chunk_size
 
     if need_chunking:
         chunk_beds = split_bed_chunks(shard.bed_path, chunk_size, output_staging)
@@ -664,11 +711,15 @@ def execute_shard_run(
         chunk_beds = [shard.bed_path]
     num_chunks = len(chunk_beds)
     chunk_wall_s: list[float] = []
+    chunk_records: list[dict[str, object]] = []
+    raw_offset = 0
 
     try:
         fixture_count = 0
 
         for chunk_idx, chunk_bed in enumerate(chunk_beds):
+            stdout_path_chunk = output_staging / f"{stdout_path.stem}.chunk_{chunk_idx:04d}.tsv"
+            num_tiles = count_bed_lines(chunk_bed) if need_chunking else total_bed_lines
             command = [
                 str(vardict_bin),
                 "-G",
@@ -692,10 +743,9 @@ def execute_shard_run(
                 command.extend(["-N", sample_name_override])
             command.extend([*config_flags, str(chunk_bed)])
 
-            stdout_mode = "ab" if chunk_idx > 0 else "wb"
             stderr_mode = "ab" if chunk_idx > 0 else "wb"
 
-            with stdout_path.open(stdout_mode) as stdout_handle, log_path.open(
+            with stdout_path_chunk.open("wb") as stdout_handle, log_path.open(
                 stderr_mode
             ) as stderr_handle:
                 t_chunk_start = time.monotonic()
@@ -707,7 +757,8 @@ def execute_shard_run(
                     stderr=stderr_handle,
                     check=False,
                 )
-                chunk_wall_s.append(time.monotonic() - t_chunk_start)
+                chunk_wall = time.monotonic() - t_chunk_start
+                chunk_wall_s.append(chunk_wall)
 
             if completed.returncode != 0:
                 cleanup_dirs(staging_dirs)
@@ -723,6 +774,25 @@ def execute_shard_run(
                         num_chunks=num_chunks,
                     ),
                 )
+
+            chunk_md5 = compute_file_md5(stdout_path_chunk)
+            chunk_bytes = stdout_path_chunk.stat().st_size
+            offset_before_append = raw_offset
+            with stdout_path_chunk.open("rb") as chunk_handle, stdout_path.open(
+                "ab"
+            ) as stdout_handle:
+                shutil.copyfileobj(chunk_handle, stdout_handle)
+            raw_offset += chunk_bytes
+            stdout_path_chunk.unlink(missing_ok=True)
+            chunk_records.append(
+                {
+                    "idx": chunk_idx,
+                    "md5_raw": chunk_md5,
+                    "wall_s": chunk_wall,
+                    "num_tiles": num_tiles,
+                    "byte_range": [offset_before_append, chunk_bytes],
+                }
+            )
 
             # Compress JSONL files after each chunk to bound disk usage.
             if not effective_output_only:
@@ -743,11 +813,26 @@ def execute_shard_run(
                     "*.jsonl.zst",
                 )
 
+        monolithic_md5 = compute_file_md5(stdout_path)
+        monolithic_bytes = stdout_path.stat().st_size
+        write_chunks_json(
+            chunks_path,
+            monolithic_md5=monolithic_md5,
+            monolithic_bytes=monolithic_bytes,
+            num_chunks=num_chunks,
+            chunk_size=chunk_size,
+            chunks=chunk_records,
+            vardict_commit=get_vardict_commit(root),
+        )
+
         if zstd_executor is None:
             compress_path(stdout_path)
+            final_output_dir = output_dir(output_root, config_name, shard.chrom)
+            final_output_dir.mkdir(parents=True, exist_ok=True)
+            os.replace(chunks_path, final_output_dir / chunks_path.name)
             promote_files(
                 output_staging,
-                output_dir(output_root, config_name, shard.chrom),
+                final_output_dir,
                 "*.tsv.zst",
             )
         else:
@@ -755,8 +840,11 @@ def execute_shard_run(
             final_output_dir.mkdir(parents=True, exist_ok=True)
             final_stdout_path = final_output_dir / stdout_path.name
             final_zst_path = final_stdout_path.with_name(f"{final_stdout_path.name}.zst")
+            final_chunks_path = final_output_dir / chunks_path.name
             final_stdout_path.unlink(missing_ok=True)
             final_zst_path.unlink(missing_ok=True)
+            final_chunks_path.unlink(missing_ok=True)
+            os.replace(chunks_path, final_chunks_path)
             os.replace(stdout_path, final_stdout_path)
             output_staging.rmdir()
             future = zstd_executor.submit(compress_path, final_stdout_path)
@@ -804,12 +892,14 @@ def run_shard(
     config_name: str | None,
     config_flags: tuple[str, ...],
     root_str: str,
+    output_root_str: str,
     chunk_size: int = 0,
     use_shm: bool = True,
     shm_root_str: str = DEFAULT_SHM_ROOT.as_posix(),
     samtools_bin: str | None = None,
 ) -> ShardResult:
     root = Path(root_str)
+    output_root = Path(output_root_str)
     staged: StagedChrom | None = None
     try:
         bam_arg, reference, staged = resolve_vardict_inputs(
@@ -829,6 +919,7 @@ def run_shard(
             config_name=config_name,
             config_flags=config_flags,
             root=root,
+            output_root=output_root,
             chunk_size=chunk_size,
             bam_arg=bam_arg,
             reference=reference,
@@ -853,6 +944,7 @@ def run_inverted_shards(
     force: bool,
     output_only: bool,
     root: Path,
+    output_root: Path,
     chunk_size: int,
     use_shm: bool,
     shm_root: Path,
@@ -903,6 +995,7 @@ def run_inverted_shards(
                             preset.name,
                             preset.flags,
                             root,
+                            output_root,
                             chunk_size,
                             bam_arg,
                             reference,
@@ -1013,14 +1106,21 @@ def count_fixture_files(output_root: Path) -> int:
 
 
 def get_vardict_commit(root: Path) -> str:
+    vardict_root = (root / "VarDictJava").resolve()
+    cached_commit = VARDICT_COMMIT_CACHE.get(vardict_root)
+    if cached_commit is not None:
+        return cached_commit
+
     completed = subprocess.run(
-        ["git", "-C", str(root / "VarDictJava"), "rev-parse", "HEAD"],
+        ["git", "-C", str(vardict_root), "rev-parse", "HEAD"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         check=True,
     )
-    return completed.stdout.strip()
+    commit = completed.stdout.strip()
+    VARDICT_COMMIT_CACHE[vardict_root] = commit
+    return commit
 
 
 def write_manifest(
@@ -1087,7 +1187,7 @@ def main() -> int:
     if not selected_tags and not selected_pair_tags:
         parser.error("at least one of --tags or --pair-tags must select a shard family")
     root = project_root()
-    output_root = root / OUTPUT_ROOT_REL
+    output_root = resolve_path(root, args.output_dir)
     timings_path = Path(args.timings_path)
     if not timings_path.is_absolute():
         timings_path = (root / timings_path).resolve()
@@ -1158,6 +1258,7 @@ def main() -> int:
                 force=args.force,
                 output_only=run_output_only,
                 root=root,
+                output_root=output_root,
                 chunk_size=args.chunk_size,
                 use_shm=use_shm,
                 shm_root=shm_root,
@@ -1189,6 +1290,7 @@ def main() -> int:
                         config_name,
                         config_flags,
                         str(root),
+                        str(output_root),
                         args.chunk_size,
                         use_shm,
                         str(shm_root),
