@@ -26,12 +26,14 @@ const REF_50_BASES: i32 = 50;
 const REF_70_BASES: i32 = 70;
 
 fn chromosome_limit(region: &Region, ref_map: &HashMap<i32, u8>) -> i32 {
-    GlobalReadOnlyScope::instance()
-        .chr_lengths
-        .get(&region.chr)
-        .copied()
-        .or_else(|| ref_map.keys().copied().max())
-        .unwrap_or(0)
+    GlobalReadOnlyScope::with_instance(|scope| {
+        scope
+            .chr_lengths
+            .get(&region.chr)
+            .copied()
+            .or_else(|| ref_map.keys().copied().max())
+            .unwrap_or(0)
+    })
 }
 
 /// IUPAC ambiguity code replacements.
@@ -564,27 +566,29 @@ pub fn is_the_same_variation_on_ref(
     insertion_variants: &HashMap<i32, VariationMap>,
     ref_map: &HashMap<i32, u8>,
     conf: &Configuration,
+    scope: &GlobalReadOnlyScope,
 ) -> bool {
-    let mut vk: std::collections::HashSet<String> =
-        vars_at_cur_position.entries.keys().cloned().collect();
-    // Trap T27: add synthetic "I" key
-    if insertion_variants.contains_key(&position) {
-        vk.insert("I".to_string());
+    let Some(ref_base) = ref_map.get(&position) else {
+        return false;
+    };
+
+    let synthetic_insertion = insertion_variants.contains_key(&position);
+    let mut keys = vars_at_cur_position.entries.keys();
+    let only_key_matches_ref = match (keys.next(), keys.next(), synthetic_insertion) {
+        (Some(key), None, false) => key.len() == 1 && key.as_bytes()[0] == *ref_base,
+        // Trap T27: Java adds a synthetic "I" key before checking cardinality.
+        (None, None, true) => *ref_base == b'I',
+        _ => false,
+    };
+
+    if only_key_matches_ref
+        && !conf.do_pileup
+        && !conf.bam.as_ref().map_or(false, |b| b.has_bam2())
+        && scope.amplicon_based_calling.is_none()
+    {
+        return true;
     }
-    if vk.len() == 1 {
-        if let Some(ref_base) = ref_map.get(&position) {
-            let ref_str = char::from(*ref_base).to_string();
-            if vk.contains(&ref_str) {
-                let scope = GlobalReadOnlyScope::instance();
-                if !conf.do_pileup
-                    && !conf.bam.as_ref().map_or(false, |b| b.has_bam2())
-                    && scope.amplicon_based_calling.is_none()
-                {
-                    return true;
-                }
-            }
-        }
-    }
+
     false
 }
 
@@ -1285,57 +1289,58 @@ pub fn process(
     non_insertion_variants: &mut HashMap<i32, VariationMap>,
     duprate: f64,
 ) -> AlignedVarsData {
-    let conf = &GlobalReadOnlyScope::instance().conf;
-    let scope = GlobalReadOnlyScope::instance();
+    GlobalReadOnlyScope::with_instance(|scope| {
+        let conf = &scope.conf;
 
-    if conf.y {
-        eprintln!(
-            "Current segment: {}:{}-{} ",
-            region.chr, region.start, region.end
-        );
-    }
-
-    let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
-
-    // Collect and sort positions for deterministic iteration
-    // Java uses HashMap for outer map — iteration order is JVM-dependent.
-    // Sort ascending so position+1 mutation from createInsertion is processed correctly.
-    let mut positions: Vec<i32> = non_insertion_variants.keys().copied().collect();
-    positions.sort();
-
-    for &position in &positions {
-        // Trap T28: error-and-continue — wrap in closure that can handle errors
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            process_position(
-                position,
-                &mut aligned_variants,
-                ref_map,
-                ref_coverage,
-                insertion_variants,
-                non_insertion_variants,
-                region,
-                duprate,
-                conf,
-                &scope,
-            )
-        }));
-
-        if let Err(e) = result {
+        if conf.y {
             eprintln!(
-                "Error processing position {} in {}:{}-{}: {:?}",
-                position, region.chr, region.start, region.end, e
+                "Current segment: {}:{}-{} ",
+                region.chr, region.start, region.end
             );
         }
-    }
 
-    if conf.y {
-        eprintln!("TIME: Finish preparing vars");
-    }
+        let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
 
-    AlignedVarsData {
-        max_read_length,
-        aligned_variants,
-    }
+        // Collect and sort positions for deterministic iteration.
+        // Java uses HashMap for outer map — iteration order is JVM-dependent.
+        // Sort ascending so position+1 mutation from createInsertion is processed correctly.
+        let mut positions: Vec<i32> = non_insertion_variants.keys().copied().collect();
+        positions.sort();
+
+        for &position in &positions {
+            // Trap T28: error-and-continue — wrap in closure that can handle errors
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                process_position(
+                    position,
+                    &mut aligned_variants,
+                    ref_map,
+                    ref_coverage,
+                    insertion_variants,
+                    non_insertion_variants,
+                    region,
+                    duprate,
+                    conf,
+                    scope,
+                )
+            }));
+
+            if let Err(e) = result {
+                eprintln!(
+                    "Error processing position {} in {}:{}-{}: {:?}",
+                    position, region.chr, region.start, region.end, e
+                );
+            }
+        }
+
+        if conf.y {
+            eprintln!("TIME: Finish preparing vars");
+        }
+
+        AlignedVarsData {
+            max_read_length,
+            aligned_variants,
+        }
+    })
 }
 
 /// Process a single position in the main loop.
@@ -1381,6 +1386,7 @@ fn process_position(
         insertion_variants,
         ref_map,
         conf,
+        scope,
     ) {
         return;
     }
