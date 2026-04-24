@@ -29,7 +29,7 @@ declare -Ar TILE_COUNTS=(
 
 usage() {
     cat <<'EOF'
-Usage: scripts/gen_e2e_sweep_golden.sh [--config <name> | --all-configs] [--config-tier <N|N-M>] [--tags <csv>] [--somatic] [--force] [--output-only] [--dry-run] [--parallel <N>]
+Usage: scripts/gen_e2e_sweep_golden.sh [--config <name> | --all-configs] [--config-tier <N|N-M>] [--tags <csv>] [--somatic] [--force] [--output-only] [--dry-run] [--parallel <N>] [--inverted] [--shm-root <path>] [--no-shm]
 
 Regenerate Java e2e sweep cache shards through scripts/sweep_fixtures_parallel.py.
 Wall estimates are order-of-magnitude only and assume about 250 tiles/sec at 10 workers.
@@ -43,6 +43,9 @@ Options:
   --parallel <N>        With --all-configs, run up to N preset generations concurrently.
                         Default: 1 (sequential). Manifest merges are serialized via flock;
                         each invocation writes to a per-PID manifest staging file.
+    --inverted            With --all-configs, run a single Python invocation with
+                                                --presets ALL instead of spawning one child per preset.
+                                                --parallel becomes preset-level worker count in Python.
   --tags <csv>      Comma-separated subset of hg002,na12878_exome,na12878_lowcov.
                     Default: hg002,na12878_exome,na12878_lowcov
                                         With --somatic, this is treated as pair tags.
@@ -51,6 +54,8 @@ Options:
   --output-only     Always enabled; exposed here for discoverability.
     --sweep-bed-root <path>
                                         Override the sweep BED root. Default: tmp/sweep_beds
+    --shm-root <path>  Forward a staging root to the Python generator.
+    --no-shm           Disable per-chrom shm staging in the Python generator.
   --dry-run         Print the logical command and exit without invoking Python.
   -h, --help        Show this help.
 
@@ -319,6 +324,24 @@ pair_paths = {
     ),
 }
 
+merge_manifest_cache_entries_many() {
+    local config_names_csv="$1"
+    local tags_csv="$2"
+    local project_root="$3"
+    local sweep_bed_root="$4"
+    local manifest_path="$project_root/$OUTPUT_ROOT/manifest.json"
+    local preserve_path="$project_root/$OUTPUT_ROOT/.manifest.cache_entries.before.json"
+
+    CONFIG_NAMES_CSV="$config_names_csv" \
+    TAGS_CSV="$tags_csv" \
+    PROJECT_ROOT="$project_root" \
+    MANIFEST_PATH="$manifest_path" \
+    PRESERVE_PATH="$preserve_path" \
+    SWEEP_BED_ROOT="$sweep_bed_root" \
+    python3 <<'PY'
+import glob
+import hashlib
+import json
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -392,6 +415,244 @@ for tag in tags:
         "generator_flags_hash": generator_flags_hash,
         "vardictjava_commit": vardict_commit,
     }
+
+manifest["cache_entries"] = cache_entries
+
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=manifest_path.parent, delete=False) as handle:
+    json.dump(manifest, handle, indent=2, sort_keys=False)
+    handle.write("\n")
+    temp_name = handle.name
+
+os.replace(temp_name, manifest_path)
+if preserve_path.exists():
+    preserve_path.unlink()
+PY
+}
+
+merge_manifest_cache_entries_many() {
+    local config_names_csv="$1"
+    local tags_csv="$2"
+    local project_root="$3"
+    local sweep_bed_root="$4"
+    local manifest_path="$project_root/$OUTPUT_ROOT/manifest.json"
+    local preserve_path="$project_root/$OUTPUT_ROOT/.manifest.cache_entries.before.json"
+
+    CONFIG_NAMES_CSV="$config_names_csv" \
+    TAGS_CSV="$tags_csv" \
+    PROJECT_ROOT="$project_root" \
+    MANIFEST_PATH="$manifest_path" \
+    PRESERVE_PATH="$preserve_path" \
+    SWEEP_BED_ROOT="$sweep_bed_root" \
+    python3 <<'PY'
+import glob
+import hashlib
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+project_root = Path(os.environ["PROJECT_ROOT"])
+manifest_path = Path(os.environ["MANIFEST_PATH"])
+preserve_path = Path(os.environ["PRESERVE_PATH"])
+sweep_bed_root = os.environ["SWEEP_BED_ROOT"]
+configs = [config for config in os.environ["CONFIG_NAMES_CSV"].split(",") if config]
+tags = [tag for tag in os.environ["TAGS_CSV"].split(",") if tag]
+
+bam_paths = {
+    "hg002": "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam",
+    "na12878_exome": "testdata/NA12878.chrom20.ILLUMINA.bwa.CEU.exome.20121211.bam",
+    "na12878_lowcov": "testdata/NA12878.mapped.ILLUMINA.bwa.CEU.low_coverage.20121211.bam",
+}
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+def sha256_concat(paths: list[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+if not manifest_path.exists():
+    raise SystemExit(f"ERROR: manifest not found after generator run: {manifest_path}")
+
+with manifest_path.open("r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+preserved_entries = {}
+if preserve_path.exists():
+    with preserve_path.open("r", encoding="utf-8") as handle:
+        preserved_entries = json.load(handle)
+
+reference_sha256 = sha256_file(project_root / "testdata/hs37d5.fa.fai")
+vardict_commit = manifest.get("vardictjava_commit")
+if not vardict_commit:
+    vardict_commit = subprocess.run(
+        ["git", "-C", str(project_root / "VarDictJava"), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+cache_entries = dict(preserved_entries)
+for config_name in configs:
+    for tag in tags:
+        bed_paths = sorted(
+            Path(path) for path in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed"))
+        )
+        if not bed_paths:
+            raise SystemExit(f"ERROR: no BED files found for {tag} under {sweep_bed_root}")
+        bam_path = project_root / bam_paths[tag]
+        bam_stat = [{
+            "path": bam_paths[tag],
+            "size": bam_path.stat().st_size,
+            "mtime_unix": int(bam_path.stat().st_mtime),
+        }]
+        logical_flags = f"--output-only --config {config_name} --tags {tag} --sweep-bed-root {sweep_bed_root}"
+        generator_flags_hash = hashlib.sha256(logical_flags.encode("utf-8")).hexdigest()
+        cache_entries[f"{config_name}:{tag}"] = {
+            "config": config_name,
+            "tag": tag,
+            "bed_sha256": sha256_concat(bed_paths),
+            "bam_stat": bam_stat,
+            "reference_sha256": reference_sha256,
+            "generator_flags_hash": generator_flags_hash,
+            "vardictjava_commit": vardict_commit,
+        }
+
+manifest["cache_entries"] = cache_entries
+
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=manifest_path.parent, delete=False) as handle:
+    json.dump(manifest, handle, indent=2, sort_keys=False)
+    handle.write("\n")
+    temp_name = handle.name
+
+os.replace(temp_name, manifest_path)
+if preserve_path.exists():
+    preserve_path.unlink()
+PY
+}
+
+merge_manifest_somatic_cache_entries_many() {
+    local config_names_csv="$1"
+    local tags_csv="$2"
+    local project_root="$3"
+    local sweep_bed_root="$4"
+    local manifest_path="$project_root/$OUTPUT_ROOT/manifest.json"
+    local preserve_path="$project_root/$OUTPUT_ROOT/.manifest.cache_entries.before.json"
+
+    CONFIG_NAMES_CSV="$config_names_csv" \
+    TAGS_CSV="$tags_csv" \
+    PROJECT_ROOT="$project_root" \
+    MANIFEST_PATH="$manifest_path" \
+    PRESERVE_PATH="$preserve_path" \
+    SWEEP_BED_ROOT="$sweep_bed_root" \
+    python3 <<'PY'
+import glob
+import hashlib
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+project_root = Path(os.environ["PROJECT_ROOT"])
+manifest_path = Path(os.environ["MANIFEST_PATH"])
+preserve_path = Path(os.environ["PRESERVE_PATH"])
+sweep_bed_root = os.environ["SWEEP_BED_ROOT"]
+configs = [config for config in os.environ["CONFIG_NAMES_CSV"].split(",") if config]
+tags = [tag for tag in os.environ["TAGS_CSV"].split(",") if tag]
+
+pair_paths = {
+    "wes_il_pair": (
+        "testdata/WES_IL_T_1.bwa.dedup.bam",
+        "testdata/WES_IL_N_1.bwa.dedup.bam",
+    ),
+}
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+def sha256_concat(paths: list[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+if not manifest_path.exists():
+    raise SystemExit(f"ERROR: manifest not found after generator run: {manifest_path}")
+
+with manifest_path.open("r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+preserved_entries = {}
+if preserve_path.exists():
+    with preserve_path.open("r", encoding="utf-8") as handle:
+        preserved_entries = json.load(handle)
+
+reference_fai = project_root / "testdata/GRCh38.d1.vd1.fa.fai"
+reference_target = reference_fai if reference_fai.exists() else project_root / "testdata/GRCh38.d1.vd1.fa"
+reference_sha256 = sha256_file(reference_target)
+vardict_commit = manifest.get("vardictjava_commit")
+if not vardict_commit:
+    vardict_commit = subprocess.run(
+        ["git", "-C", str(project_root / "VarDictJava"), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+cache_entries = dict(preserved_entries)
+for config_name in configs:
+    for tag in tags:
+        bed_paths = sorted(
+            Path(path) for path in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed"))
+        )
+        if not bed_paths:
+            raise SystemExit(f"ERROR: no BED files found for {tag} under {sweep_bed_root}")
+        tumor_rel, normal_rel = pair_paths[tag]
+        tumor_path = project_root / tumor_rel
+        normal_path = project_root / normal_rel
+        bam_stat = [
+            {
+                "path": tumor_rel,
+                "size": tumor_path.stat().st_size,
+                "mtime_unix": int(tumor_path.stat().st_mtime),
+                "role": "tumor",
+            },
+            {
+                "path": normal_rel,
+                "size": normal_path.stat().st_size,
+                "mtime_unix": int(normal_path.stat().st_mtime),
+                "role": "normal",
+            },
+        ]
+        logical_flags = f"--output-only --config {config_name} --pair-tags {tag} --tags  --sweep-bed-root {sweep_bed_root}"
+        generator_flags_hash = hashlib.sha256(logical_flags.encode("utf-8")).hexdigest()
+        cache_entries[f"{config_name}:somatic:{tag}"] = {
+            "config": config_name,
+            "tag": tag,
+            "bed_sha256": sha256_concat(bed_paths),
+            "bam_stat": bam_stat,
+            "reference_sha256": reference_sha256,
+            "generator_flags_hash": generator_flags_hash,
+            "vardictjava_commit": vardict_commit,
+        }
 
 manifest["cache_entries"] = cache_entries
 
@@ -488,112 +749,6 @@ somatic_pair_paths = {
     },
 }
 somatic_ref = {
-    "wes_il_pair": "testdata/GRCh38.d1.vd1.fa",
-}
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-def sha256_concat(paths: list) -> str:
-    digest = hashlib.sha256()
-    for path in paths:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
-
-if not staging_manifest_path.exists():
-    raise SystemExit(f"ERROR: staging manifest missing: {staging_manifest_path}")
-with staging_manifest_path.open("r", encoding="utf-8") as handle:
-    staging = json.load(handle)
-
-# Start from the current real manifest (accumulated cache_entries from peers).
-if real_manifest_path.exists():
-    with real_manifest_path.open("r", encoding="utf-8") as handle:
-        merged = json.load(handle)
-    cache_entries = dict(merged.get("cache_entries", {}))
-else:
-    merged = {}
-    cache_entries = {}
-
-# Top-level fields: last-writer-wins from the latest staging manifest.
-for key in (
-    "vardictjava_commit", "generated_at", "bam_tags", "pair_tags",
-    "bam_paths", "pair_bam_paths", "tag_modes", "mode", "config",
-    "region_count", "fixture_count", "shard_count", "failed_shards",
-):
-    if key in staging:
-        merged[key] = staging[key]
-
-# Compute new cache_entry for this invocation.
-vardict_commit = merged.get("vardictjava_commit") or staging.get("vardictjava_commit")
-if not vardict_commit:
-    vardict_commit = subprocess.run(
-        ["git", "-C", str(project_root / "VarDictJava"), "rev-parse", "HEAD"],
-        check=True, capture_output=True, text=True,
-    ).stdout.strip()
-generator_flags_hash = hashlib.sha256(logical_flags.encode("utf-8")).hexdigest()
-
-if somatic:
-    reference_sha256 = sha256_file(project_root / "testdata/GRCh38.d1.vd1.fa.fai")
-    for tag in tags:
-        bed_paths = sorted(
-            Path(p) for p in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed"))
-        )
-        if not bed_paths:
-            raise SystemExit(f"ERROR: no BED files found for {tag}")
-        pair = somatic_pair_paths[tag]
-        bam_stat = []
-        for role in ("tumor", "normal"):
-            bp = project_root / pair[role]
-            bam_stat.append({
-                "path": pair[role], "role": role,
-                "size": bp.stat().st_size,
-                "mtime_unix": int(bp.stat().st_mtime),
-            })
-        key = f"{config_name}:somatic:{tag}"
-        cache_entries[key] = {
-            "config": config_name, "tag": tag, "mode": "somatic",
-            "bed_sha256": sha256_concat(bed_paths),
-            "bam_stat": bam_stat,
-            "reference_sha256": reference_sha256,
-            "reference_path": somatic_ref[tag],
-            "generator_flags_hash": generator_flags_hash,
-            "vardictjava_commit": vardict_commit,
-        }
-else:
-    reference_sha256 = sha256_file(project_root / "testdata/hs37d5.fa.fai")
-    for tag in tags:
-        bed_paths = sorted(
-            Path(p) for p in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed"))
-        )
-        if not bed_paths:
-            raise SystemExit(f"ERROR: no BED files found for {tag}")
-        bam_path = project_root / bam_paths[tag]
-        bam_stat = [{
-            "path": bam_paths[tag],
-            "size": bam_path.stat().st_size,
-            "mtime_unix": int(bam_path.stat().st_mtime),
-        }]
-        key = f"{config_name}:{tag}"
-        cache_entries[key] = {
-            "config": config_name, "tag": tag,
-            "bed_sha256": sha256_concat(bed_paths),
-            "bam_stat": bam_stat,
-            "reference_sha256": reference_sha256,
-            "generator_flags_hash": generator_flags_hash,
-            "vardictjava_commit": vardict_commit,
-        }
-
-merged["cache_entries"] = cache_entries
-
-real_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-with tempfile.NamedTemporaryFile(
-    "w", encoding="utf-8", dir=real_manifest_path.parent, delete=False
 ) as handle:
     json.dump(merged, handle, indent=2, sort_keys=False)
     handle.write("\n")
@@ -612,6 +767,9 @@ sweep_bed_root="$DEFAULT_SWEEP_BED_ROOT"
 all_configs=0
 config_tier_filter=""
 parallel_jobs=1
+inverted=0
+shm_root=""
+no_shm=0
 # Internal flag: when set, this invocation was spawned by --all-configs --parallel,
 # and must use a per-PID manifest staging path with flock-serialized merge.
 internal_parallel_mode=0
@@ -637,6 +795,9 @@ while [[ $# -gt 0 ]]; do
             [[ "$1" =~ ^[1-9][0-9]*$ ]] || die "--parallel must be a positive integer, got: $1"
             parallel_jobs="$1"
             ;;
+        --inverted)
+            inverted=1
+            ;;
         --_internal-parallel-mode)
             internal_parallel_mode=1
             ;;
@@ -659,6 +820,14 @@ while [[ $# -gt 0 ]]; do
             [[ $# -gt 0 ]] || die "--sweep-bed-root requires a value"
             sweep_bed_root="$1"
             ;;
+        --shm-root)
+            shift
+            [[ $# -gt 0 ]] || die "--shm-root requires a value"
+            shm_root="$1"
+            ;;
+        --no-shm)
+            no_shm=1
+            ;;
         --dry-run)
             dry_run=1
             ;;
@@ -673,6 +842,10 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+
+if [[ $inverted -eq 1 && $all_configs -ne 1 ]]; then
+    die "--inverted requires --all-configs"
+fi
 
 # --all-configs: loop over all TSV presets applicable to the current lane.
 # Invokes this script recursively with --config <name> --force for each.
@@ -715,9 +888,62 @@ if [[ $all_configs -eq 1 ]]; then
     [[ -n "$tags_csv" && $tags_provided -eq 1 ]] && forward_flags+=(--tags "$tags_csv")
     [[ $somatic -eq 1 ]] && forward_flags+=(--somatic)
     [[ -n "$sweep_bed_root" && "$sweep_bed_root" != "$DEFAULT_SWEEP_BED_ROOT" ]] && forward_flags+=(--sweep-bed-root "$sweep_bed_root")
+    [[ -n "$shm_root" ]] && forward_flags+=(--shm-root "$shm_root")
+    [[ $no_shm -eq 1 ]] && forward_flags+=(--no-shm)
     [[ $dry_run -eq 1 ]] && forward_flags+=(--dry-run)
 
     script_path="${BASH_SOURCE[0]}"
+
+    if [[ $inverted -eq 1 ]]; then
+        project_root_abs="$(git rev-parse --show-toplevel)"
+        presets_csv="$(join_by_comma "${candidate_names[@]}")"
+        actual_cmd=(python3 scripts/sweep_fixtures_parallel.py --output-only --presets "$presets_csv" --workers "$parallel_jobs")
+        if [[ $somatic -eq 1 ]]; then
+            actual_cmd+=(--pair-tags "$tags_csv" --tags "")
+        else
+            actual_cmd+=(--tags "$tags_csv")
+        fi
+        if [[ -n "$sweep_bed_root" ]]; then
+            actual_cmd+=(--sweep-bed-root "$sweep_bed_root")
+        fi
+        if [[ -n "$shm_root" ]]; then
+            actual_cmd+=(--shm-root "$shm_root")
+        fi
+        if [[ $no_shm -eq 1 ]]; then
+            actual_cmd+=(--no-shm)
+        fi
+        actual_cmd+=(--force)
+
+        if [[ $dry_run -eq 1 ]]; then
+            printf '%q ' "${actual_cmd[@]}"
+            printf '\n'
+            exit 0
+        fi
+
+        save_existing_cache_entries "$project_root_abs"
+        mkdir -p "$project_root_abs/$LOG_ROOT"
+        log_file="$project_root_abs/$LOG_ROOT/e2e_sweep_inverted_$(date -u +%Y%m%dT%H%M%SZ).log"
+
+        set +e
+        (
+            cd "$project_root_abs"
+            "${actual_cmd[@]}"
+        ) 2>&1 | tee "$log_file"
+        cmd_status=${PIPESTATUS[0]}
+        set -e
+
+        if [[ $cmd_status -ne 0 ]]; then
+            echo "::error::e2e sweep inverted cache regeneration failed; logfile=$log_file" >&2
+            exit "$cmd_status"
+        fi
+
+        if [[ $somatic -eq 1 ]]; then
+            merge_manifest_somatic_cache_entries_many "$presets_csv" "$tags_csv" "$project_root_abs" "$sweep_bed_root"
+        else
+            merge_manifest_cache_entries_many "$presets_csv" "$tags_csv" "$project_root_abs" "$sweep_bed_root"
+        fi
+        exit 0
+    fi
 
     if [[ $parallel_jobs -gt 1 ]]; then
         # Parallel mode: run up to $parallel_jobs recursive invocations concurrently.
@@ -823,6 +1049,12 @@ if [[ $somatic -eq 1 ]]; then
     actual_cmd=(python3 scripts/sweep_fixtures_parallel.py --output-only --pair-tags "$tags_csv" --tags "" --sweep-bed-root "$sweep_bed_root")
 else
     actual_cmd=(python3 scripts/sweep_fixtures_parallel.py --output-only --tags "$tags_csv" --sweep-bed-root "$sweep_bed_root")
+fi
+if [[ -n "$shm_root" ]]; then
+    actual_cmd+=(--shm-root "$shm_root")
+fi
+if [[ $no_shm -eq 1 ]]; then
+    actual_cmd+=(--no-shm)
 fi
 if [[ $force -eq 1 ]]; then
     actual_cmd+=(--force)

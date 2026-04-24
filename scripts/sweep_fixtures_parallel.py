@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
 
+from lib.shm_slice import ShmCapacityError, StagedChrom, evict_chrom, locate_samtools, stage_chrom
+
 
 ALL_BAM_TAGS = ["na12878_exome", "hg002", "na12878_lowcov"]
 BAM_MAP = {
@@ -45,6 +47,8 @@ SWEEP_BED_ROOT_REL = Path("tmp/sweep_beds")
 CONFIG_PRESETS_REL = Path("scripts/config_presets.tsv")
 REF_REL = Path("testdata/hs37d5.fa")
 VARDICT_BIN_REL = Path("VarDictJava/build/install/VarDict/bin/VarDict")
+DEFAULT_SHM_ROOT = Path("/dev/shm/sweep_fixtures")
+FALLBACK_SHM_ROOT = Path("/tmp/sweep_fixtures_shm")
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,7 @@ class ShardResult:
     tag: str
     chrom: str
     status: str
+    config_name: str | None = None
     fixture_count: int = 0
     error: str = ""
     log_path: str = ""
@@ -79,7 +84,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--workers",
         type=positive_int,
         default=10,
-        help="Maximum number of parallel shard workers (default: 10).",
+        help=(
+            "Maximum parallel shard workers, or preset workers when --presets is used "
+            "(default: 10)."
+        ),
     )
     parser.add_argument(
         "--tags",
@@ -100,14 +108,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write only output TSVs and skip module JSONL fixture generation.",
     )
-    parser.add_argument(
+    config_group = parser.add_mutually_exclusive_group()
+    config_group.add_argument(
         "--config",
         help="Preset slug from scripts/config_presets.tsv to append to VarDict.",
+    )
+    config_group.add_argument(
+        "--presets",
+        help="Preset slug CSV or ALL. Inverts execution to outer (tag,chrom) and inner presets.",
     )
     parser.add_argument(
         "--sweep-bed-root",
         default=SWEEP_BED_ROOT_REL.as_posix(),
         help="Override sweep BED root for testing (default: tmp/sweep_beds).",
+    )
+    parser.add_argument(
+        "--shm-root",
+        default=DEFAULT_SHM_ROOT.as_posix(),
+        help=f"Stage per-chrom BAM/FASTA slices here when shm is enabled (default: {DEFAULT_SHM_ROOT}).",
+    )
+    parser.add_argument(
+        "--no-shm",
+        action="store_true",
+        help="Disable per-chrom staging and use source BAM/FASTA paths directly.",
     )
     parser.add_argument(
         "--manifest-path",
@@ -117,10 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--chunk-size",
-        type=positive_int,
-        default=CHUNK_SIZE,
-        help=f"Max tiles per VarDict invocation. Larger BEDs are split and compressed "
-        f"between chunks to bound disk usage (default: {CHUNK_SIZE}).",
+        type=non_negative_int,
+        default=0,
+        help=(
+            "Max tiles per VarDict invocation. Use 0 to disable chunking and pass the source BED "
+            "directly to VarDict (default: 0)."
+        ),
     )
     return parser
 
@@ -129,6 +154,13 @@ def positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
+def non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be at least 0")
     return parsed
 
 
@@ -200,11 +232,94 @@ def load_all_presets(root: Path) -> dict[str, ConfigPreset]:
     return presets
 
 
+def parse_presets(
+    raw_presets: str | None,
+    presets: dict[str, ConfigPreset],
+    parser: argparse.ArgumentParser,
+) -> list[ConfigPreset] | None:
+    if raw_presets is None:
+        return None
+
+    if raw_presets.strip().upper() == "ALL":
+        return list(presets.values())
+
+    selected: list[ConfigPreset] = []
+    seen: set[str] = set()
+    for part in raw_presets.split(","):
+        name = part.strip()
+        if not name:
+            continue
+        preset = presets.get(name)
+        if preset is None:
+            valid = ", ".join(sorted(presets))
+            parser.error(f"unknown preset: {name}. Valid presets: {valid}")
+        if name not in seen:
+            seen.add(name)
+            selected.append(preset)
+    if not selected:
+        parser.error("no presets selected")
+    return selected
+
+
 def resolve_path(root: Path, raw_path: str) -> Path:
     path = Path(raw_path)
     if not path.is_absolute():
         path = root / path
     return path.resolve()
+
+
+def compress_path(path: Path) -> None:
+    subprocess.run(["zstd", "--rm", "-q", str(path)], check=True)
+
+
+def resolve_direct_inputs(root: Path, shard: Shard) -> tuple[str, Path]:
+    if shard.kind == "pair":
+        tumor_rel, normal_rel = SOMATIC_PAIR_MAP[shard.tag]
+        bam_arg = f"{(root / tumor_rel).resolve()}|{(root / normal_rel).resolve()}"
+        reference = (root / SOMATIC_REF_MAP[shard.tag]).resolve()
+        return bam_arg, reference
+
+    return str((root / BAM_MAP[shard.tag]).resolve()), (root / REF_REL).resolve()
+
+
+def resolve_vardict_inputs(
+    root: Path,
+    shard: Shard,
+    use_shm: bool,
+    shm_root: Path,
+    samtools_bin: str | None,
+) -> tuple[str, Path, StagedChrom | None]:
+    bam_arg, reference = resolve_direct_inputs(root, shard)
+    if not use_shm or shard.kind != "single":
+        return bam_arg, reference, None
+
+    if samtools_bin is None:
+        raise RuntimeError("samtools path is required when shm staging is enabled")
+
+    bam_source = (root / BAM_MAP[shard.tag]).resolve()
+    for candidate_root in (shm_root, FALLBACK_SHM_ROOT):
+        try:
+            staged = stage_chrom(
+                tag=shard.tag,
+                chrom=shard.chrom,
+                bam_source=bam_source,
+                fasta_source=(root / REF_REL).resolve(),
+                shm_root=candidate_root,
+                samtools_bin=Path(samtools_bin),
+            )
+            return str(staged.bam_path), staged.fasta_path, staged
+        except ShmCapacityError:
+            continue
+
+    staged = stage_chrom(
+        tag=shard.tag,
+        chrom=shard.chrom,
+        bam_source=bam_source,
+        fasta_source=(root / REF_REL).resolve(),
+        shm_root=FALLBACK_SHM_ROOT,
+        samtools_bin=Path(samtools_bin),
+    )
+    return str(staged.bam_path), staged.fasta_path, staged
 
 
 def discover_shards(
@@ -304,8 +419,7 @@ def log_file_path(output_root: Path, config_name: str | None, shard: Shard) -> P
     return output_root / "logs" / shard.tag / f"{shard.chrom}.log"
 
 
-# Maximum tiles per VarDict invocation. Larger BEDs are split into chunks
-# and compressed between chunks to bound uncompressed disk footprint.
+# Maximum tiles per VarDict invocation when chunking is explicitly enabled.
 CHUNK_SIZE = 20_000
 
 
@@ -340,31 +454,35 @@ def split_bed_chunks(bed_path: Path, chunk_size: int, tmp_dir: Path) -> list[Pat
     return chunks
 
 
-def run_shard(
+def execute_shard_run(
     shard: Shard,
     force: bool,
     output_only: bool,
     config_name: str | None,
     config_flags: tuple[str, ...],
-    root_str: str,
-    chunk_size: int = CHUNK_SIZE,
+    root: Path,
+    chunk_size: int,
+    bam_arg: str,
+    reference: Path,
+    zstd_executor: concurrent.futures.ThreadPoolExecutor | None = None,
+    pending_compressions: list[
+        tuple[tuple[str | None, str, str], concurrent.futures.Future[None]]
+    ] | None = None,
+    sample_name_override: str | None = None,
 ) -> ShardResult:
-    root = Path(root_str)
     output_root = (root / OUTPUT_ROOT_REL).resolve()
     vardict_bin = (root / VARDICT_BIN_REL).resolve()
     effective_output_only = output_only or shard.kind == "pair"
-    if shard.kind == "pair":
-        tumor_rel, normal_rel = SOMATIC_PAIR_MAP[shard.tag]
-        bam_arg = f"{(root / tumor_rel).resolve()}|{(root / normal_rel).resolve()}"
-        reference = (root / SOMATIC_REF_MAP[shard.tag]).resolve()
-    else:
-        bam_arg = str((root / BAM_MAP[shard.tag]).resolve())
-        reference = (root / REF_REL).resolve()
     output_file = output_dir(output_root, config_name, shard.chrom) / f"{shard.tag}_{shard.chrom}.tsv.zst"
     log_path = log_file_path(output_root, config_name, shard)
 
     if output_file.exists() and not force:
-        return ShardResult(tag=shard.tag, chrom=shard.chrom, status="skipped")
+        return ShardResult(
+            tag=shard.tag,
+            chrom=shard.chrom,
+            status="skipped",
+            config_name=config_name,
+        )
 
     module_staging: dict[str, Path] = {}
     staging_dirs: list[Path] = []
@@ -386,12 +504,12 @@ def run_shard(
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path = output_staging / f"{shard.tag}_{shard.chrom}.tsv"
     env = os.environ.copy()
+    env["JAVA_OPTS"] = "-Xms512m -Xmx4g"
     if not effective_output_only:
         for module_name, env_name in MODULES:
             env[env_name] = str(module_staging[module_name].resolve())
 
-    tile_count = count_bed_lines(shard.bed_path)
-    need_chunking = tile_count > chunk_size
+    need_chunking = chunk_size > 0 and count_bed_lines(shard.bed_path) > chunk_size
 
     if need_chunking:
         chunk_beds = split_bed_chunks(shard.bed_path, chunk_size, output_staging)
@@ -420,9 +538,10 @@ def run_shard(
                 "2",
                 "-e",
                 "3",
-                *config_flags,
-                str(chunk_bed),
             ]
+            if sample_name_override is not None:
+                command.extend(["-N", sample_name_override])
+            command.extend([*config_flags, str(chunk_bed)])
 
             stdout_mode = "ab" if chunk_idx > 0 else "wb"
             stderr_mode = "ab" if chunk_idx > 0 else "wb"
@@ -460,8 +579,6 @@ def run_shard(
             if need_chunking:
                 chunk_bed.unlink(missing_ok=True)
 
-        compress_paths([stdout_path])
-
         if not effective_output_only:
             for module_name, _ in MODULES:
                 promote_files(
@@ -469,12 +586,36 @@ def run_shard(
                     module_dir(output_root, module_name, config_name, shard.chrom),
                     "*.jsonl.zst",
                 )
-        promote_files(output_staging, output_dir(output_root, config_name, shard.chrom), "*.tsv.zst")
+
+        if zstd_executor is None:
+            compress_path(stdout_path)
+            promote_files(
+                output_staging,
+                output_dir(output_root, config_name, shard.chrom),
+                "*.tsv.zst",
+            )
+        else:
+            final_output_dir = output_dir(output_root, config_name, shard.chrom)
+            final_output_dir.mkdir(parents=True, exist_ok=True)
+            final_stdout_path = final_output_dir / stdout_path.name
+            final_zst_path = final_stdout_path.with_name(f"{final_stdout_path.name}.zst")
+            final_stdout_path.unlink(missing_ok=True)
+            final_zst_path.unlink(missing_ok=True)
+            os.replace(stdout_path, final_stdout_path)
+            output_staging.rmdir()
+            future = zstd_executor.submit(compress_path, final_stdout_path)
+            if pending_compressions is not None:
+                pending_compressions.append(
+                    ((config_name, shard.tag, shard.chrom), future)
+                )
+            else:
+                future.result()
 
         return ShardResult(
             tag=shard.tag,
             chrom=shard.chrom,
             status="success",
+            config_name=config_name,
             fixture_count=fixture_count,
             log_path=str(log_path),
         )
@@ -484,9 +625,166 @@ def run_shard(
             tag=shard.tag,
             chrom=shard.chrom,
             status="failed",
+            config_name=config_name,
             error=str(exc),
             log_path=str(log_path),
         )
+
+
+def run_shard(
+    shard: Shard,
+    force: bool,
+    output_only: bool,
+    config_name: str | None,
+    config_flags: tuple[str, ...],
+    root_str: str,
+    chunk_size: int = 0,
+    use_shm: bool = True,
+    shm_root_str: str = DEFAULT_SHM_ROOT.as_posix(),
+    samtools_bin: str | None = None,
+) -> ShardResult:
+    root = Path(root_str)
+    staged: StagedChrom | None = None
+    try:
+        bam_arg, reference, staged = resolve_vardict_inputs(
+            root=root,
+            shard=shard,
+            use_shm=use_shm,
+            shm_root=Path(shm_root_str),
+            samtools_bin=samtools_bin,
+        )
+        sample_name_override = None
+        if staged is not None and shard.kind == "single":
+            sample_name_override = Path(BAM_MAP[shard.tag]).stem
+        return execute_shard_run(
+            shard=shard,
+            force=force,
+            output_only=output_only,
+            config_name=config_name,
+            config_flags=config_flags,
+            root=root,
+            chunk_size=chunk_size,
+            bam_arg=bam_arg,
+            reference=reference,
+            sample_name_override=sample_name_override,
+        )
+    except Exception as exc:
+        return ShardResult(
+            tag=shard.tag,
+            chrom=shard.chrom,
+            status="failed",
+            config_name=config_name,
+            error=str(exc),
+        )
+    finally:
+        if staged is not None:
+            evict_chrom(staged)
+
+
+def run_inverted_shards(
+    shards: list[Shard],
+    presets: list[ConfigPreset],
+    force: bool,
+    output_only: bool,
+    root: Path,
+    chunk_size: int,
+    use_shm: bool,
+    shm_root: Path,
+    samtools_bin: str | None,
+    workers: int,
+) -> list[ShardResult]:
+    results: list[ShardResult] = []
+
+    for shard in shards:
+        staged: StagedChrom | None = None
+        try:
+            bam_arg, reference, staged = resolve_vardict_inputs(
+                root=root,
+                shard=shard,
+                use_shm=use_shm,
+                shm_root=shm_root,
+                samtools_bin=samtools_bin,
+            )
+            sample_name_override = None
+            if staged is not None and shard.kind == "single":
+                sample_name_override = Path(BAM_MAP[shard.tag]).stem
+        except Exception as exc:
+            for preset in presets:
+                results.append(
+                    ShardResult(
+                        tag=shard.tag,
+                        chrom=shard.chrom,
+                        status="failed",
+                        config_name=preset.name,
+                        error=str(exc),
+                    )
+                )
+            continue
+
+        try:
+            pending_compressions: list[
+                tuple[tuple[str | None, str, str], concurrent.futures.Future[None]]
+            ] = []
+            result_index_by_key: dict[tuple[str | None, str, str], int] = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as zstd_executor:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                    future_map = {
+                        executor.submit(
+                            execute_shard_run,
+                            shard,
+                            force,
+                            output_only,
+                            preset.name,
+                            preset.flags,
+                            root,
+                            chunk_size,
+                            bam_arg,
+                            reference,
+                            zstd_executor,
+                            pending_compressions,
+                            sample_name_override,
+                        ): preset.name
+                        for preset in presets
+                    }
+                    for future in concurrent.futures.as_completed(future_map):
+                        preset_name = future_map[future]
+                        try:
+                            result = future.result()
+                        except Exception as exc:
+                            result = ShardResult(
+                                tag=shard.tag,
+                                chrom=shard.chrom,
+                                status="failed",
+                                config_name=preset_name,
+                                error=str(exc),
+                            )
+                        result_key = (result.config_name, result.tag, result.chrom)
+                        result_index_by_key[result_key] = len(results)
+                        results.append(result)
+                for result_key, future in pending_compressions:
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        result_index = result_index_by_key.get(result_key)
+                        failed_result = ShardResult(
+                            tag=result_key[1],
+                            chrom=result_key[2],
+                            status="failed",
+                            config_name=result_key[0],
+                            error=str(exc),
+                            log_path=(
+                                results[result_index].log_path if result_index is not None else ""
+                            ),
+                        )
+                        if result_index is None:
+                            results.append(failed_result)
+                        else:
+                            results[result_index] = failed_result
+        finally:
+            if staged is not None:
+                evict_chrom(staged)
+
+    return results
 
 
 def collect_region_bams(shards: list[Shard]) -> dict[str, set[str]]:
@@ -592,7 +890,14 @@ def write_manifest(
         "region_count": region_count,
         "fixture_count": fixture_count,
         "shard_count": shard_count,
-        "failed_shards": [f"{result.tag}/{result.chrom}" for result in failed_shards],
+        "failed_shards": [
+            (
+                f"{result.config_name}/{result.tag}/{result.chrom}"
+                if result.config_name
+                else f"{result.tag}/{result.chrom}"
+            )
+            for result in failed_shards
+        ],
     }
     target_path = manifest_path if manifest_path is not None else output_root / "manifest.json"
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -617,7 +922,9 @@ def main() -> int:
     root = project_root()
     output_root = root / OUTPUT_ROOT_REL
     sweep_bed_root = resolve_path(root, args.sweep_bed_root)
+    shm_root = resolve_path(root, args.shm_root)
     presets = load_all_presets(root)
+    selected_presets = parse_presets(args.presets, presets, parser)
     config_name = None
     config_flags: tuple[str, ...] = ()
     if args.config:
@@ -635,6 +942,10 @@ def main() -> int:
 
     ensure_dependencies(root)
     shards = discover_shards(root, selected_tags, selected_pair_tags, sweep_bed_root)
+    use_shm = not args.no_shm
+    samtools_bin = None
+    if use_shm and any(shard.kind == "single" for shard in shards):
+        samtools_bin = str(locate_samtools())
     region_bams = collect_region_bams(shards) if not run_output_only else {}
 
     with run_log_path.open("w", encoding="utf-8") as run_log:
@@ -651,48 +962,86 @@ def main() -> int:
         emit(f"Force:         {1 if args.force else 0}", run_log)
         emit(f"Mode:          {'output_only' if run_output_only else 'full'}", run_log)
         emit(f"Config:        {config_name or 'default'}", run_log)
+        emit(
+            f"Presets:       {','.join(preset.name for preset in selected_presets) if selected_presets else '(none)'}",
+            run_log,
+        )
+        emit(f"SHM enabled:   {1 if use_shm else 0}", run_log)
+        emit(f"SHM root:      {shm_root}", run_log)
         emit(f"Chunk size:    {args.chunk_size}", run_log)
         emit("", run_log)
 
         results: list[ShardResult] = []
-        with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as executor:
-            future_map = {
-                executor.submit(
-                    run_shard,
-                    shard,
-                    args.force,
-                    run_output_only,
-                    config_name,
-                    config_flags,
-                    str(root),
-                    args.chunk_size,
-                ): shard
-                for shard in shards
-            }
-            for future in concurrent.futures.as_completed(future_map):
-                shard = future_map[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    result = ShardResult(
-                        tag=shard.tag,
-                        chrom=shard.chrom,
-                        status="failed",
-                        error=str(exc),
-                    )
-                results.append(result)
+        if selected_presets is not None:
+            results = run_inverted_shards(
+                shards=shards,
+                presets=selected_presets,
+                force=args.force,
+                output_only=run_output_only,
+                root=root,
+                chunk_size=args.chunk_size,
+                use_shm=use_shm,
+                shm_root=shm_root,
+                samtools_bin=samtools_bin,
+                workers=args.workers,
+            )
+            for result in results:
+                label = result.config_name or "default"
                 if result.status == "success":
                     emit(
-                        f"[{result.tag}] {result.chrom}: {result.fixture_count} fixtures, done",
+                        f"[{label}] [{result.tag}] {result.chrom}: {result.fixture_count} fixtures, done",
                         run_log,
                     )
                 elif result.status == "skipped":
-                    emit(f"[{result.tag}] {result.chrom}: skipped", run_log)
+                    emit(f"[{label}] [{result.tag}] {result.chrom}: skipped", run_log)
                 else:
-                    detail = f"[{result.tag}] {result.chrom}: FAILED: {result.error}"
+                    detail = f"[{label}] [{result.tag}] {result.chrom}: FAILED: {result.error}"
                     if result.log_path:
                         detail += f" (stderr: {result.log_path})"
                     emit(detail, run_log, stream=sys.stderr)
+        else:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as executor:
+                future_map = {
+                    executor.submit(
+                        run_shard,
+                        shard,
+                        args.force,
+                        run_output_only,
+                        config_name,
+                        config_flags,
+                        str(root),
+                        args.chunk_size,
+                        use_shm,
+                        str(shm_root),
+                        samtools_bin,
+                    ): shard
+                    for shard in shards
+                }
+                for future in concurrent.futures.as_completed(future_map):
+                    shard = future_map[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        result = ShardResult(
+                            tag=shard.tag,
+                            chrom=shard.chrom,
+                            status="failed",
+                            config_name=config_name,
+                            error=str(exc),
+                        )
+                    results.append(result)
+                    if result.status == "success":
+                        emit(
+                            f"[{result.tag}] {result.chrom}: {result.fixture_count} fixtures, done",
+                            run_log,
+                        )
+                    elif result.status == "skipped":
+                        emit(f"[{result.tag}] {result.chrom}: skipped", run_log)
+                    else:
+                        detail = f"[{result.tag}] {result.chrom}: FAILED: {result.error}"
+                        if result.log_path:
+                            detail += f" (stderr: {result.log_path})"
+                        emit(detail, run_log, stream=sys.stderr)
 
         failed_shards = [result for result in results if result.status == "failed"]
         skipped_shards = sum(1 for result in results if result.status == "skipped")
@@ -711,13 +1060,13 @@ def main() -> int:
             output_root=output_root,
             selected_tags=selected_tags,
             selected_pair_tags=selected_pair_tags,
-            shard_count=len(shards),
+            shard_count=len(results) if selected_presets is not None else len(shards),
             failed_shards=failed_shards,
             vardict_commit=vardict_commit,
             region_count=region_count,
             fixture_count=fixture_count,
             mode="output_only" if run_output_only else "full",
-            config_name=config_name,
+            config_name=config_name if selected_presets is None else None,
             manifest_path=manifest_override,
         )
 
