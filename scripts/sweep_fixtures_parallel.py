@@ -181,10 +181,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--chunk-size",
         type=non_negative_int,
-        default=0,
+        default=CHUNK_SIZE,
         help=(
-            "Max tiles per VarDict invocation. Use 0 to disable chunking and pass the source BED "
-            "directly to VarDict (default: 0)."
+            f"Max tiles per VarDict invocation (default: {CHUNK_SIZE}). Use 0 to disable "
+            "chunking and pass the source BED directly to VarDict."
         ),
     )
     parser.add_argument(
@@ -893,7 +893,7 @@ def run_shard(
     config_flags: tuple[str, ...],
     root_str: str,
     output_root_str: str,
-    chunk_size: int = 0,
+    chunk_size: int = CHUNK_SIZE,
     use_shm: bool = True,
     shm_root_str: str = DEFAULT_SHM_ROOT.as_posix(),
     samtools_bin: str | None = None,
@@ -1181,6 +1181,12 @@ def emit(message: str, log_handle: TextIO, stream: TextIO = sys.stdout) -> None:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if args.chunk_size == 0:
+        print(
+            "WARN: --chunk-size 0 disables chunked-mode diagnostics. Sidecar will report "
+            "num_chunks=1; consider --chunk-size 20000 for per-chunk md5 localization.",
+            file=sys.stderr,
+        )
     selected_pair_tags = parse_pair_tags(args.pair_tags, parser)
     selected_tags = parse_tags(args.tags, parser, allow_empty=bool(selected_pair_tags))
     selected_chroms = parse_chroms(args.chroms, parser)
@@ -1247,7 +1253,8 @@ def main() -> int:
         )
         emit(f"SHM enabled:   {1 if use_shm else 0}", run_log)
         emit(f"SHM root:      {shm_root}", run_log)
-        emit(f"Chunk size:    {args.chunk_size}", run_log)
+        chunk_default_note = " (default since S4)" if args.chunk_size == CHUNK_SIZE else ""
+        emit(f"Chunk size:    {args.chunk_size}{chunk_default_note}", run_log)
         emit("", run_log)
 
         results: list[ShardResult] = []
