@@ -15,28 +15,28 @@ use crate::variations::{
 use crate::scope::GlobalReadOnlyScope;
 
 /// Ported from: CigarModifier.java:L27-L37 (instance fields)
-struct CigarModifierState {
+struct CigarModifierState<'a> {
     position: i32,
     cigar_str: String,
     original_cigar: String,
     query_sequence: String,
     query_quality: String,
-    reference: HashMap<i32, u8>,
-    seed: HashMap<String, Vec<i32>>,
+    reference: &'a HashMap<i32, u8>,
+    seed: &'a HashMap<String, Vec<i32>>,
     indel: i32,
     max_read_length: i32,
     region: Region,
 }
 
 /// Ported from: CigarModifier.java:L39-L51 (constructor)
-impl CigarModifierState {
+impl<'a> CigarModifierState<'a> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         position: i32,
         cigar_str: String,
         query_sequence: String,
         query_quality: String,
-        reference_data: &Reference,
+        reference_data: &'a Reference,
         indel: i32,
         region: &Region,
         max_read_length: i32,
@@ -47,8 +47,8 @@ impl CigarModifierState {
             cigar_str,
             query_sequence,
             query_quality,
-            reference: reference_data.reference_sequences.clone(),
-            seed: reference_data.seed.clone(),
+            reference: &reference_data.reference_sequences,
+            seed: &reference_data.seed,
             indel,
             max_read_length,
             region: region.clone(),

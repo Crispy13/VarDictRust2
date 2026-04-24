@@ -76,18 +76,45 @@ pub enum VarMaybeArg<'a> {
     Description(&'a str),
 }
 
+#[cfg(test)]
 fn current_scope() -> VariationUtilsScope {
-    if let Some(scope) = GlobalReadOnlyScope::try_thread_local_instance() {
-        return VariationUtilsScope {
-            conf: scope.conf,
-            adaptor_forward: scope.adaptor_forward,
-            adaptor_reverse: scope.adaptor_reverse,
-        };
+    with_current_scope(|conf, adaptor_forward, adaptor_reverse| VariationUtilsScope {
+        conf: conf.clone(),
+        adaptor_forward: adaptor_forward.clone(),
+        adaptor_reverse: adaptor_reverse.clone(),
+    })
+}
+
+fn with_current_scope<R>(
+    f: impl FnOnce(&Configuration, &HashMap<String, i32>, &HashMap<String, i32>) -> R,
+) -> R {
+    let mut f = Some(f);
+    if let Some(result) = GlobalReadOnlyScope::with_thread_local_instance(|scope| {
+        scope.map(|scope| {
+            f.take().expect("scope callback should run once")(
+                &scope.conf,
+                &scope.adaptor_forward,
+                &scope.adaptor_reverse,
+            )
+        })
+    }) {
+        return result;
     }
 
     match VARIATION_UTILS_SCOPE.read() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
+        Ok(guard) => f.expect("scope callback should be available")(
+            &guard.conf,
+            &guard.adaptor_forward,
+            &guard.adaptor_reverse,
+        ),
+        Err(poisoned) => {
+            let guard = poisoned.into_inner();
+            f.expect("scope callback should be available")(
+                &guard.conf,
+                &guard.adaptor_forward,
+                &guard.adaptor_reverse,
+            )
+        }
     }
 }
 
@@ -195,15 +222,16 @@ pub fn strand_bias(forward_count: i32, reverse_count: i32) -> i32 {
         };
     }
 
-    let scope = current_scope();
+    let (bias, min_bias_reads) =
+        with_current_scope(|conf, _, _| (conf.bias, conf.min_bias_reads));
     let total = (forward_count + reverse_count) as f64;
     let forward_ratio = forward_count as f64 / total;
     let reverse_ratio = reverse_count as f64 / total;
 
-    if forward_ratio >= scope.conf.bias
-        && reverse_ratio >= scope.conf.bias
-        && forward_count >= scope.conf.min_bias_reads
-        && reverse_count >= scope.conf.min_bias_reads
+    if forward_ratio >= bias
+        && reverse_ratio >= bias
+        && forward_count >= min_bias_reads
+        && reverse_count >= min_bias_reads
     {
         2
     } else {
@@ -298,25 +326,27 @@ pub fn find_conseq(soft_clip: &mut Sclip, dir: i32) -> String {
     }
 
     if !sequence.is_empty() && sequence.len() >= ADSEED as usize {
-        let scope = current_scope();
-        if dir == 3 {
-            let seed = sequence_prefix(&sequence, ADSEED);
-            if scope.adaptor_forward.contains_key(&seed) {
-                sequence.clear();
+        let remove_sequence = with_current_scope(|_, adaptor_forward, adaptor_reverse| {
+            if dir == 3 {
+                let seed = sequence_prefix(&sequence, ADSEED);
+                adaptor_forward.contains_key(&seed)
+            } else if dir == 5 {
+                let seed = sequence_prefix(&sequence, ADSEED);
+                let reversed_seed =
+                    String::from_utf8_lossy(&reverse_sequence(seed.as_bytes())).into_owned();
+                adaptor_reverse.contains_key(&reversed_seed)
+            } else {
+                false
             }
-        } else if dir == 5 {
-            let seed = sequence_prefix(&sequence, ADSEED);
-            let reversed_seed =
-                String::from_utf8_lossy(&reverse_sequence(seed.as_bytes())).into_owned();
-            if scope.adaptor_reverse.contains_key(&reversed_seed) {
-                sequence.clear();
-            }
+        });
+        if remove_sequence {
+            sequence.clear();
         }
     }
 
     soft_clip.sequence = Some(sequence.clone());
 
-    if current_scope().conf.y {
+    if with_current_scope(|conf, _, _| conf.y) {
         eprintln!(
             "  Candidate consensus: {} Reads: {} M: {} T: {} Final: {}",
             candidate_sequence, soft_clip.base.vars_count, matched, total, sequence
@@ -420,7 +450,7 @@ pub fn adj_cnt_with_reference(
     add_dir(var_to_add, true, get_dir(variant, true));
     add_dir(var_to_add, false, get_dir(variant, false));
 
-    if current_scope().conf.y {
+    if with_current_scope(|conf, _, _| conf.y) {
         let ref_count = reference_var
             .as_ref()
             .filter(|reference| reference.vars_count != 0)
