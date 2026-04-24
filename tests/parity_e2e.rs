@@ -9,6 +9,7 @@ use vardict_rs::scope::{GlobalReadOnlyScope, VariantPrinter};
 const PUSH_INDICES: &[usize] = &[0, 1, 2, 3, 4, 35, 36, 37, 70, 71];
 
 #[test]
+#[ignore = "requires generated tmp/e2e_fixtures goldens not checked into the repo"]
 fn parity_e2e_push() {
     run_e2e_suite(
         Some(PUSH_INDICES),

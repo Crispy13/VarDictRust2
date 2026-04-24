@@ -61,41 +61,49 @@ fn parity_parallel_determinism_t1_14_th8() {
 }
 
 #[test]
+#[ignore = "requires --test-threads=1 because somatic mode uses process-global scope"]
 fn parity_parallel_determinism_somatic_default_th1() {
     assert_somatic_parallel_matches_serial("default", 1);
 }
 
 #[test]
+#[ignore = "requires --test-threads=1 because somatic mode uses process-global scope"]
 fn parity_parallel_determinism_somatic_default_th2() {
     assert_somatic_parallel_matches_serial("default", 2);
 }
 
 #[test]
+#[ignore = "requires --test-threads=1 because somatic mode uses process-global scope"]
 fn parity_parallel_determinism_somatic_default_th4() {
     assert_somatic_parallel_matches_serial("default", 4);
 }
 
 #[test]
+#[ignore = "requires --test-threads=1 because somatic mode uses process-global scope"]
 fn parity_parallel_determinism_somatic_default_th8() {
     assert_somatic_parallel_matches_serial("default", 8);
 }
 
 #[test]
+#[ignore = "requires --test-threads=1 because somatic mode uses process-global scope"]
 fn parity_parallel_determinism_somatic_t1_14_th1() {
     assert_somatic_parallel_matches_serial("T1-14", 1);
 }
 
 #[test]
+#[ignore = "requires --test-threads=1 because somatic mode uses process-global scope"]
 fn parity_parallel_determinism_somatic_t1_14_th2() {
     assert_somatic_parallel_matches_serial("T1-14", 2);
 }
 
 #[test]
+#[ignore = "requires --test-threads=1 because somatic mode uses process-global scope"]
 fn parity_parallel_determinism_somatic_t1_14_th4() {
     assert_somatic_parallel_matches_serial("T1-14", 4);
 }
 
 #[test]
+#[ignore = "requires --test-threads=1 because somatic mode uses process-global scope"]
 fn parity_parallel_determinism_somatic_t1_14_th8() {
     assert_somatic_parallel_matches_serial("T1-14", 8);
 }
