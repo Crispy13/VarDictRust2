@@ -252,6 +252,36 @@ impl GlobalReadOnlyScope {
         })
     }
 
+    /// Borrowing variant of `instance()` for clone-free access to the same singleton scope.
+    /// Java source: GlobalReadOnlyScope.java:L15-L17
+    pub fn with_instance<R>(f: impl FnOnce(&GlobalReadOnlyScope) -> R) -> R {
+        let mut f = Some(f);
+        if let Some(result) = LOCAL_GROS.with(|scope| {
+            let scope = scope.borrow();
+            scope
+                .as_ref()
+                .map(|scope| f.take().expect("scope callback should run once")(scope))
+        }) {
+            return result;
+        }
+
+        match GLOBAL_READ_ONLY_SCOPE.read() {
+            Ok(guard) => f.expect("scope callback should be available")(
+                guard
+                    .as_ref()
+                    .expect("GlobalReadOnlyScope was not initialized."),
+            ),
+            Err(poisoned) => {
+                let guard = poisoned.into_inner();
+                f.expect("scope callback should be available")(
+                    guard
+                        .as_ref()
+                        .expect("GlobalReadOnlyScope was not initialized."),
+                )
+            }
+        }
+    }
+
     /// Ported from: GlobalReadOnlyScope.instance()
     /// Java source: GlobalReadOnlyScope.java:L15-L17
     pub fn instance() -> GlobalReadOnlyScope {

@@ -285,13 +285,17 @@ impl SimpleMode {
         let buffer = Arc::new(Mutex::new(String::new()));
         let printer = VariantPrinter::Buffer(buffer.clone());
         let reference = try_to_get_reference(&self.reference_resource, region);
-        let initial_scope = Scope::new(
-            GlobalReadOnlyScope::instance()
+        let bam1 = GlobalReadOnlyScope::with_instance(|scope| {
+            scope
                 .conf
                 .bam
                 .as_ref()
                 .expect("BAM names must be configured")
-                .get_bam1(),
+                .get_bam1()
+                .to_string()
+        });
+        let initial_scope = Scope::new(
+            bam1,
             region.clone(),
             Arc::new(reference),
             Arc::new(self.reference_resource.clone()),
