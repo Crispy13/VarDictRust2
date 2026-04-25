@@ -21,20 +21,15 @@ static VARIATION_UTILS_SCOPE: Lazy<RwLock<VariationUtilsScope>> =
     Lazy::new(|| RwLock::new(VariationUtilsScope::default()));
 
 pub trait CountMap<K> {
-    fn get_value(&self, key: &K) -> Option<i32>;
-    fn insert_value(&mut self, key: K, value: i32);
+    fn increment_value(&mut self, key: K, add: i32);
 }
 
 impl<K> CountMap<K> for HashMap<K, i32>
 where
     K: Eq + Hash,
 {
-    fn get_value(&self, key: &K) -> Option<i32> {
-        self.get(key).copied()
-    }
-
-    fn insert_value(&mut self, key: K, value: i32) {
-        self.insert(key, value);
+    fn increment_value(&mut self, key: K, add: i32) {
+        *self.entry(key).or_insert(0) += add;
     }
 }
 
@@ -42,22 +37,14 @@ impl<K> CountMap<K> for BTreeMap<K, i32>
 where
     K: Ord,
 {
-    fn get_value(&self, key: &K) -> Option<i32> {
-        self.get(key).copied()
-    }
-
-    fn insert_value(&mut self, key: K, value: i32) {
-        self.insert(key, value);
+    fn increment_value(&mut self, key: K, add: i32) {
+        *self.entry(key).or_insert(0) += add;
     }
 }
 
 impl CountMap<String> for crate::data::SortedStringMap<i32> {
-    fn get_value(&self, key: &String) -> Option<i32> {
-        self.0.get(key).copied()
-    }
-
-    fn insert_value(&mut self, key: String, value: i32) {
-        self.0.insert(key, value);
+    fn increment_value(&mut self, key: String, add: i32) {
+        *self.0.entry(key).or_insert(0) += add;
     }
 }
 
@@ -208,8 +195,7 @@ pub fn inc_cnt<K, M>(counts: &mut M, key: K, add: i32)
 where
     M: CountMap<K>,
 {
-    let next_value = counts.get_value(&key).map_or(add, |value| value + add);
-    counts.insert_value(key, next_value);
+    counts.increment_value(key, add);
 }
 
 /// Ported from: VariationUtils.java:L49-L63
