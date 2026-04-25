@@ -386,6 +386,112 @@ def write_chunks_json(
     os.replace(tmp_path, path)
 
 
+def is_plain_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def invalid_chunks_json(path: Path, reason: str) -> bool:
+    print(f"DEBUG: invalid chunks.json {path}: {reason}", file=sys.stderr, flush=True)
+    return False
+
+
+def validate_chunks_json(path: Path) -> bool:
+    required_keys = {
+        "monolithic_md5",
+        "monolithic_bytes",
+        "num_chunks",
+        "chunk_size",
+        "chunks",
+        "generated_at",
+        "vardict_commit",
+    }
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        return invalid_chunks_json(path, str(exc))
+
+    if not isinstance(payload, dict):
+        return invalid_chunks_json(path, "top-level value is not an object")
+
+    missing_keys = sorted(required_keys - payload.keys())
+    if missing_keys:
+        return invalid_chunks_json(path, f"missing required keys: {', '.join(missing_keys)}")
+
+    monolithic_md5 = payload["monolithic_md5"]
+    if not isinstance(monolithic_md5, str) or len(monolithic_md5) != 32:
+        return invalid_chunks_json(path, "monolithic_md5 is not a 32-character string")
+    if any(char not in "0123456789abcdefABCDEF" for char in monolithic_md5):
+        return invalid_chunks_json(path, "monolithic_md5 contains non-hex characters")
+
+    monolithic_bytes = payload["monolithic_bytes"]
+    if not is_plain_int(monolithic_bytes) or monolithic_bytes < 0:
+        return invalid_chunks_json(path, "monolithic_bytes is not a non-negative int")
+
+    num_chunks = payload["num_chunks"]
+    if not is_plain_int(num_chunks) or num_chunks <= 0:
+        return invalid_chunks_json(path, "num_chunks is not a positive int")
+
+    chunk_size = payload["chunk_size"]
+    if not is_plain_int(chunk_size) or chunk_size < 0:
+        return invalid_chunks_json(path, "chunk_size is not a non-negative int")
+
+    chunks = payload["chunks"]
+    if not isinstance(chunks, list):
+        return invalid_chunks_json(path, "chunks is not a list")
+    if num_chunks != len(chunks):
+        return invalid_chunks_json(path, "num_chunks does not match chunks length")
+
+    next_offset = 0
+    for chunk_idx, chunk in enumerate(chunks):
+        if not isinstance(chunk, dict):
+            return invalid_chunks_json(path, f"chunk {chunk_idx} is not an object")
+        byte_range = chunk.get("byte_range")
+        if not isinstance(byte_range, list) or len(byte_range) != 2:
+            return invalid_chunks_json(path, f"chunk {chunk_idx} has invalid byte_range")
+        chunk_offset, chunk_length = byte_range
+        if not is_plain_int(chunk_offset) or not is_plain_int(chunk_length):
+            return invalid_chunks_json(path, f"chunk {chunk_idx} byte_range is not integer-valued")
+        if chunk_offset < 0 or chunk_length < 0:
+            return invalid_chunks_json(path, f"chunk {chunk_idx} byte_range is negative")
+        if chunk_offset != next_offset:
+            return invalid_chunks_json(path, f"chunk {chunk_idx} starts at {chunk_offset}, expected {next_offset}")
+        next_offset += chunk_length
+
+    if next_offset != monolithic_bytes:
+        return invalid_chunks_json(path, "chunk byte ranges do not sum to monolithic_bytes")
+
+    return True
+
+
+def shard_output_paths(final_dir: Path, tag: str, chrom: str) -> tuple[Path, Path]:
+    stem = f"{tag}_{chrom}"
+    return final_dir / f"{stem}.tsv.zst", final_dir / f"{stem}.chunks.json"
+
+
+def shard_is_complete(output_dir: Path, tag: str, chrom: str) -> bool:
+    output_path, chunks_path = shard_output_paths(output_dir, tag, chrom)
+    return output_path.exists() and chunks_path.exists() and validate_chunks_json(chunks_path)
+
+
+def cleanup_partial_shard(final_dir: Path, tag: str, chrom: str) -> None:
+    output_path, chunks_path = shard_output_paths(final_dir, tag, chrom)
+    output_path.unlink(missing_ok=True)
+    chunks_path.unlink(missing_ok=True)
+
+
+def compress_and_promote_chunks(
+    stdout_path: Path,
+    chunks_path: Path,
+    final_chunks_path: Path,
+    cleanup_dir: Path | None = None,
+) -> None:
+    compress_path(stdout_path)
+    os.replace(chunks_path, final_chunks_path)
+    if cleanup_dir is not None:
+        cleanup_dir.rmdir()
+
+
 def resolve_direct_inputs(root: Path, shard: Shard) -> tuple[str, Path]:
     if shard.kind == "pair":
         tumor_rel, normal_rel = SOMATIC_PAIR_MAP[shard.tag]
@@ -619,6 +725,46 @@ def build_timing_summary(
     }
 
 
+def resume_or_cleanup_shard(
+    *,
+    shard: Shard,
+    force: bool,
+    output_root: Path,
+    config_name: str | None,
+    shard_start: float,
+) -> ShardResult | None:
+    if force:
+        return None
+
+    final_dir = output_dir(output_root, config_name, shard.chrom)
+    output_path, chunks_path = shard_output_paths(final_dir, shard.tag, shard.chrom)
+    if shard_is_complete(final_dir, shard.tag, shard.chrom):
+        print(f"INFO: resume-skipped {shard.tag}/{shard.chrom}", file=sys.stderr, flush=True)
+        return ShardResult(
+            tag=shard.tag,
+            chrom=shard.chrom,
+            status="skipped",
+            config_name=config_name,
+            fixture_count=0,
+            log_path="(resume-skipped)",
+            **build_timing_summary(
+                shard_start=shard_start,
+                chunk_wall_s=[],
+                num_chunks=0,
+            ),
+        )
+
+    if output_path.exists() or chunks_path.exists():
+        print(
+            f"WARN: regenerating shard {shard.tag}/{shard.chrom} (incomplete prior run)",
+            file=sys.stderr,
+            flush=True,
+        )
+        cleanup_partial_shard(final_dir, shard.tag, shard.chrom)
+
+    return None
+
+
 def initialize_timings_file(timings_path: Path) -> None:
     timings_path.parent.mkdir(parents=True, exist_ok=True)
     with timings_path.open("w", encoding="utf-8", newline="") as handle:
@@ -665,16 +811,17 @@ def execute_shard_run(
     t_shard_start = time.monotonic()
     vardict_bin = (root / VARDICT_BIN_REL).resolve()
     effective_output_only = output_only or shard.kind == "pair"
-    output_file = output_dir(output_root, config_name, shard.chrom) / f"{shard.tag}_{shard.chrom}.tsv.zst"
     log_path = log_file_path(output_root, config_name, shard)
 
-    if output_file.exists() and not force:
-        return ShardResult(
-            tag=shard.tag,
-            chrom=shard.chrom,
-            status="skipped",
-            config_name=config_name,
-        )
+    resume_result = resume_or_cleanup_shard(
+        shard=shard,
+        force=force,
+        output_root=output_root,
+        config_name=config_name,
+        shard_start=t_shard_start,
+    )
+    if resume_result is not None:
+        return resume_result
 
     module_staging: dict[str, Path] = {}
     staging_dirs: list[Path] = []
@@ -829,12 +976,12 @@ def execute_shard_run(
             compress_path(stdout_path)
             final_output_dir = output_dir(output_root, config_name, shard.chrom)
             final_output_dir.mkdir(parents=True, exist_ok=True)
-            os.replace(chunks_path, final_output_dir / chunks_path.name)
-            promote_files(
-                output_staging,
-                final_output_dir,
-                "*.tsv.zst",
+            os.replace(
+                stdout_path.with_name(f"{stdout_path.name}.zst"),
+                final_output_dir / f"{stdout_path.name}.zst",
             )
+            os.replace(chunks_path, final_output_dir / chunks_path.name)
+            output_staging.rmdir()
         else:
             final_output_dir = output_dir(output_root, config_name, shard.chrom)
             final_output_dir.mkdir(parents=True, exist_ok=True)
@@ -844,10 +991,14 @@ def execute_shard_run(
             final_stdout_path.unlink(missing_ok=True)
             final_zst_path.unlink(missing_ok=True)
             final_chunks_path.unlink(missing_ok=True)
-            os.replace(chunks_path, final_chunks_path)
             os.replace(stdout_path, final_stdout_path)
-            output_staging.rmdir()
-            future = zstd_executor.submit(compress_path, final_stdout_path)
+            future = zstd_executor.submit(
+                compress_and_promote_chunks,
+                final_stdout_path,
+                chunks_path,
+                final_chunks_path,
+                output_staging,
+            )
             if pending_compressions is not None:
                 pending_compressions.append(
                     ((config_name, shard.tag, shard.chrom), future)
@@ -900,6 +1051,16 @@ def run_shard(
 ) -> ShardResult:
     root = Path(root_str)
     output_root = Path(output_root_str)
+    resume_result = resume_or_cleanup_shard(
+        shard=shard,
+        force=force,
+        output_root=output_root,
+        config_name=config_name,
+        shard_start=time.monotonic(),
+    )
+    if resume_result is not None:
+        return resume_result
+
     staged: StagedChrom | None = None
     try:
         bam_arg, reference, staged = resolve_vardict_inputs(
@@ -954,6 +1115,22 @@ def run_inverted_shards(
     results: list[ShardResult] = []
 
     for shard in shards:
+        runnable_presets: list[ConfigPreset] = []
+        for preset in presets:
+            resume_result = resume_or_cleanup_shard(
+                shard=shard,
+                force=force,
+                output_root=output_root,
+                config_name=preset.name,
+                shard_start=time.monotonic(),
+            )
+            if resume_result is None:
+                runnable_presets.append(preset)
+            else:
+                results.append(resume_result)
+        if not runnable_presets:
+            continue
+
         staged: StagedChrom | None = None
         try:
             bam_arg, reference, staged = resolve_vardict_inputs(
@@ -967,7 +1144,7 @@ def run_inverted_shards(
             if staged is not None and shard.kind == "single":
                 sample_name_override = Path(BAM_MAP[shard.tag]).stem
         except Exception as exc:
-            for preset in presets:
+            for preset in runnable_presets:
                 results.append(
                     ShardResult(
                         tag=shard.tag,
@@ -1003,7 +1180,7 @@ def run_inverted_shards(
                             pending_compressions,
                             sample_name_override,
                         ): preset.name
-                        for preset in presets
+                        for preset in runnable_presets
                     }
                     for future in concurrent.futures.as_completed(future_map):
                         preset_name = future_map[future]
@@ -1172,6 +1349,39 @@ def write_manifest(
         handle.write("\n")
 
 
+def write_run_summary(
+    output_root: Path,
+    *,
+    shard_count: int,
+    completed_shards: int,
+    skipped_shards: int,
+    failed_shards: int,
+    results: list[ShardResult],
+) -> Path:
+    summary_path = output_root / "run_summary.json"
+    summary = {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "shard_count": shard_count,
+        "success": completed_shards,
+        "skipped": skipped_shards,
+        "failed": failed_shards,
+        "results": [
+            {
+                "config": result.config_name or "default",
+                "tag": result.tag,
+                "chrom": result.chrom,
+                "status": result.status,
+            }
+            for result in results
+        ],
+    }
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    with summary_path.open("w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=2, sort_keys=False)
+        handle.write("\n")
+    return summary_path
+
+
 def emit(message: str, log_handle: TextIO, stream: TextIO = sys.stdout) -> None:
     print(message, file=stream, flush=True)
     log_handle.write(message + "\n")
@@ -1336,6 +1546,7 @@ def main() -> int:
         failed_shards = [result for result in results if result.status == "failed"]
         skipped_shards = sum(1 for result in results if result.status == "skipped")
         completed_shards = sum(1 for result in results if result.status == "success")
+        shard_count = len(results) if selected_presets is not None else len(shards)
 
         region_count = 0
         if not run_output_only:
@@ -1346,11 +1557,19 @@ def main() -> int:
         manifest_override = Path(args.manifest_path) if args.manifest_path else None
         if manifest_override is not None and not manifest_override.is_absolute():
             manifest_override = (root / manifest_override).resolve()
+        summary_path = write_run_summary(
+            output_root=output_root,
+            shard_count=shard_count,
+            completed_shards=completed_shards,
+            skipped_shards=skipped_shards,
+            failed_shards=len(failed_shards),
+            results=results,
+        )
         write_manifest(
             output_root=output_root,
             selected_tags=selected_tags,
             selected_pair_tags=selected_pair_tags,
-            shard_count=len(results) if selected_presets is not None else len(shards),
+            shard_count=shard_count,
             failed_shards=failed_shards,
             vardict_commit=vardict_commit,
             region_count=region_count,
@@ -1368,6 +1587,7 @@ def main() -> int:
         emit(f"Shards failed:     {len(failed_shards)}", run_log)
         emit(f"Fixture count:     {fixture_count}", run_log)
         emit(f"Region count:      {region_count}", run_log)
+        emit(f"Run summary:       {summary_path}", run_log)
         emit(f"Manifest:          {output_root / 'manifest.json'}", run_log)
 
         if failed_shards:
