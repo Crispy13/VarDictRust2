@@ -20,7 +20,8 @@ use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{get_reverse_complemented_sequence, global_find, substr_with_len};
 use crate::variations::{
     get_variation, get_variation_from_seq, inc_cnt, is_equals, is_has_and_equals_base,
-    is_has_and_equals_str, is_has_and_not_equals_base, is_has_and_not_equals_str, is_not_equals,
+    is_has_and_equals_str, is_has_and_not_equals_base, is_reference_mismatch_and_not_n,
+    is_not_equals,
 };
 
 // ─── CIGAR representation ─────────────────────────────────────────────────────
@@ -1096,13 +1097,12 @@ impl CigarParser {
                     && (self.start + 1) <= self.region.end
                     && (i + 1) < self.cigar_element_length
                     && q >= conf.goodq
-                    && is_has_and_not_equals_str(
+                    && is_reference_mismatch_and_not_n(
                         ref_map,
                         self.start,
                         &query_sequence,
                         self.read_position_including_soft_clipped,
                     )
-                    && is_not_equals(Some(b'N'), ref_map.get(&self.start).copied())
                 {
                     // Java: CigarParser.java#L413 — require higher quality for MNV
                     let next_n = (self.read_position_including_soft_clipped + 1) as usize;

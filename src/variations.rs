@@ -647,6 +647,27 @@ pub fn is_has_and_not_equals_str(
         .is_some_and(|candidate| reference_base != candidate)
 }
 
+pub fn is_reference_mismatch_and_not_n(
+    reference: &HashMap<i32, u8>,
+    index1: i32,
+    string: &str,
+    index2: i32,
+) -> bool {
+    let Some(reference_base) = reference.get(&index1) else {
+        return false;
+    };
+    if *reference_base == b'N' {
+        return false;
+    }
+    let Some(compare_index) = usize::try_from(index2).ok() else {
+        return false;
+    };
+    string
+        .as_bytes()
+        .get(compare_index)
+        .is_some_and(|candidate| reference_base != candidate)
+}
+
 /// Ported from: VariationUtils.java:L499-L505
 pub fn is_equals(ch1: Option<u8>, ch2: Option<u8>) -> bool {
     ch1 == ch2
@@ -892,13 +913,16 @@ mod tests {
 
     #[test]
     fn helper_comparisons_are_null_safe() {
-        let reference = HashMap::from([(10, b'A'), (11, b'C')]);
+        let reference = HashMap::from([(10, b'A'), (11, b'C'), (12, b'N')]);
 
         assert!(is_has_and_equals_base(b'A', &reference, 10));
         assert!(is_has_and_equals_index(10, &reference, 10));
         assert!(is_has_and_equals_str(&reference, 11, "CC", 0));
         assert!(is_has_and_not_equals_base(b'T', &reference, 10));
         assert!(is_has_and_not_equals_str(&reference, 11, "AA", 0));
+        assert!(is_reference_mismatch_and_not_n(&reference, 11, "AA", 0));
+        assert!(!is_reference_mismatch_and_not_n(&reference, 12, "AA", 0));
+        assert!(!is_reference_mismatch_and_not_n(&reference, 99, "AA", 0));
         assert!(is_equals(Some(b'A'), Some(b'A')));
         assert!(is_equals(None, None));
         assert!(is_not_equals(Some(b'A'), None));
