@@ -201,13 +201,31 @@ impl RecordPreprocessor {
     /// Public iterator API — returns next filtered SAMRecord across all BAM files.
     /// Returns `None` when all BAMs are exhausted.
     pub fn next_record(&mut self) -> Option<bam::Record> {
-        let record = self.next_on_current_reader();
-        if record.is_some() {
-            return record;
+        if self.advance_on_current_reader() {
+            return Some(self.current_record.clone());
         }
         // Current BAM exhausted — try next BAM
         self.next_reader();
-        self.next_on_current_reader()
+        if self.advance_on_current_reader() {
+            Some(self.current_record.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Calls `f` for each filtered record without cloning the reusable BAM record buffer.
+    pub fn for_each_record(&mut self, mut f: impl FnMut(&bam::Record)) {
+        loop {
+            if self.advance_on_current_reader() {
+                f(&self.current_record);
+                continue;
+            }
+            self.next_reader();
+            if !self.advance_on_current_reader() {
+                break;
+            }
+            f(&self.current_record);
+        }
     }
 
     // Ported from: RecordPreprocessor.java:L84-L97
@@ -269,8 +287,10 @@ impl RecordPreprocessor {
     // Ported from: RecordPreprocessor.java:L103-L115
 
     /// Read records from current reader until one passes the filter cascade, or EOF.
-    fn next_on_current_reader(&mut self) -> Option<bam::Record> {
-        self.current_reader.as_ref()?;
+    fn advance_on_current_reader(&mut self) -> bool {
+        if self.current_reader.is_none() {
+            return false;
+        }
 
         // Reuse the record buffer for efficiency
         loop {
@@ -279,7 +299,7 @@ impl RecordPreprocessor {
             match reader.read(&mut self.current_record) {
                 Some(Ok(())) => {}
                 Some(Err(_)) => continue, // skip malformed records (LENIENT behavior)
-                None => return None,      // EOF
+                None => return false,     // EOF
             }
 
             // Layer 1: SamView.read() flag filter
@@ -290,8 +310,7 @@ impl RecordPreprocessor {
 
             // Layer 2: preprocessRecord() filter cascade
             if self.preprocess_record() {
-                // Clone the record to return — the buffer will be reused
-                return Some(self.current_record.clone());
+                return true;
             }
         }
     }

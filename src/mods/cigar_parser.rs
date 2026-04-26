@@ -13,7 +13,7 @@ use crate::data::{
     VariationData, VariationMap,
 };
 use crate::mods::cigar_modifier::modify_cigar;
-use crate::mods::sam_file_parser::get_mate_reference_name;
+use crate::mods::sam_file_parser::{get_mate_reference_name, RecordPreprocessor};
 use crate::patterns::*;
 use crate::reference::Reference;
 use crate::scope::GlobalReadOnlyScope;
@@ -334,44 +334,71 @@ impl CigarParser {
     /// Entry point: iterates all BAM records from the preprocessor,
     /// dispatches each to parse_cigar(), then packages results into VariationData.
     ///
-    /// NOTE: The record iteration loop requires a RecordPreprocessor which is
-    /// not yet fully ported. The loop structure is here; the record source will
-    /// be wired when RecordPreprocessor's iterator interface is available.
+    /// Kept for tests and harnesses that materialize owned BAM records.
     pub fn process(
         &mut self,
         records: &mut dyn Iterator<Item = bam::Record>,
         header: &HeaderView,
         chr_name: &str,
     ) -> VariationData {
-        let (sample, output_splicing, remove_duplicated_reads) =
-            GlobalReadOnlyScope::with_instance(|scope| {
-                (
-                    scope.sample.clone(),
-                    scope.conf.output_splicing,
-                    scope.conf.remove_duplicated_reads,
-                )
-            });
+        let (sample, output_splicing, remove_duplicated_reads) = Self::process_output_settings();
 
         // Java: while ((record = processor.nextRecord()) != null) { ... }
         // Ported from: CigarParser.java:L96-L103
         for record in records {
-            // Java: try { parseCigar(chrName, record); }
-            //       catch (Exception e) { printExceptionAndContinue(e, ...); }
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                // parse_cigar is stubbed as todo!() for now
-                self.parse_cigar(chr_name, &record, header);
-            }));
-
-            if let Err(_e) = result {
-                let read_name = String::from_utf8_lossy(record.qname()).to_string();
-                eprintln!(
-                    "WARNING: Exception in CigarParser for record {} in region {}",
-                    read_name,
-                    self.region.print_region()
-                );
-            }
+            self.process_record(chr_name, &record, header);
         }
 
+        self.finish_process(sample, output_splicing, remove_duplicated_reads)
+    }
+
+    /// Production entry point that processes the preprocessor's reusable record buffer directly.
+    pub fn process_preprocessor(
+        &mut self,
+        preprocessor: &mut RecordPreprocessor,
+        header: &HeaderView,
+        chr_name: &str,
+    ) -> VariationData {
+        let (sample, output_splicing, remove_duplicated_reads) = Self::process_output_settings();
+
+        preprocessor.for_each_record(|record| self.process_record(chr_name, record, header));
+
+        self.finish_process(sample, output_splicing, remove_duplicated_reads)
+    }
+
+    fn process_output_settings() -> (String, bool, bool) {
+        GlobalReadOnlyScope::with_instance(|scope| {
+            (
+                scope.sample.clone(),
+                scope.conf.output_splicing,
+                scope.conf.remove_duplicated_reads,
+            )
+        })
+    }
+
+    fn process_record(&mut self, chr_name: &str, record: &bam::Record, header: &HeaderView) {
+        // Java: try { parseCigar(chrName, record); }
+        //       catch (Exception e) { printExceptionAndContinue(e, ...); }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.parse_cigar(chr_name, record, header);
+        }));
+
+        if let Err(_e) = result {
+            let read_name = String::from_utf8_lossy(record.qname()).to_string();
+            eprintln!(
+                "WARNING: Exception in CigarParser for record {} in region {}",
+                read_name,
+                self.region.print_region()
+            );
+        }
+    }
+
+    fn finish_process(
+        &mut self,
+        sample: String,
+        output_splicing: bool,
+        remove_duplicated_reads: bool,
+    ) -> VariationData {
         // Java: CigarParser.java:L105-L118 (outputSplicing early return)
         if output_splicing {
             for (intron, cnt) in &self.splice_count {

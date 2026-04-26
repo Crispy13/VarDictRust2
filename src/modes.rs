@@ -98,8 +98,7 @@ fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
         total_reads,
         duplicate_reads,
     );
-    let mut records = std::iter::from_fn(|| data.next_record());
-    let variation_data = parser.process(&mut records, &header, &chr_name);
+    let variation_data = parser.process_preprocessor(&mut data, &header, &chr_name);
     maybe_write_module_snapshot("CIGAR_PARSER", &region, &variation_data);
     maybe_write_module_snapshot("CIGAR_MODIFIER", &region, &parser.cigar_modifier_snapshots);
     data.close();
