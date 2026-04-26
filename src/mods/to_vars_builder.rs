@@ -1382,7 +1382,7 @@ fn process_position(
     scope: &GlobalReadOnlyScope,
 ) {
     let vars_at_cur_position = match non_insertion_variants.get(&position) {
-        Some(vm) => vm.clone(), // Clone to release borrow for later mut access
+        Some(vm) => vm,
         None => return,
     };
 
@@ -1406,7 +1406,7 @@ fn process_position(
     // Check if only reference variant
     if is_the_same_variation_on_ref(
         position,
-        &vars_at_cur_position,
+        vars_at_cur_position,
         insertion_variants,
         ref_map,
         conf,
@@ -1430,7 +1430,7 @@ fn process_position(
     }
 
     let mut total_pos_coverage = *ref_coverage.get(&position).unwrap();
-    let hicov = calc_hicov(insertion_variants.get(&position), &vars_at_cur_position);
+    let hicov = calc_hicov(insertion_variants.get(&position), vars_at_cur_position);
 
     let mut var: Vec<Variant> = Vec::new();
     let mut keys: Vec<String> = vars_at_cur_position.entries.keys().cloned().collect();
@@ -1442,7 +1442,7 @@ fn process_position(
         duprate,
         aligned_variants,
         position,
-        &vars_at_cur_position,
+        vars_at_cur_position,
         total_pos_coverage,
         &mut var,
         &mut debug_lines,
