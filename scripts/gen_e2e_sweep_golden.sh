@@ -179,109 +179,14 @@ merge_manifest_cache_entries() {
     local manifest_path="$project_root/$OUTPUT_ROOT/manifest.json"
     local preserve_path="$project_root/$OUTPUT_ROOT/.manifest.cache_entries.before.json"
 
-    CONFIG_NAME="$config" \
-    TAGS_CSV="$tags_csv" \
-    LOGICAL_FLAGS="$logical_flags" \
-    PROJECT_ROOT="$project_root" \
-    MANIFEST_PATH="$manifest_path" \
-    PRESERVE_PATH="$preserve_path" \
-    SWEEP_BED_ROOT="$sweep_bed_root" \
-    python3 <<'PY'
-import glob
-import hashlib
-import json
-import os
-import subprocess
-import tempfile
-from pathlib import Path
-
-project_root = Path(os.environ["PROJECT_ROOT"])
-manifest_path = Path(os.environ["MANIFEST_PATH"])
-preserve_path = Path(os.environ["PRESERVE_PATH"])
-config_name = os.environ["CONFIG_NAME"]
-logical_flags = " ".join(os.environ["LOGICAL_FLAGS"].split())
-sweep_bed_root = Path(os.environ["SWEEP_BED_ROOT"])
-tags = [tag for tag in os.environ["TAGS_CSV"].split(",") if tag]
-
-bam_paths = {
-    "hg002": "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam",
-    "na12878_exome": "testdata/NA12878.chrom20.ILLUMINA.bwa.CEU.exome.20121211.bam",
-    "na12878_lowcov": "testdata/NA12878.mapped.ILLUMINA.bwa.CEU.low_coverage.20121211.bam",
-}
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-def sha256_concat(paths: list[Path]) -> str:
-    digest = hashlib.sha256()
-    for path in paths:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
-
-if not manifest_path.exists():
-    raise SystemExit(f"ERROR: manifest not found after generator run: {manifest_path}")
-
-with manifest_path.open("r", encoding="utf-8") as handle:
-    manifest = json.load(handle)
-
-preserved_entries = {}
-if preserve_path.exists():
-    with preserve_path.open("r", encoding="utf-8") as handle:
-        preserved_entries = json.load(handle)
-
-reference_sha256 = sha256_file(project_root / "testdata/hs37d5.fa.fai")
-generator_flags_hash = hashlib.sha256(logical_flags.encode("utf-8")).hexdigest()
-vardict_commit = manifest.get("vardictjava_commit")
-if not vardict_commit:
-    vardict_commit = subprocess.run(
-        ["git", "-C", str(project_root / "VarDictJava"), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-cache_entries = dict(preserved_entries)
-for tag in tags:
-    bed_paths = sorted(
-        Path(path) for path in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed"))
-    )
-    if not bed_paths:
-        raise SystemExit(f"ERROR: no BED files found for {tag} under {sweep_bed_root}")
-    bam_path = project_root / bam_paths[tag]
-    bam_stat = [{
-        "path": bam_paths[tag],
-        "size": bam_path.stat().st_size,
-        "mtime_unix": int(bam_path.stat().st_mtime),
-    }]
-    key = f"{config_name}:{tag}"
-    cache_entries[key] = {
-        "config": config_name,
-        "tag": tag,
-        "bed_sha256": sha256_concat(bed_paths),
-        "bam_stat": bam_stat,
-        "reference_sha256": reference_sha256,
-        "generator_flags_hash": generator_flags_hash,
-        "vardictjava_commit": vardict_commit,
-    }
-
-manifest["cache_entries"] = cache_entries
-
-manifest_path.parent.mkdir(parents=True, exist_ok=True)
-with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=manifest_path.parent, delete=False) as handle:
-    json.dump(manifest, handle, indent=2, sort_keys=False)
-    handle.write("\n")
-    temp_name = handle.name
-
-os.replace(temp_name, manifest_path)
-if preserve_path.exists():
-    preserve_path.unlink()
-PY
+    python3 -m scripts.lib.merge_manifest cache-entries \
+        --config "$config" \
+        --tags "$tags_csv" \
+        --logical-flags "$logical_flags" \
+        --project-root "$project_root" \
+        --sweep-bed-root "$sweep_bed_root" \
+        --manifest-path "$manifest_path" \
+        --preserve-path "$preserve_path"
 }
 
 merge_manifest_somatic_cache_entries() {
@@ -293,35 +198,14 @@ merge_manifest_somatic_cache_entries() {
     local manifest_path="$project_root/$OUTPUT_ROOT/manifest.json"
     local preserve_path="$project_root/$OUTPUT_ROOT/.manifest.cache_entries.before.json"
 
-    CONFIG_NAME="$config" \
-    TAGS_CSV="$tags_csv" \
-    LOGICAL_FLAGS="$logical_flags" \
-    PROJECT_ROOT="$project_root" \
-    MANIFEST_PATH="$manifest_path" \
-    PRESERVE_PATH="$preserve_path" \
-    SWEEP_BED_ROOT="$sweep_bed_root" \
-    python3 <<'PY'
-import glob
-import hashlib
-import json
-import os
-import subprocess
-import tempfile
-from pathlib import Path
-
-project_root = Path(os.environ["PROJECT_ROOT"])
-manifest_path = Path(os.environ["MANIFEST_PATH"])
-preserve_path = Path(os.environ["PRESERVE_PATH"])
-config_name = os.environ["CONFIG_NAME"]
-logical_flags = " ".join(os.environ["LOGICAL_FLAGS"].split())
-sweep_bed_root = Path(os.environ["SWEEP_BED_ROOT"])
-tags = [tag for tag in os.environ["TAGS_CSV"].split(",") if tag]
-
-pair_paths = {
-    "wes_il_pair": (
-        "testdata/WES_IL_T_1.bwa.dedup.bam",
-        "testdata/WES_IL_N_1.bwa.dedup.bam",
-    ),
+    python3 -m scripts.lib.merge_manifest cache-entries-somatic \
+        --config "$config" \
+        --tags "$tags_csv" \
+        --logical-flags "$logical_flags" \
+        --project-root "$project_root" \
+        --sweep-bed-root "$sweep_bed_root" \
+        --manifest-path "$manifest_path" \
+        --preserve-path "$preserve_path"
 }
 
 merge_manifest_cache_entries_many() {
@@ -332,214 +216,13 @@ merge_manifest_cache_entries_many() {
     local manifest_path="$project_root/$OUTPUT_ROOT/manifest.json"
     local preserve_path="$project_root/$OUTPUT_ROOT/.manifest.cache_entries.before.json"
 
-    CONFIG_NAMES_CSV="$config_names_csv" \
-    TAGS_CSV="$tags_csv" \
-    PROJECT_ROOT="$project_root" \
-    MANIFEST_PATH="$manifest_path" \
-    PRESERVE_PATH="$preserve_path" \
-    SWEEP_BED_ROOT="$sweep_bed_root" \
-    python3 <<'PY'
-import glob
-import hashlib
-import json
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-def sha256_concat(paths: list[Path]) -> str:
-    digest = hashlib.sha256()
-    for path in paths:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
-
-if not manifest_path.exists():
-    raise SystemExit(f"ERROR: manifest not found after generator run: {manifest_path}")
-
-with manifest_path.open("r", encoding="utf-8") as handle:
-    manifest = json.load(handle)
-
-preserved_entries = {}
-if preserve_path.exists():
-    with preserve_path.open("r", encoding="utf-8") as handle:
-        preserved_entries = json.load(handle)
-
-reference_fai = project_root / "testdata/GRCh38.d1.vd1.fa.fai"
-reference_target = reference_fai if reference_fai.exists() else project_root / "testdata/GRCh38.d1.vd1.fa"
-reference_sha256 = sha256_file(reference_target)
-generator_flags_hash = hashlib.sha256(logical_flags.encode("utf-8")).hexdigest()
-vardict_commit = manifest.get("vardictjava_commit")
-if not vardict_commit:
-    vardict_commit = subprocess.run(
-        ["git", "-C", str(project_root / "VarDictJava"), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-cache_entries = dict(preserved_entries)
-for tag in tags:
-    bed_paths = sorted(
-        Path(path) for path in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed"))
-    )
-    if not bed_paths:
-        raise SystemExit(f"ERROR: no BED files found for {tag} under {sweep_bed_root}")
-    tumor_rel, normal_rel = pair_paths[tag]
-    tumor_path = project_root / tumor_rel
-    normal_path = project_root / normal_rel
-    bam_stat = [
-        {
-            "path": tumor_rel,
-            "size": tumor_path.stat().st_size,
-            "mtime_unix": int(tumor_path.stat().st_mtime),
-            "role": "tumor",
-        },
-        {
-            "path": normal_rel,
-            "size": normal_path.stat().st_size,
-            "mtime_unix": int(normal_path.stat().st_mtime),
-            "role": "normal",
-        },
-    ]
-    key = f"{config_name}:somatic:{tag}"
-    cache_entries[key] = {
-        "config": config_name,
-        "tag": tag,
-        "bed_sha256": sha256_concat(bed_paths),
-        "bam_stat": bam_stat,
-        "reference_sha256": reference_sha256,
-        "generator_flags_hash": generator_flags_hash,
-        "vardictjava_commit": vardict_commit,
-    }
-
-manifest["cache_entries"] = cache_entries
-
-manifest_path.parent.mkdir(parents=True, exist_ok=True)
-with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=manifest_path.parent, delete=False) as handle:
-    json.dump(manifest, handle, indent=2, sort_keys=False)
-    handle.write("\n")
-    temp_name = handle.name
-
-os.replace(temp_name, manifest_path)
-if preserve_path.exists():
-    preserve_path.unlink()
-PY
-}
-
-merge_manifest_cache_entries_many() {
-    local config_names_csv="$1"
-    local tags_csv="$2"
-    local project_root="$3"
-    local sweep_bed_root="$4"
-    local manifest_path="$project_root/$OUTPUT_ROOT/manifest.json"
-    local preserve_path="$project_root/$OUTPUT_ROOT/.manifest.cache_entries.before.json"
-
-    CONFIG_NAMES_CSV="$config_names_csv" \
-    TAGS_CSV="$tags_csv" \
-    PROJECT_ROOT="$project_root" \
-    MANIFEST_PATH="$manifest_path" \
-    PRESERVE_PATH="$preserve_path" \
-    SWEEP_BED_ROOT="$sweep_bed_root" \
-    python3 <<'PY'
-import glob
-import hashlib
-import json
-import os
-import subprocess
-import tempfile
-from pathlib import Path
-
-project_root = Path(os.environ["PROJECT_ROOT"])
-manifest_path = Path(os.environ["MANIFEST_PATH"])
-preserve_path = Path(os.environ["PRESERVE_PATH"])
-sweep_bed_root = os.environ["SWEEP_BED_ROOT"]
-configs = [config for config in os.environ["CONFIG_NAMES_CSV"].split(",") if config]
-tags = [tag for tag in os.environ["TAGS_CSV"].split(",") if tag]
-
-bam_paths = {
-    "hg002": "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam",
-    "na12878_exome": "testdata/NA12878.chrom20.ILLUMINA.bwa.CEU.exome.20121211.bam",
-    "na12878_lowcov": "testdata/NA12878.mapped.ILLUMINA.bwa.CEU.low_coverage.20121211.bam",
-}
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-def sha256_concat(paths: list[Path]) -> str:
-    digest = hashlib.sha256()
-    for path in paths:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
-
-if not manifest_path.exists():
-    raise SystemExit(f"ERROR: manifest not found after generator run: {manifest_path}")
-
-with manifest_path.open("r", encoding="utf-8") as handle:
-    manifest = json.load(handle)
-
-preserved_entries = {}
-if preserve_path.exists():
-    with preserve_path.open("r", encoding="utf-8") as handle:
-        preserved_entries = json.load(handle)
-
-reference_sha256 = sha256_file(project_root / "testdata/hs37d5.fa.fai")
-vardict_commit = manifest.get("vardictjava_commit")
-if not vardict_commit:
-    vardict_commit = subprocess.run(
-        ["git", "-C", str(project_root / "VarDictJava"), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-cache_entries = dict(preserved_entries)
-for config_name in configs:
-    for tag in tags:
-        bed_paths = sorted(
-            Path(path) for path in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed"))
-        )
-        if not bed_paths:
-            raise SystemExit(f"ERROR: no BED files found for {tag} under {sweep_bed_root}")
-        bam_path = project_root / bam_paths[tag]
-        bam_stat = [{
-            "path": bam_paths[tag],
-            "size": bam_path.stat().st_size,
-            "mtime_unix": int(bam_path.stat().st_mtime),
-        }]
-        logical_flags = f"--output-only --config {config_name} --tags {tag} --sweep-bed-root {sweep_bed_root}"
-        generator_flags_hash = hashlib.sha256(logical_flags.encode("utf-8")).hexdigest()
-        cache_entries[f"{config_name}:{tag}"] = {
-            "config": config_name,
-            "tag": tag,
-            "bed_sha256": sha256_concat(bed_paths),
-            "bam_stat": bam_stat,
-            "reference_sha256": reference_sha256,
-            "generator_flags_hash": generator_flags_hash,
-            "vardictjava_commit": vardict_commit,
-        }
-
-manifest["cache_entries"] = cache_entries
-
-manifest_path.parent.mkdir(parents=True, exist_ok=True)
-with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=manifest_path.parent, delete=False) as handle:
-    json.dump(manifest, handle, indent=2, sort_keys=False)
-    handle.write("\n")
-    temp_name = handle.name
-
-os.replace(temp_name, manifest_path)
-if preserve_path.exists():
-    preserve_path.unlink()
-PY
+    python3 -m scripts.lib.merge_manifest cache-entries-many \
+        --configs "$config_names_csv" \
+        --tags "$tags_csv" \
+        --project-root "$project_root" \
+        --sweep-bed-root "$sweep_bed_root" \
+        --manifest-path "$manifest_path" \
+        --preserve-path "$preserve_path"
 }
 
 merge_manifest_somatic_cache_entries_many() {
@@ -550,122 +233,13 @@ merge_manifest_somatic_cache_entries_many() {
     local manifest_path="$project_root/$OUTPUT_ROOT/manifest.json"
     local preserve_path="$project_root/$OUTPUT_ROOT/.manifest.cache_entries.before.json"
 
-    CONFIG_NAMES_CSV="$config_names_csv" \
-    TAGS_CSV="$tags_csv" \
-    PROJECT_ROOT="$project_root" \
-    MANIFEST_PATH="$manifest_path" \
-    PRESERVE_PATH="$preserve_path" \
-    SWEEP_BED_ROOT="$sweep_bed_root" \
-    python3 <<'PY'
-import glob
-import hashlib
-import json
-import os
-import subprocess
-import tempfile
-from pathlib import Path
-
-project_root = Path(os.environ["PROJECT_ROOT"])
-manifest_path = Path(os.environ["MANIFEST_PATH"])
-preserve_path = Path(os.environ["PRESERVE_PATH"])
-sweep_bed_root = os.environ["SWEEP_BED_ROOT"]
-configs = [config for config in os.environ["CONFIG_NAMES_CSV"].split(",") if config]
-tags = [tag for tag in os.environ["TAGS_CSV"].split(",") if tag]
-
-pair_paths = {
-    "wes_il_pair": (
-        "testdata/WES_IL_T_1.bwa.dedup.bam",
-        "testdata/WES_IL_N_1.bwa.dedup.bam",
-    ),
-}
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-def sha256_concat(paths: list[Path]) -> str:
-    digest = hashlib.sha256()
-    for path in paths:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
-
-if not manifest_path.exists():
-    raise SystemExit(f"ERROR: manifest not found after generator run: {manifest_path}")
-
-with manifest_path.open("r", encoding="utf-8") as handle:
-    manifest = json.load(handle)
-
-preserved_entries = {}
-if preserve_path.exists():
-    with preserve_path.open("r", encoding="utf-8") as handle:
-        preserved_entries = json.load(handle)
-
-reference_fai = project_root / "testdata/GRCh38.d1.vd1.fa.fai"
-reference_target = reference_fai if reference_fai.exists() else project_root / "testdata/GRCh38.d1.vd1.fa"
-reference_sha256 = sha256_file(reference_target)
-vardict_commit = manifest.get("vardictjava_commit")
-if not vardict_commit:
-    vardict_commit = subprocess.run(
-        ["git", "-C", str(project_root / "VarDictJava"), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-cache_entries = dict(preserved_entries)
-for config_name in configs:
-    for tag in tags:
-        bed_paths = sorted(
-            Path(path) for path in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed"))
-        )
-        if not bed_paths:
-            raise SystemExit(f"ERROR: no BED files found for {tag} under {sweep_bed_root}")
-        tumor_rel, normal_rel = pair_paths[tag]
-        tumor_path = project_root / tumor_rel
-        normal_path = project_root / normal_rel
-        bam_stat = [
-            {
-                "path": tumor_rel,
-                "size": tumor_path.stat().st_size,
-                "mtime_unix": int(tumor_path.stat().st_mtime),
-                "role": "tumor",
-            },
-            {
-                "path": normal_rel,
-                "size": normal_path.stat().st_size,
-                "mtime_unix": int(normal_path.stat().st_mtime),
-                "role": "normal",
-            },
-        ]
-        logical_flags = f"--output-only --config {config_name} --pair-tags {tag} --tags  --sweep-bed-root {sweep_bed_root}"
-        generator_flags_hash = hashlib.sha256(logical_flags.encode("utf-8")).hexdigest()
-        cache_entries[f"{config_name}:somatic:{tag}"] = {
-            "config": config_name,
-            "tag": tag,
-            "bed_sha256": sha256_concat(bed_paths),
-            "bam_stat": bam_stat,
-            "reference_sha256": reference_sha256,
-            "generator_flags_hash": generator_flags_hash,
-            "vardictjava_commit": vardict_commit,
-        }
-
-manifest["cache_entries"] = cache_entries
-
-manifest_path.parent.mkdir(parents=True, exist_ok=True)
-with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=manifest_path.parent, delete=False) as handle:
-    json.dump(manifest, handle, indent=2, sort_keys=False)
-    handle.write("\n")
-    temp_name = handle.name
-
-os.replace(temp_name, manifest_path)
-if preserve_path.exists():
-    preserve_path.unlink()
-PY
+    python3 -m scripts.lib.merge_manifest cache-entries-somatic-many \
+        --configs "$config_names_csv" \
+        --tags "$tags_csv" \
+        --project-root "$project_root" \
+        --sweep-bed-root "$sweep_bed_root" \
+        --manifest-path "$manifest_path" \
+        --preserve-path "$preserve_path"
 }
 
 save_existing_cache_entries() {
@@ -1001,9 +575,6 @@ if [[ $all_configs -eq 1 ]]; then
 
         echo ""
         echo "=== Parallel regeneration complete (parallel=$parallel_jobs) ==="
-        for i in "${!preset_by_pid[@]}"; do
-            :
-        done
         if [[ $exit_code -ne 0 ]]; then
             echo "::error::--all-configs: one or more presets failed; check $parallel_log_root/<preset>.log" >&2
         fi

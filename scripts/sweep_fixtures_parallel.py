@@ -359,6 +359,14 @@ def compute_file_md5(path: Path) -> str:
     return digest.hexdigest()
 
 
+def compute_file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def write_chunks_json(
     path: Path,
     *,
@@ -368,6 +376,9 @@ def write_chunks_json(
     chunk_size: int,
     chunks: list[dict[str, object]],
     vardict_commit: str,
+    generator_flags: list[str],
+    preset: str,
+    bed_sha256: str,
 ) -> None:
     payload = {
         "monolithic_md5": monolithic_md5,
@@ -377,6 +388,10 @@ def write_chunks_json(
         "chunks": chunks,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "vardict_commit": vardict_commit,
+        # Additive provenance for the A6 gate; validate_chunks_json intentionally ignores these.
+        "generator_flags": generator_flags,
+        "preset": preset,
+        "bed_sha256": bed_sha256,
     }
     tmp_path = path.with_name(f"{path.name}.tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -970,6 +985,9 @@ def execute_shard_run(
             chunk_size=chunk_size,
             chunks=chunk_records,
             vardict_commit=get_vardict_commit(root),
+            generator_flags=list(config_flags),
+            preset=config_name if config_name else "default",
+            bed_sha256=compute_file_sha256(shard.bed_path),
         )
 
         if zstd_executor is None:

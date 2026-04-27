@@ -100,12 +100,14 @@ Read every script under `scripts/`:
 
 Shell scripts: `aa_gate.sh`, `batch_fixtures.sh`, `bisect_parity.sh`,
 `check_ignored_tests.sh`, `check_preset_drift.sh`, `config_e2e_surface_gate.sh`,
-`gen_e2e_golden_tsv.sh`, `gen_e2e_sweep_golden.sh`, `gen_somatic_sweep_bed.sh`,
+`e2e_sweep_gate.sh`, `gen_e2e_golden_tsv.sh`, `gen_e2e_sweep_golden.sh`, `gen_somatic_sweep_bed.sh`,
 `gen_sweep_bed.sh`, `parity_status.sh`, `sample_regions.sh`, `sweep_aa_check.sh`,
 `sweep_fixtures.sh`
 
-Python scripts: `dual_run.py`, `extract_fixture.py`, `pilot_generate.py`,
+Python scripts: `dual_run.py`, `e2e_sweep_gate.py`, `extract_fixture.py`, `pilot_generate.py`,
 `sample_regions.py`, `sweep_fixtures_parallel.py`, `sweep_generate_v2.py`
+
+Library modules: `lib/merge_manifest.py`
 
 Also read: `scripts/ignored_tests_allowlist.txt`
 
