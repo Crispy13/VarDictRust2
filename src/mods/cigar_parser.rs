@@ -636,14 +636,15 @@ impl CigarParser {
         direction: bool,
         total_length_including_soft_clipped: i32,
     ) -> bool {
-        let conf = &GlobalReadOnlyScope::instance().conf;
-        if conf.trim_bases_after != 0 {
+        let trim_bases_after =
+            GlobalReadOnlyScope::with_instance(|scope| scope.conf.trim_bases_after);
+        if trim_bases_after != 0 {
             if !direction {
-                return self.read_position_including_soft_clipped > conf.trim_bases_after;
+                return self.read_position_including_soft_clipped > trim_bases_after;
             } else {
                 return total_length_including_soft_clipped
                     - self.read_position_including_soft_clipped
-                    > conf.trim_bases_after;
+                    > trim_bases_after;
             }
         }
         false
