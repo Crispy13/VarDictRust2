@@ -12,6 +12,7 @@ macro_rules! declarative_test {
     ($(($test_name:ident, $config_name:literal)),+ $(,)?) => {
         $(
             #[test]
+            #[ignore = "Nightly E2E config gate: parity on 10 push regions for one preset. Run via: cargo test --profile debug-release --test parity_config_e2e -- --include-ignored. Requires tmp/e2e_fixtures/ goldens (not checked into repo); regenerate via: bash scripts/gen_e2e_golden_tsv.sh --push-only --config <preset>. Run by parity.yml."]
             fn $test_name() {
                 run_config_e2e_single($config_name, Some(PUSH_INDICES));
             }
@@ -322,8 +323,23 @@ fn assert_config_matches_java_flags(
     config: &Configuration,
     defaults: &Configuration,
 ) {
-    assert_float_flag(preset_name, java_flags, "-f", config.freq, defaults.freq, "freq");
-    assert_int_flag(preset_name, java_flags, "-r", config.minr, defaults.minr, "minr");
+    let pileup_mode = java_flags.contains_key("-p");
+    assert_float_flag(
+        preset_name,
+        java_flags,
+        "-f",
+        config.freq,
+        if pileup_mode { -1.0 } else { defaults.freq },
+        "freq",
+    );
+    assert_int_flag(
+        preset_name,
+        java_flags,
+        "-r",
+        config.minr,
+        if pileup_mode { 0 } else { defaults.minr },
+        "minr",
+    );
     assert_float_flag(
         preset_name,
         java_flags,
@@ -407,9 +423,13 @@ fn assert_config_matches_java_flags(
         defaults.chromosome_name_is_number,
         "Preset {preset_name} unexpectedly changed chromosome_name_is_number"
     );
-    assert_eq!(
-        config.mapping_quality, defaults.mapping_quality,
-        "Preset {preset_name} unexpectedly changed mapping_quality"
+    assert_opt_int_flag(
+        preset_name,
+        java_flags,
+        "-Q",
+        config.mapping_quality,
+        defaults.mapping_quality,
+        "mapping_quality",
     );
     assert_eq!(
         config.remove_duplicated_reads, defaults.remove_duplicated_reads,
@@ -420,9 +440,13 @@ fn assert_config_matches_java_flags(
         config.trim_bases_after, defaults.trim_bases_after,
         "Preset {preset_name} unexpectedly changed trim_bases_after"
     );
-    assert_eq!(
-        config.perform_local_realignment, defaults.perform_local_realignment,
-        "Preset {preset_name} unexpectedly changed perform_local_realignment"
+    assert_int_bool_flag(
+        preset_name,
+        java_flags,
+        "-k",
+        config.perform_local_realignment,
+        defaults.perform_local_realignment,
+        "perform_local_realignment",
     );
     assert_eq!(
         config.indelsize, defaults.indelsize,
@@ -463,9 +487,13 @@ fn assert_config_matches_java_flags(
         defaults.mapq,
         &format!("Preset {preset_name} unexpectedly changed mapq"),
     );
-    assert_eq!(
-        config.do_pileup, defaults.do_pileup,
-        "Preset {preset_name} unexpectedly changed do_pileup"
+    assert_present_bool_flag(
+        java_flags,
+        "-p",
+        config.do_pileup,
+        defaults.do_pileup,
+        preset_name,
+        "do_pileup",
     );
     assert_float_eq(
         config.lofreq,
@@ -502,21 +530,33 @@ fn assert_config_matches_java_flags(
         config.threads, defaults.threads,
         "Preset {preset_name} unexpectedly changed threads"
     );
-    assert_eq!(
-        config.chimeric, defaults.chimeric,
-        "Preset {preset_name} unexpectedly changed chimeric"
+    assert_present_bool_flag(
+        java_flags,
+        "--chimeric",
+        config.chimeric,
+        defaults.chimeric,
+        preset_name,
+        "chimeric",
     );
-    assert_eq!(
-        config.disable_sv, defaults.disable_sv,
-        "Preset {preset_name} unexpectedly changed disable_sv"
+    assert_present_bool_flag(
+        java_flags,
+        "-U",
+        config.disable_sv,
+        defaults.disable_sv,
+        preset_name,
+        "disable_sv",
     );
     assert_eq!(
         config.delete_duplicate_variants, defaults.delete_duplicate_variants,
         "Preset {preset_name} unexpectedly changed delete_duplicate_variants"
     );
-    assert_eq!(
-        config.fisher, defaults.fisher,
-        "Preset {preset_name} unexpectedly changed fisher"
+    assert_present_bool_flag(
+        java_flags,
+        "--fisher",
+        config.fisher,
+        defaults.fisher,
+        preset_name,
+        "fisher",
     );
     assert_eq!(
         config.inssize, defaults.inssize,
@@ -589,6 +629,74 @@ fn assert_int_flag(
             })
         })
         .unwrap_or(default_value);
+
+    assert_eq!(
+        actual, expected,
+        "Preset {preset_name} field {field_name} did not match {flag}"
+    );
+}
+
+fn assert_opt_int_flag(
+    preset_name: &str,
+    java_flags: &HashMap<String, String>,
+    flag: &str,
+    actual: Option<i32>,
+    default_value: Option<i32>,
+    field_name: &str,
+) {
+    let expected = java_flags
+        .get(flag)
+        .map(|value| {
+            value.parse::<i32>().unwrap_or_else(|error| {
+                panic!(
+                    "Preset {preset_name} had invalid integer for {flag}: {value} ({error})"
+                )
+            })
+        })
+        .or(default_value);
+
+    assert_eq!(
+        actual, expected,
+        "Preset {preset_name} field {field_name} did not match {flag}"
+    );
+}
+
+fn assert_int_bool_flag(
+    preset_name: &str,
+    java_flags: &HashMap<String, String>,
+    flag: &str,
+    actual: bool,
+    default_value: bool,
+    field_name: &str,
+) {
+    let expected = java_flags
+        .get(flag)
+        .map(|value| match value.as_str() {
+            "0" => false,
+            "1" => true,
+            other => panic!("Preset {preset_name} had invalid boolean int for {flag}: {other}"),
+        })
+        .unwrap_or(default_value);
+
+    assert_eq!(
+        actual, expected,
+        "Preset {preset_name} field {field_name} did not match {flag}"
+    );
+}
+
+fn assert_present_bool_flag(
+    java_flags: &HashMap<String, String>,
+    flag: &str,
+    actual: bool,
+    default_value: bool,
+    preset_name: &str,
+    field_name: &str,
+) {
+    let expected = if java_flags.contains_key(flag) {
+        true
+    } else {
+        default_value
+    };
 
     assert_eq!(
         actual, expected,

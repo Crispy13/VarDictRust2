@@ -8,12 +8,18 @@ prefix:tovars_sweep::
 
 # E2E gates - nightly, run via sweep.yml or parity.yml
 parity_e2e_all
+# E2E push gate (default config, 10 push regions) - nightly, run via parity.yml
+parity_e2e_push
 # Full-BAM E2E sweep tier (3 tests in tests/parity_e2e_sweep.rs)
 prefix:parity_e2e_sweep_
 # E2E somatic-mode full-pair sweep — cost-gated, run via sweep.yml --module=e2e_sweep_somatic
 prefix:parity_e2e_sweep_somatic_
 # Cell-level config E2E tests (4,400 trials in tests/parity_config_e2e_cells.rs)
 prefix:parity_config_e2e_cell_
+# Per-preset config E2E push tests (45 declarative tests in tests/parity_config_e2e.rs) - nightly, run via parity.yml
+prefix:parity_config_e2e_push_
+# Somatic determinism gate (8 tests in tests/parity_parallel_determinism.rs) - nightly, requires --test-threads=1 due to process-global scope
+prefix:parity_parallel_determinism_somatic_
 
 # Pilot - temporary
 pilot_v2_readback

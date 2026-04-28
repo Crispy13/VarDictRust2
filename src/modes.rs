@@ -98,8 +98,7 @@ fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
         total_reads,
         duplicate_reads,
     );
-    let mut records = std::iter::from_fn(|| data.next_record());
-    let variation_data = parser.process(&mut records, &header, &chr_name);
+    let variation_data = parser.process_preprocessor(&mut data, &header, &chr_name);
     maybe_write_module_snapshot("CIGAR_PARSER", &region, &variation_data);
     maybe_write_module_snapshot("CIGAR_MODIFIER", &region, &parser.cigar_modifier_snapshots);
     data.close();
@@ -285,13 +284,17 @@ impl SimpleMode {
         let buffer = Arc::new(Mutex::new(String::new()));
         let printer = VariantPrinter::Buffer(buffer.clone());
         let reference = try_to_get_reference(&self.reference_resource, region);
-        let initial_scope = Scope::new(
-            GlobalReadOnlyScope::instance()
+        let bam1 = GlobalReadOnlyScope::with_instance(|scope| {
+            scope
                 .conf
                 .bam
                 .as_ref()
                 .expect("BAM names must be configured")
-                .get_bam1(),
+                .get_bam1()
+                .to_string()
+        });
+        let initial_scope = Scope::new(
+            bam1,
             region.clone(),
             Arc::new(reference),
             Arc::new(self.reference_resource.clone()),

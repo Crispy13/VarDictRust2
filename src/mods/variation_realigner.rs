@@ -7,7 +7,10 @@
 //! Cluster A: Pure utility functions with no inter-cluster dependencies.
 //! All other clusters call into these.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+
+use rust_htslib::bam::{self, Read as BamRead};
 
 use crate::config::{EXTENSION, MINSVCDIST, SEED_1, SVFLANK, SVMAXLEN};
 use crate::data::{
@@ -28,6 +31,11 @@ use crate::variations::{
     is_has_and_not_equals_base, is_not_equals, join_ref, join_ref_f64, join_ref_for_3_lgins,
     join_ref_for_5_lgins, sub_dir,
 };
+
+thread_local! {
+    static NO_PASSING_READERS: RefCell<HashMap<String, bam::IndexedReader>> =
+        RefCell::new(HashMap::new());
+}
 
 // ─── Supporting types ────────────────────────────────────────────────
 
@@ -1133,8 +1141,6 @@ pub fn findbp(
 /// Opens BAM file(s) via SamView, queries the region chr:start-end,
 /// and checks if any reads fully span the gap.
 pub fn no_passing_reads(chr: &str, start: i32, end: i32, bams: &[String]) -> bool {
-    use rust_htslib::bam::{self, Read as BamRead};
-
     // Java: VariationRealigner.java#L2272
     let mut cnt = 0i32;
     let mut midcnt = 0i32;
@@ -1142,60 +1148,71 @@ pub fn no_passing_reads(chr: &str, start: i32, end: i32, bams: &[String]) -> boo
     let dlenqr = format!("{}D", dlen);
     let instance = GlobalReadOnlyScope::instance();
 
-    // Java: VariationRealigner.java#L2276 — for (String bam : bams)
-    for bam_path in bams {
-        // Java: try (SamView reader = new SamView(bam, "0", region, ...))
-        let reader_result = bam::IndexedReader::from_path(bam_path);
-        let mut reader = match reader_result {
-            Ok(r) => r,
-            Err(_) => continue, // Java catches exceptions and continues
-        };
-        reader.set_threads(1).ok();
+    NO_PASSING_READERS.with(|cached_readers| {
+        let mut cached_readers = cached_readers.borrow_mut();
 
-        // Java: queryOverlapping(chr, start, end) — 1-based inclusive
-        let region_str = format!("{}:{}-{}", chr, start, end);
-        if reader.fetch(region_str.as_str()).is_err() {
-            continue;
-        }
+        // Java: VariationRealigner.java#L2276 — for (String bam : bams)
+        for bam_path in bams {
+            // Java creates a SamView for each call. Reusing the same IndexedReader preserves
+            // fetch/read semantics while avoiding repeated index reloads for identical BAMs.
+            let reader = match cached_readers.entry(bam_path.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let reader_result = bam::IndexedReader::from_path(bam_path);
+                    let mut reader = match reader_result {
+                        Ok(r) => r,
+                        Err(_) => continue, // Java catches exceptions and continues
+                    };
+                    reader.set_threads(1).ok();
+                    entry.insert(reader)
+                }
+            };
 
-        let mut record = bam::Record::new();
-        // Java: while ((record = reader.read()) != null)
-        while reader.read(&mut record).is_some() {
-            // Java: VariationRealigner.java#L2281 — record.getCigarString().contains(dlenqr)
-            let cigar = record.cigar();
-            let cigar_str = format!("{}", cigar);
-            if cigar_str.contains(&dlenqr) {
+            // Java: queryOverlapping(chr, start, end) — 1-based inclusive
+            let region_str = format!("{}:{}-{}", chr, start, end);
+            if reader.fetch(region_str.as_str()).is_err() {
                 continue;
             }
 
-            // Java: VariationRealigner.java#L2284
-            let read_start = record.pos() as i32 + 1; // 0-based to 1-based
+            let mut record = bam::Record::new();
+            // Java: while ((record = reader.read()) != null)
+            while reader.read(&mut record).is_some() {
+                // Java: VariationRealigner.java#L2281 — record.getCigarString().contains(dlenqr)
+                let cigar = record.cigar();
+                let cigar_str = format!("{}", cigar);
+                if cigar_str.contains(&dlenqr) {
+                    continue;
+                }
 
-            // Java: getAlignedLength(record.getCigar()) — sum M+D
-            let read_length_aligned: i32 = cigar
-                .iter()
-                .filter(|op| {
-                    matches!(
-                        op,
-                        rust_htslib::bam::record::Cigar::Match(_)
-                            | rust_htslib::bam::record::Cigar::Del(_)
-                    )
-                })
-                .map(|op| op.len() as i32)
-                .sum();
+                // Java: VariationRealigner.java#L2284
+                let read_start = record.pos() as i32 + 1; // 0-based to 1-based
 
-            let read_end = read_start + read_length_aligned;
+                // Java: getAlignedLength(record.getCigar()) — sum M+D
+                let read_length_aligned: i32 = cigar
+                    .iter()
+                    .filter(|op| {
+                        matches!(
+                            op,
+                            rust_htslib::bam::record::Cigar::Match(_)
+                                | rust_htslib::bam::record::Cigar::Del(_)
+                        )
+                    })
+                    .map(|op| op.len() as i32)
+                    .sum();
 
-            // Java: VariationRealigner.java#L2288
-            if read_end > end + 2 && read_start < start - 2 {
-                cnt += 1;
-            }
-            // Java: VariationRealigner.java#L2291
-            if read_start < start - 2 && read_end > start && read_end < end {
-                midcnt += 1;
+                let read_end = read_start + read_length_aligned;
+
+                // Java: VariationRealigner.java#L2288
+                if read_end > end + 2 && read_start < start - 2 {
+                    cnt += 1;
+                }
+                // Java: VariationRealigner.java#L2291
+                if read_start < start - 2 && read_end > start && read_end < end {
+                    midcnt += 1;
+                }
             }
         }
-    }
+    });
 
     // Java: VariationRealigner.java#L2297
     if instance.conf.y {

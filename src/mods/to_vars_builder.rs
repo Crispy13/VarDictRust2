@@ -26,12 +26,14 @@ const REF_50_BASES: i32 = 50;
 const REF_70_BASES: i32 = 70;
 
 fn chromosome_limit(region: &Region, ref_map: &HashMap<i32, u8>) -> i32 {
-    GlobalReadOnlyScope::instance()
-        .chr_lengths
-        .get(&region.chr)
-        .copied()
-        .or_else(|| ref_map.keys().copied().max())
-        .unwrap_or(0)
+    GlobalReadOnlyScope::with_instance(|scope| {
+        scope
+            .chr_lengths
+            .get(&region.chr)
+            .copied()
+            .or_else(|| ref_map.keys().copied().max())
+            .unwrap_or(0)
+    })
 }
 
 /// IUPAC ambiguity code replacements.
@@ -56,49 +58,39 @@ fn iupac_replacement(code: char) -> Option<char> {
 // Cluster B: MSI + validateRefallele
 // ---------------------------------------------------------------------------
 
-/// Ported from: ToVarsBuilder.java:L573-L621
+/// Ported from: ToVarsBuilder.java:L560-L595
 /// Find microsatellite instability by testing repeat patterns of length 1-6 bases.
 ///
-/// Parity traps addressed: T20 (regex compiled fresh each iter), T14 (msint length stored not string)
+/// Parity traps addressed: T20 (literal repeat regex semantics), T14 (msint length stored not string)
 pub fn find_msi(tseq1: &str, tseq2: &str, left: Option<&str>) -> (f64, i32, String) {
     let mut nmsi: usize = 1;
-    let mut shift3: i32;
     let mut maxmsi = String::new();
     let mut msicnt: f64 = 0.0;
 
     while nmsi <= tseq1.len() && nmsi <= 6 {
-        // Trap T20: regex compiled fresh each iteration — match Java behavior
         let msint_bytes = substr_with_len(tseq1.as_bytes(), -(nmsi as i32), nmsi as i32);
         let msint = String::from_utf8_lossy(&msint_bytes).to_string();
+        let msint_bytes = msint.as_bytes();
 
-        // Pattern: (({msint})+)$
-        let pattern_str = format!("(({})+)$", regex::escape(&msint));
-        let pattern = Regex::new(&pattern_str).unwrap();
-
-        let mut msimatch = String::new();
-        if let Some(caps) = pattern.captures(tseq1) {
-            msimatch = caps.get(1).map_or("", |m| m.as_str()).to_string();
-        }
+        // Java uses /(({msint})+)$/ and keeps group 1 length.
+        let mut msimatch_len = repeated_suffix_len(tseq1.as_bytes(), msint_bytes);
 
         // If left context is provided and non-empty, try concatenated match
         if let Some(left_str) = left {
             if !left_str.is_empty() {
                 let combined = format!("{}{}", left_str, tseq1);
-                if let Some(caps) = pattern.captures(&combined) {
-                    // Overwrites previous match entirely (Java behavior)
-                    msimatch = caps.get(1).map_or("", |m| m.as_str()).to_string();
+                let combined_match_len = repeated_suffix_len(combined.as_bytes(), msint_bytes);
+                if combined_match_len > 0 {
+                    // Overwrites previous match entirely (Java behavior).
+                    msimatch_len = combined_match_len;
                 }
             }
         }
 
-        let mut curmsi = msimatch.len() as f64 / nmsi as f64;
+        let mut curmsi = msimatch_len as f64 / nmsi as f64;
 
-        // Pattern: ^(({msint})+) — match repeat at start of right context
-        let start_pattern_str = format!("^(({})+)", regex::escape(&msint));
-        let start_pattern = Regex::new(&start_pattern_str).unwrap();
-        if let Some(caps) = start_pattern.captures(tseq2) {
-            curmsi += caps.get(1).map_or(0, |m| m.as_str().len()) as f64 / nmsi as f64;
-        }
+        // Java uses /^(({msint})+)/ and keeps group 1 length.
+        curmsi += repeated_prefix_len(tseq2.as_bytes(), msint_bytes) as f64 / nmsi as f64;
 
         if curmsi > msicnt {
             maxmsi = msint;
@@ -109,18 +101,52 @@ pub fn find_msi(tseq1: &str, tseq2: &str, left: Option<&str>) -> (f64, i32, Stri
     }
 
     // Compute shift3: compare tseq1+tseq2 character by character with tseq2
-    let tseq = format!("{}{}", tseq1, tseq2);
-    let tseq_bytes = tseq.as_bytes();
+    let tseq1_bytes = tseq1.as_bytes();
     let tseq2_bytes = tseq2.as_bytes();
-    shift3 = 0;
-    while (shift3 as usize) < tseq2_bytes.len()
-        && (shift3 as usize) < tseq_bytes.len()
-        && tseq_bytes[shift3 as usize] == tseq2_bytes[shift3 as usize]
-    {
+    let mut shift3 = 0;
+    while (shift3 as usize) < tseq2_bytes.len() {
+        let idx = shift3 as usize;
+        let tseq_byte = if idx < tseq1_bytes.len() {
+            tseq1_bytes[idx]
+        } else {
+            tseq2_bytes[idx - tseq1_bytes.len()]
+        };
+        if tseq_byte != tseq2_bytes[idx] {
+            break;
+        }
         shift3 += 1;
     }
 
     (msicnt, shift3, maxmsi)
+}
+
+fn repeated_suffix_len(haystack: &[u8], unit: &[u8]) -> usize {
+    if unit.is_empty() {
+        return 0;
+    }
+
+    let mut len = 0;
+    while haystack.len() >= len + unit.len() {
+        let start = haystack.len() - len - unit.len();
+        let end = haystack.len() - len;
+        if &haystack[start..end] != unit {
+            break;
+        }
+        len += unit.len();
+    }
+    len
+}
+
+fn repeated_prefix_len(haystack: &[u8], unit: &[u8]) -> usize {
+    if unit.is_empty() {
+        return 0;
+    }
+
+    let mut len = 0;
+    while len + unit.len() <= haystack.len() && &haystack[len..len + unit.len()] == unit {
+        len += unit.len();
+    }
+    len
 }
 
 /// Ported from: ToVarsBuilder.java:L221-L247
@@ -564,27 +590,31 @@ pub fn is_the_same_variation_on_ref(
     insertion_variants: &HashMap<i32, VariationMap>,
     ref_map: &HashMap<i32, u8>,
     conf: &Configuration,
+    scope: &GlobalReadOnlyScope,
 ) -> bool {
-    let mut vk: std::collections::HashSet<String> =
-        vars_at_cur_position.entries.keys().cloned().collect();
-    // Trap T27: add synthetic "I" key
-    if insertion_variants.contains_key(&position) {
-        vk.insert("I".to_string());
+    let Some(ref_base) = ref_map.get(&position) else {
+        return false;
+    };
+
+    let synthetic_insertion = insertion_variants.contains_key(&position);
+    let mut keys = vars_at_cur_position.entries.keys();
+    let only_key_matches_ref = match (keys.next(), keys.next(), synthetic_insertion) {
+        (Some(key), None, false) => key.len() == 1 && key.as_bytes()[0] == *ref_base,
+        // Trap T27: Java adds a synthetic "I" key before checking cardinality.
+        // HashSet dedupes "I" if entries already contains "I", keeping size 1.
+        (Some(key), None, true) => key == "I" && *ref_base == b'I',
+        (None, None, true) => *ref_base == b'I',
+        _ => false,
+    };
+
+    if only_key_matches_ref
+        && !conf.do_pileup
+        && !conf.bam.as_ref().map_or(false, |b| b.has_bam2())
+        && scope.amplicon_based_calling.is_none()
+    {
+        return true;
     }
-    if vk.len() == 1 {
-        if let Some(ref_base) = ref_map.get(&position) {
-            let ref_str = char::from(*ref_base).to_string();
-            if vk.contains(&ref_str) {
-                let scope = GlobalReadOnlyScope::instance();
-                if !conf.do_pileup
-                    && !conf.bam.as_ref().map_or(false, |b| b.has_bam2())
-                    && scope.amplicon_based_calling.is_none()
-                {
-                    return true;
-                }
-            }
-        }
-    }
+
     false
 }
 
@@ -1285,57 +1315,58 @@ pub fn process(
     non_insertion_variants: &mut HashMap<i32, VariationMap>,
     duprate: f64,
 ) -> AlignedVarsData {
-    let conf = &GlobalReadOnlyScope::instance().conf;
-    let scope = GlobalReadOnlyScope::instance();
+    GlobalReadOnlyScope::with_instance(|scope| {
+        let conf = &scope.conf;
 
-    if conf.y {
-        eprintln!(
-            "Current segment: {}:{}-{} ",
-            region.chr, region.start, region.end
-        );
-    }
-
-    let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
-
-    // Collect and sort positions for deterministic iteration
-    // Java uses HashMap for outer map — iteration order is JVM-dependent.
-    // Sort ascending so position+1 mutation from createInsertion is processed correctly.
-    let mut positions: Vec<i32> = non_insertion_variants.keys().copied().collect();
-    positions.sort();
-
-    for &position in &positions {
-        // Trap T28: error-and-continue — wrap in closure that can handle errors
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            process_position(
-                position,
-                &mut aligned_variants,
-                ref_map,
-                ref_coverage,
-                insertion_variants,
-                non_insertion_variants,
-                region,
-                duprate,
-                conf,
-                &scope,
-            )
-        }));
-
-        if let Err(e) = result {
+        if conf.y {
             eprintln!(
-                "Error processing position {} in {}:{}-{}: {:?}",
-                position, region.chr, region.start, region.end, e
+                "Current segment: {}:{}-{} ",
+                region.chr, region.start, region.end
             );
         }
-    }
 
-    if conf.y {
-        eprintln!("TIME: Finish preparing vars");
-    }
+        let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
 
-    AlignedVarsData {
-        max_read_length,
-        aligned_variants,
-    }
+        // Collect and sort positions for deterministic iteration.
+        // Java uses HashMap for outer map — iteration order is JVM-dependent.
+        // Sort ascending so position+1 mutation from createInsertion is processed correctly.
+        let mut positions: Vec<i32> = non_insertion_variants.keys().copied().collect();
+        positions.sort();
+
+        for &position in &positions {
+            // Trap T28: error-and-continue — wrap in closure that can handle errors
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                process_position(
+                    position,
+                    &mut aligned_variants,
+                    ref_map,
+                    ref_coverage,
+                    insertion_variants,
+                    non_insertion_variants,
+                    region,
+                    duprate,
+                    conf,
+                    scope,
+                )
+            }));
+
+            if let Err(e) = result {
+                eprintln!(
+                    "Error processing position {} in {}:{}-{}: {:?}",
+                    position, region.chr, region.start, region.end, e
+                );
+            }
+        }
+
+        if conf.y {
+            eprintln!("TIME: Finish preparing vars");
+        }
+
+        AlignedVarsData {
+            max_read_length,
+            aligned_variants,
+        }
+    })
 }
 
 /// Process a single position in the main loop.
@@ -1352,8 +1383,13 @@ fn process_position(
     conf: &Configuration,
     scope: &GlobalReadOnlyScope,
 ) {
+    // vars_at_cur_position is an immutable borrow into non_insertion_variants.
+    // The borrow must expire BEFORE the create_insertion() call below, which takes
+    // &mut non_insertion_variants. NLL handles this today because vars_at_cur_position
+    // is last used in create_variant(); do not add reads of vars_at_cur_position after
+    // create_insertion() without re-introducing a snapshot clone.
     let vars_at_cur_position = match non_insertion_variants.get(&position) {
-        Some(vm) => vm.clone(), // Clone to release borrow for later mut access
+        Some(vm) => vm,
         None => return,
     };
 
@@ -1377,10 +1413,11 @@ fn process_position(
     // Check if only reference variant
     if is_the_same_variation_on_ref(
         position,
-        &vars_at_cur_position,
+        vars_at_cur_position,
         insertion_variants,
         ref_map,
         conf,
+        scope,
     ) {
         return;
     }
@@ -1400,7 +1437,7 @@ fn process_position(
     }
 
     let mut total_pos_coverage = *ref_coverage.get(&position).unwrap();
-    let hicov = calc_hicov(insertion_variants.get(&position), &vars_at_cur_position);
+    let hicov = calc_hicov(insertion_variants.get(&position), vars_at_cur_position);
 
     let mut var: Vec<Variant> = Vec::new();
     let mut keys: Vec<String> = vars_at_cur_position.entries.keys().cloned().collect();
@@ -1412,7 +1449,7 @@ fn process_position(
         duprate,
         aligned_variants,
         position,
-        &vars_at_cur_position,
+        vars_at_cur_position,
         total_pos_coverage,
         &mut var,
         &mut debug_lines,

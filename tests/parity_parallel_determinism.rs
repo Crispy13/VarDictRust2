@@ -61,41 +61,49 @@ fn parity_parallel_determinism_t1_14_th8() {
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_default_th1() {
     assert_somatic_parallel_matches_serial("default", 1);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_default_th2() {
     assert_somatic_parallel_matches_serial("default", 2);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_default_th4() {
     assert_somatic_parallel_matches_serial("default", 4);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_default_th8() {
     assert_somatic_parallel_matches_serial("default", 8);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_t1_14_th1() {
     assert_somatic_parallel_matches_serial("T1-14", 1);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_t1_14_th2() {
     assert_somatic_parallel_matches_serial("T1-14", 2);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_t1_14_th4() {
     assert_somatic_parallel_matches_serial("T1-14", 4);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_t1_14_th8() {
     assert_somatic_parallel_matches_serial("T1-14", 8);
 }

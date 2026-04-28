@@ -9,6 +9,7 @@ use vardict_rs::scope::{GlobalReadOnlyScope, VariantPrinter};
 const PUSH_INDICES: &[usize] = &[0, 1, 2, 3, 4, 35, 36, 37, 70, 71];
 
 #[test]
+#[ignore = "Nightly E2E push gate: parity for default config on 10 push regions. Run via: cargo test --profile debug-release --test parity_e2e parity_e2e_push -- --include-ignored. Requires tmp/e2e_fixtures/ goldens (not checked into repo); regenerate via: bash scripts/gen_e2e_golden_tsv.sh --push-only --config default. Run by parity.yml on push."]
 fn parity_e2e_push() {
     run_e2e_suite(
         Some(PUSH_INDICES),
