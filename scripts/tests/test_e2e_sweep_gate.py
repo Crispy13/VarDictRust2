@@ -41,6 +41,7 @@ class GateSmokeTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Resolved matrix: 1 cells", result.stdout)
         self.assertIn("T1-01 / hg002 / chr1", result.stdout)
+        self.assertIn("--exact hg002_sweep::parity_e2e_sweep_hg002", result.stdout)
 
     def test_dry_run_all_presets_count(self) -> None:
         if not SOURCE_ROOT.is_dir():

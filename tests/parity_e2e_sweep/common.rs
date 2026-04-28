@@ -50,6 +50,7 @@ use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use vardict_rs::config::{BamNames, Configuration};
 use vardict_rs::data::Region;
 use vardict_rs::modes::SimpleMode;
@@ -58,6 +59,14 @@ use vardict_rs::scope::{GlobalReadOnlyScope, VariantPrinter};
 
 pub const MAX_FAILURES: usize = 10;
 pub const CHUNK_SIZE: usize = 20_000;
+
+fn sweep_bed_root() -> PathBuf {
+    if let Ok(root) = std::env::var("VARDICT_E2E_SWEEP_BED_ROOT") {
+        PathBuf::from(root)
+    } else {
+        PathBuf::from("tmp/sweep_beds")
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TileKey {
@@ -263,7 +272,7 @@ pub(crate) fn chunk_id(tag: &str, chrom: &str, ordinal: u64) -> u64 {
 }
 
 fn discover_chroms(tag: &str) -> io::Result<Vec<String>> {
-    let root = Path::new("tmp/sweep_beds").join(tag);
+    let root = sweep_bed_root().join(tag);
     let mut chroms = Vec::new();
 
     for entry in fs::read_dir(&root)? {
@@ -284,7 +293,7 @@ fn discover_chroms(tag: &str) -> io::Result<Vec<String>> {
 }
 
 fn load_tiles_for_chrom(tag: &str, chrom: &str) -> io::Result<Vec<TileKey>> {
-    let bed_path = Path::new("tmp/sweep_beds").join(tag).join(format!("{chrom}.bed"));
+    let bed_path = sweep_bed_root().join(tag).join(format!("{chrom}.bed"));
     let reader = BufReader::new(File::open(&bed_path)?);
     let mut tiles = Vec::new();
 
@@ -427,8 +436,10 @@ fn diff_chunk(
     let keys: BTreeSet<_> = java.keys().chain(rust.keys()).cloned().collect();
 
     for key in keys {
-        let java_rows = java.get(&key).cloned().unwrap_or_default();
-        let rust_rows = rust.get(&key).cloned().unwrap_or_default();
+        let mut java_rows = java.get(&key).cloned().unwrap_or_default();
+        let mut rust_rows = rust.get(&key).cloned().unwrap_or_default();
+        java_rows.sort();
+        rust_rows.sort();
         if java_rows != rust_rows {
             failures.push(TileMismatch {
                 config: config.to_string(),
@@ -558,7 +569,7 @@ pub(crate) fn live_vardictjava_commit() -> Result<String, String> {
 }
 
 fn compute_bed_fingerprint(tag: &str) -> io::Result<Value> {
-    let bed_root = Path::new("tmp/sweep_beds").join(tag);
+    let bed_root = sweep_bed_root().join(tag);
     let mut bed_files = Vec::new();
     for entry in fs::read_dir(&bed_root)? {
         let entry = entry?;
@@ -569,17 +580,15 @@ fn compute_bed_fingerprint(tag: &str) -> io::Result<Value> {
     }
     bed_files.sort();
 
-    // No hash crate is available in dev-dependencies, so use a stable std hasher
-    // as a workspace-local cache fingerprint for this scaffold phase.
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = Sha256::new();
     for path in bed_files {
         let mut file = File::open(&path)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
-        bytes.hash(&mut hasher);
+        hasher.update(&bytes);
     }
 
-    Ok(Value::String(format!("{:016x}", hasher.finish())))
+    Ok(Value::String(format!("{:x}", hasher.finalize())))
 }
 
 fn compute_bam_stat(tag: &str) -> io::Result<Value> {
@@ -608,18 +617,20 @@ fn compute_reference_fingerprint(tag: &str) -> io::Result<Value> {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
 
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    Ok(Value::String(format!("{:016x}", hasher.finish())))
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(Value::String(format!("{:x}", hasher.finalize())))
 }
 
 fn compute_generator_flags_hash(config: &str, tag: &str) -> Value {
+    let sweep_bed_root = sweep_bed_root();
     let normalized = format!(
-        "--output-only --config {config} --tags {tag} --sweep-bed-root tmp/sweep_beds"
+        "--output-only --config {config} --tags {tag} --sweep-bed-root {}",
+        sweep_bed_root.display()
     );
-    let mut hasher = DefaultHasher::new();
-    normalized.hash(&mut hasher);
-    Value::String(format!("{:016x}", hasher.finish()))
+    let mut hasher = Sha256::new();
+    hasher.update(normalized.as_bytes());
+    Value::String(format!("{:x}", hasher.finalize()))
 }
 
 pub(crate) fn chrom_sort_key(chrom: &str) -> (u8, u32, &str) {

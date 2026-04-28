@@ -31,9 +31,9 @@ PARITY_ITERATION_DIR = PROJECT_ROOT / "tmp" / "parity-iteration"
 FAILURE_REPORT = PARITY_ITERATION_DIR / "parity-failure-report.json"
 LAST_PASS = PARITY_ITERATION_DIR / "last-pass.json"
 PRESETS_TSV = PROJECT_ROOT / "scripts" / "config_presets.tsv"
-SWEEP_BED_ROOT = PROJECT_ROOT / "tmp" / "sweep_beds"
 DEFAULT_TAGS = ("hg002", "na12878_exome", "na12878_lowcov")
 MERGE_PRESERVE_WORK = PROJECT_ROOT / "tmp" / "sweep_fixtures" / ".manifest.cache_entries.gate_working.json"
+RUNNING_TESTS_RE = re.compile(r"running (\d+) tests?")
 
 
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
             "manifest cache_entries, and run scoped parity_e2e_sweep cargo tests."
         ),
         epilog=(
-            "Chrom scoping is enforced through tmp/sweep_beds/<tag>/*.bed. The gate "
+            "Chrom scoping is enforced through --sweep-bed-root/<tag>/*.bed. The gate "
             "refuses extra BED chroms unless --allow-extra-beds is set."
         ),
     )
@@ -83,6 +83,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Chromosome stem to include. Repeat to select multiple chroms. Default: 1.",
     )
     parser.add_argument(
+        "--sweep-bed-root",
+        type=Path,
+        default=PROJECT_ROOT / "tmp" / "sweep_beds",
+        help="Root containing per-tag BED directories. Default: tmp/sweep_beds.",
+    )
+    parser.add_argument(
         "--fixture-source",
         help="Fixture source root to stage from. Required unless --unstage is the only mode and a snapshot exists.",
     )
@@ -96,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allow-extra-beds",
         action="store_true",
-        help="Warn instead of failing when tmp/sweep_beds/<tag>/ contains chroms outside the matrix.",
+        help="Warn instead of failing when --sweep-bed-root/<tag>/ contains chroms outside the matrix.",
     )
     parser.add_argument(
         "--report-dir",
@@ -134,6 +140,7 @@ def normalize_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         parser.error("--fixture-source is required unless --unstage is the only mode")
     elif not MANIFEST_SNAPSHOT.exists():
         parser.error("--fixture-source is required when no manifest snapshot exists for --unstage")
+    args.sweep_bed_root = Path(args.sweep_bed_root).expanduser().resolve()
     args.report_dir = Path(args.report_dir).expanduser().resolve()
     return args
 
@@ -149,6 +156,40 @@ def print_matrix(matrix: list[tuple[str, str, str]]) -> None:
     print(f"Resolved matrix: {len(matrix)} cells")
     for preset, tag, chrom in matrix:
         print(f"  {preset} / {tag} / chr{chrom}")
+
+
+def sweep_test_selector(tag: str) -> str:
+    return f"{tag}_sweep::parity_e2e_sweep_{tag}"
+
+
+def sweep_test_command(args: argparse.Namespace, selector: str) -> list[str]:
+    return [
+        "cargo",
+        "test",
+        "--profile",
+        "debug-release",
+        "--test",
+        "parity_e2e_sweep",
+        "--",
+        "--include-ignored",
+        "--exact",
+        selector,
+        "--test-threads=1",
+        *args.cargo_extra_arg,
+    ]
+
+
+def sweep_test_reproducer(
+    args: argparse.Namespace,
+    preset: str,
+    sweep_bed_root: Path,
+    selector: str,
+) -> str:
+    return (
+        f"VARDICT_E2E_SWEEP_CONFIG={preset} "
+        f"VARDICT_E2E_SWEEP_BED_ROOT={sweep_bed_root} "
+        f"CI=true {' '.join(sweep_test_command(args, selector))}"
+    )
 
 
 def print_planned_actions(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> None:
@@ -177,7 +218,8 @@ def print_planned_actions(args: argparse.Namespace, matrix: list[tuple[str, str,
         print(f"  merge manifest cache_entries for {preset} tags={','.join(tags)}")
     print("  run provenance checks against staged chunks metadata")
     for preset, tag in grouped_pairs(matrix):
-        print(f"  cargo test parity_e2e_sweep_{tag} with VARDICT_E2E_SWEEP_CONFIG={preset}")
+        selector = sweep_test_selector(tag)
+        print(f"  {sweep_test_reproducer(args, preset, args.sweep_bed_root, selector)}")
 
 
 @contextmanager
@@ -282,8 +324,8 @@ def sha256_concat(paths: list[Path]) -> str:
     return digest.hexdigest()
 
 
-def bed_sha256(tag: str) -> str:
-    bed_paths = sorted((SWEEP_BED_ROOT / tag).glob("*.bed"))
+def bed_sha256(sweep_bed_root: Path, tag: str) -> str:
+    bed_paths = sorted((sweep_bed_root / tag).glob("*.bed"))
     return sha256_concat(bed_paths)
 
 
@@ -311,7 +353,7 @@ def validate_bed_scope(args: argparse.Namespace, matrix: list[tuple[str, str, st
     errors: list[str] = []
     warnings: list[str] = []
     for tag, chroms in grouped.items():
-        bed_dir = SWEEP_BED_ROOT / tag
+        bed_dir = args.sweep_bed_root / tag
         if not bed_dir.is_dir():
             errors.append(f"ERROR: missing BED directory for tag {tag}: {bed_dir}")
             continue
@@ -402,13 +444,16 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> N
 
     for preset, tags in grouped_tags_by_preset(matrix).items():
         preserve_path = prepare_merge_preserve_file()
-        logical_flags = f"--output-only --config {preset} --tags {','.join(tags)} --sweep-bed-root tmp/sweep_beds"
+        logical_flags = (
+            f"--output-only --config {preset} --tags {','.join(tags)} "
+            f"--sweep-bed-root {args.sweep_bed_root}"
+        )
         merge_cache_entries(
             config_name=preset,
             tags_csv=",".join(tags),
             logical_flags=logical_flags,
             project_root=PROJECT_ROOT,
-            sweep_bed_root=SWEEP_BED_ROOT,
+            sweep_bed_root=args.sweep_bed_root,
             preserve_path=preserve_path,
             manifest_only=True,
             fixture_output_root=CANONICAL_OUTPUT_ROOT,
@@ -417,7 +462,6 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> N
 
 
 def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> None:
-    del args
     live_commit = live_vardictjava_commit()
     grouped_tags = grouped_tags_by_preset(matrix)
     for preset, tag, chrom in matrix:
@@ -442,11 +486,14 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                 f"vardict_commit={vardict_commit} live={live_commit}"
             )
 
-        expected_flags = f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} --sweep-bed-root tmp/sweep_beds"
+        expected_flags = (
+            f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} "
+            f"--sweep-bed-root {args.sweep_bed_root}"
+        )
         optional_checks = {
             "generator_flags": expected_flags,
             "preset": preset,
-            "bed_sha256": bed_sha256(tag),
+            "bed_sha256": bed_sha256(args.sweep_bed_root, tag),
         }
         for key, expected_value in optional_checks.items():
             actual_value = payload.get(key)
@@ -492,6 +539,7 @@ def failure_report_base(matrix: list[tuple[str, str, str]], commit: str) -> dict
 def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> int:
     report_commit = live_vardictjava_commit()
     failures: list[dict] = []
+    sweep_bed_root = args.sweep_bed_root.resolve()
     chroms_by_pair: dict[tuple[str, str], list[str]] = {}
     for preset, tag, chrom in matrix:
         chroms_by_pair.setdefault((preset, tag), [])
@@ -499,24 +547,14 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
             chroms_by_pair[(preset, tag)].append(chrom)
 
     for preset, tag in grouped_pairs(matrix):
-        test_name = f"parity_e2e_sweep_{tag}"
+        test_name = sweep_test_selector(tag)
+        reproducer = sweep_test_reproducer(args, preset, sweep_bed_root, test_name)
         env = dict(os.environ)
         env["VARDICT_E2E_SWEEP_CONFIG"] = preset
-        cmd = [
-            "cargo",
-            "test",
-            "--profile",
-            "debug-release",
-            "--test",
-            "parity_e2e_sweep",
-            "--",
-            "--include-ignored",
-            "--exact",
-            test_name,
-            "--test-threads=1",
-            *args.cargo_extra_arg,
-        ]
-        print(f"Running: VARDICT_E2E_SWEEP_CONFIG={preset} {' '.join(cmd)}")
+        env["VARDICT_E2E_SWEEP_BED_ROOT"] = str(sweep_bed_root)
+        env["CI"] = "true"
+        cmd = sweep_test_command(args, test_name)
+        print(f"Running: {reproducer}")
         result = subprocess.run(
             cmd,
             cwd=PROJECT_ROOT,
@@ -524,16 +562,30 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
             capture_output=True,
             text=True,
         )
+        combined_output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+        stderr_tail = result.stderr.splitlines()[-50:]
+        running_match = RUNNING_TESTS_RE.search(result.stdout)
+        if running_match and int(running_match.group(1)) == 0:
+            for chrom in parse_failure_chroms(combined_output, chroms_by_pair[(preset, tag)]):
+                failures.append(
+                    {
+                        "preset": preset,
+                        "tag": tag,
+                        "chrom": chrom,
+                        "cargo_test_name": test_name,
+                        "reproducer_cmd": reproducer,
+                        "stderr_tail": stderr_tail,
+                        "exit_code": result.returncode,
+                        "message": "selector matched 0 tests (likely module-path drift)",
+                    }
+                )
+            print(f"FAIL: {preset}/{tag} exit={result.returncode} selector matched 0 tests")
+            continue
+
         if result.returncode == 0:
             print(f"PASS: {preset}/{tag}")
             continue
 
-        combined_output = "\n".join(part for part in (result.stdout, result.stderr) if part)
-        stderr_tail = result.stderr.splitlines()[-50:]
-        reproducer = (
-            f"VARDICT_E2E_SWEEP_CONFIG={preset} cargo test --profile debug-release "
-            f"--test parity_e2e_sweep -- --include-ignored --exact {test_name} --test-threads=1"
-        )
         for chrom in parse_failure_chroms(combined_output, chroms_by_pair[(preset, tag)]):
             failures.append(
                 {
@@ -553,6 +605,7 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
         payload = failure_report_base(matrix, report_commit)
         payload["failures"] = failures
         write_json_atomic(report_path, payload)
+        print(f"GATE_FAILED: {len(failures)} failure entries written to {report_path}")
         return 1
 
     pass_payload = {

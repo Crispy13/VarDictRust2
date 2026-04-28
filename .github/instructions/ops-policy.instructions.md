@@ -29,4 +29,4 @@ applyTo: '**'
 - When a previously-failing ignored test starts passing, either remove `#[ignore]` or add to allowlist with justification.
 
 ## Standby finish of terminal tasks
-- Run terminal task as background or wait for it to finish. Do not finish your task until terminal commands have completed, even if it will be running for very long time.
+- If you run a long running task, run it in background and then enter discussion mode.

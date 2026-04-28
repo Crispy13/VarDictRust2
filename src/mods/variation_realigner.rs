@@ -2390,7 +2390,14 @@ pub fn realignins(
             {
                 continue;
             }
+            // Parity guard: Java's realignins wraps this body in try/catch
+            // (VariationRealigner.java#L676,#L937). With insertion_count == 0 the Java
+            // expression throws ArithmeticException and the outer catch continues. Rust
+            // must short-circuit BEFORE the division; we treat insertion_count == 0 as
+            // "skip this mismatch" which is observationally equivalent for parity output
+            // (post-mismatch-loop work does not depend on insertion_count).
             if variation_clone.vars_count >= insertion_count + insert.len() as i32
+                || insertion_count == 0
                 || variation_clone.vars_count / insertion_count >= 8
             {
                 continue;
