@@ -608,15 +608,22 @@ impl CigarParser {
         ss: &str,
         target_op: CigarOp,
     ) -> bool {
-        let conf = &GlobalReadOnlyScope::instance().conf;
+        let (perform_local_realignment, vext, goodq) =
+            GlobalReadOnlyScope::with_instance(|scope| {
+                (
+                    scope.conf.perform_local_realignment,
+                    scope.conf.vext,
+                    scope.conf.goodq,
+                )
+            });
         let num_elems = self.cigar.num_cigar_elements();
         // Do not adjust complex if we have hard-clips after insertion/deletion
         if num_elems > ci + 2 && self.cigar.get_cigar_element(ci + 2).operator == CigarOp::H {
             return false;
         }
         let n = self.read_position_including_soft_clipped as usize;
-        conf.perform_local_realignment
-            && self.cigar_element_length - i <= conf.vext
+        perform_local_realignment
+            && self.cigar_element_length - i <= vext
             && num_elems > ci + 1
             && self.cigar.get_cigar_element(ci + 1).operator == target_op
             && ref_map.contains_key(&self.start)
@@ -626,7 +633,7 @@ impl CigarParser {
                     ref_map.get(&self.start).copied(),
                 ))
             && n < query_quality.len()
-            && (query_quality.as_bytes()[n] as i32 - 33) as f64 >= conf.goodq
+            && (query_quality.as_bytes()[n] as i32 - 33) as f64 >= goodq
     }
 
     /// Ported from: CigarParser.java:L655-L663 (isTrimAtOptTBases)
@@ -2940,7 +2947,7 @@ impl CigarParser {
         ddlen: i32,
         pos: i32,
     ) {
-        let conf = &GlobalReadOnlyScope::instance().conf;
+        let goodq = GlobalReadOnlyScope::with_instance(|scope| scope.conf.goodq);
         // Java: CigarParser.java#L1689-L1699
         let hv: &mut Variation = if s.starts_with('+') {
             // Java: CigarParser.java#L1690
@@ -2986,7 +2993,7 @@ impl CigarParser {
         hv.pq = q;
         hv.number_of_mismatches += (number_of_mismatches - nmoff) as f64;
         // Java: CigarParser.java#L1724-L1728
-        if q >= conf.goodq {
+        if q >= goodq {
             hv.high_quality_reads_count += 1;
         } else {
             hv.low_quality_reads_count += 1;
@@ -3332,9 +3339,15 @@ impl CigarParser {
         direction: bool,
         mate_alignment_start: i32,
     ) -> bool {
-        let conf = &GlobalReadOnlyScope::instance().conf;
+        let (unique_mode_alignment_enabled, unique_mode_second_in_pair_enabled) =
+            GlobalReadOnlyScope::with_instance(|scope| {
+                (
+                    scope.conf.unique_mode_alignment_enabled,
+                    scope.conf.unique_mode_second_in_pair_enabled,
+                )
+            });
         // Java: CigarParser.java#L1896-L1898
-        if conf.unique_mode_alignment_enabled
+        if unique_mode_alignment_enabled
             && self.is_paired_and_same_chromosome(record, header)
             && !direction
             && self.start >= mate_alignment_start
@@ -3342,7 +3355,7 @@ impl CigarParser {
             return true;
         }
         // Java: CigarParser.java#L1901-L1904
-        if conf.unique_mode_second_in_pair_enabled
+        if unique_mode_second_in_pair_enabled
             && (record.flags() & 0x80) != 0 // secondOfPairFlag
             && self.is_paired_and_same_chromosome(record, header)
             && self.is_reads_overlap(record, position, mate_alignment_start)
