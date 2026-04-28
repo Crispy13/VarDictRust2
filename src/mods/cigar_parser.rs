@@ -773,8 +773,10 @@ impl CigarParser {
     /// Main per-record CIGAR parsing loop. Extracts variants from a single BAM record.
     #[allow(clippy::too_many_lines)]
     fn parse_cigar(&mut self, chr_name: &str, record: &bam::Record, header: &HeaderView) {
-        let instance = GlobalReadOnlyScope::instance();
-        let conf = &instance.conf;
+        let (conf, has_amplicon_based_calling) =
+            GlobalReadOnlyScope::with_instance(|instance| {
+                (instance.conf.clone(), instance.amplicon_based_calling.is_some())
+            });
 
         // Java: CigarParser.java#L225-L228
         let mut query_sequence = String::from_utf8(record.seq().as_bytes()).unwrap_or_default();
@@ -815,7 +817,7 @@ impl CigarParser {
         let direction = record.is_reverse();
 
         // Java: CigarParser.java#L265-L269 — amplicon mode
-        if instance.amplicon_based_calling.is_some()
+        if has_amplicon_based_calling
             && self.parse_cigar_with_amp_case(record, header, is_mate_reference_name_equal)
         {
             return;
