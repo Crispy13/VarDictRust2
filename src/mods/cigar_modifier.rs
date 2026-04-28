@@ -143,8 +143,9 @@ fn modify_cigar_inner(s: &mut CigarModifierState<'_>) {
 
     if let Some(caps5) = sc5_caps {
         let cigar_element: i32 = caps5[1].parse().unwrap();
-        let conf = &GlobalReadOnlyScope::instance().conf;
-        if !conf.chimeric && cigar_element >= SEED_2 {
+        let (chimeric, debug_y) =
+            GlobalReadOnlyScope::with_instance(|scope| (scope.conf.chimeric, scope.conf.y));
+        if !chimeric && cigar_element >= SEED_2 {
             let sseq = substr_with_len(s.query_sequence.as_bytes(), 0, cigar_element);
             let reversed = reverse_sequence(&sseq);
             let sequence = complement_sequence(&reversed);
@@ -173,7 +174,7 @@ fn modify_cigar_inner(s: &mut CigarModifierState<'_>) {
                             cigar_element,
                         ))
                         .to_string();
-                        if conf.y {
+                        if debug_y {
                             eprintln!(
                                 "{} at 5' is a chimeric at {} by SEED {}",
                                 sequence_str, s.position, SEED_2
@@ -185,8 +186,9 @@ fn modify_cigar_inner(s: &mut CigarModifierState<'_>) {
         }
     } else if let Some(caps3) = sc3_caps {
         let cigar_element: i32 = caps3[1].parse().unwrap();
-        let conf = &GlobalReadOnlyScope::instance().conf;
-        if !conf.chimeric && cigar_element >= SEED_2 {
+        let (chimeric, debug_y) =
+            GlobalReadOnlyScope::with_instance(|scope| (scope.conf.chimeric, scope.conf.y));
+        if !chimeric && cigar_element >= SEED_2 {
             // Trap T7b: substr with negative index for 3' end
             let sseq = substr_with_len(s.query_sequence.as_bytes(), -cigar_element, cigar_element);
             let reversed = reverse_sequence(&sseq);
@@ -221,7 +223,7 @@ fn modify_cigar_inner(s: &mut CigarModifierState<'_>) {
                         qual_len - cigar_element,
                     ))
                     .to_string();
-                    if conf.y {
+                    if debug_y {
                         eprintln!(
                             "{} at 3' is a chimeric at {} by SEED {}",
                             sequence_str, s.position, SEED_2
