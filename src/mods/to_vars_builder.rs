@@ -575,10 +575,12 @@ pub fn is_the_same_variation_on_ref(
         if let Some(ref_base) = ref_map.get(&position) {
             let ref_str = char::from(*ref_base).to_string();
             if vk.contains(&ref_str) {
-                let scope = GlobalReadOnlyScope::instance();
+                let has_amplicon_based_calling = GlobalReadOnlyScope::with_instance(|scope| {
+                    scope.amplicon_based_calling.is_some()
+                });
                 if !conf.do_pileup
                     && !conf.bam.as_ref().map_or(false, |b| b.has_bam2())
-                    && scope.amplicon_based_calling.is_none()
+                    && !has_amplicon_based_calling
                 {
                     return true;
                 }
