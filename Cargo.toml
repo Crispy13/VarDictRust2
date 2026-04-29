@@ -28,6 +28,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 insta = { version = "1", features = ["json"] }
 libtest-mimic = "0.8"
 proptest = "1"
+sha2 = "0.10"
 zstd = "0.13"
 
 [profile.dev]
@@ -54,4 +55,8 @@ path = "src/bin/vardict_rs.rs"
 
 [[test]]
 name = "parity_config_e2e_cells"
+harness = false
+
+[[test]]
+name = "parity_e2e_sweep"
 harness = false

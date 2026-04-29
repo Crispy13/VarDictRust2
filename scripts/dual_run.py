@@ -19,6 +19,9 @@ CONFIG_PRESETS = Path("scripts/config_presets.tsv")
 JAVA_BUILD_TIMEOUT_SECONDS = 600
 RUN_TIMEOUT_SECONDS = 120
 DIFF_PREVIEW_LIMIT = 20
+DUAL_RUN_LANE = "germline"
+DEFAULT_APPLIES_TO = "both"
+VALID_APPLIES_TO = {DUAL_RUN_LANE, "somatic", DEFAULT_APPLIES_TO}
 PUSH_INDICES = [0, 1, 2, 3, 4, 35, 36, 37, 70, 71]
 SUPPORTED_DEBUG_MODULES = {"cigar_parser", "realigner", "sv_processor", "tovars"}
 UNSUPPORTED_DEBUG_MODULES = {"sam_file_parser", "cigar_modifier"}
@@ -146,6 +149,69 @@ def resolve_path(project_root: Path, raw_path: str) -> Path:
     return (project_root / candidate).resolve()
 
 
+def normalize_applies_to(
+    applies_to: str,
+    preset_path: Path,
+    line_number: int,
+    preset_name: str,
+) -> str:
+    normalized = applies_to or DEFAULT_APPLIES_TO
+    if normalized in VALID_APPLIES_TO:
+        return normalized
+
+    print(
+        (
+            "WARNING: Unknown applies_to '{}' in {} at line {} for preset '{}'; "
+            "treating as both."
+        ).format(normalized, preset_path, line_number, preset_name),
+        file=sys.stderr,
+    )
+    return DEFAULT_APPLIES_TO
+
+
+def parse_config_preset_row(preset_path: Path, line_number: int, raw_line: str) -> dict:
+    fields = raw_line.split("\t")
+    if len(fields) not in (3, 4, 5):
+        raise SystemExit(
+            "ERROR: Expected 3, 4, or 5 tab-separated fields in {} at line {}: {}".format(
+                preset_path, line_number, raw_line
+            )
+        )
+
+    preset_name = fields[0]
+    flags = fields[1]
+    description = fields[2]
+    if len(fields) >= 4:
+        try:
+            tier = int(fields[3])
+        except ValueError as error:
+            raise SystemExit(
+                "ERROR: Invalid tier value in {} at line {}: {} ({})".format(
+                    preset_path,
+                    line_number,
+                    fields[3],
+                    error,
+                )
+            )
+    else:
+        tier = 0
+
+    applies_to = normalize_applies_to(
+        fields[4] if len(fields) >= 5 else DEFAULT_APPLIES_TO,
+        preset_path,
+        line_number,
+        preset_name,
+    )
+
+    return {
+        "name": preset_name,
+        "flags": flags,
+        "description": description,
+        "tier": tier,
+        "applies_to": applies_to,
+    }
+
+
 def load_config_presets(preset_path: Path) -> list:
     try:
         content = preset_path.read_text(encoding="utf-8")
@@ -157,40 +223,22 @@ def load_config_presets(preset_path: Path) -> list:
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        fields = raw_line.split("\t")
-        if len(fields) not in (3, 4):
-            raise SystemExit(
-                "ERROR: Expected 3 or 4 tab-separated fields in {} at line {}: {}".format(
-                    preset_path, line_number, raw_line
-                )
-            )
-
-        preset_name = fields[0]
-        flags = fields[1]
-        if len(fields) >= 4:
-            try:
-                tier = int(fields[3])
-            except ValueError as error:
-                raise SystemExit(
-                    "ERROR: Invalid tier value in {} at line {}: {} ({})".format(
-                        preset_path,
-                        line_number,
-                        fields[3],
-                        error,
-                    )
-                )
-        else:
-            tier = 0
-
-        presets.append((preset_name, flags, tier))
+        presets.append(parse_config_preset_row(preset_path, line_number, raw_line))
 
     return presets
 
 
-def load_config_preset(preset_path: Path, name: str) -> str:
-    presets = {
-        preset_name: flags for preset_name, flags, _tier in load_config_presets(preset_path)
-    }
+def ensure_preset_matches_lane(preset: dict, lane: str) -> None:
+    if lane == DUAL_RUN_LANE and preset["applies_to"] == "somatic":
+        raise SystemExit(
+            "ERROR: preset '{}' is somatic-only (applies_to=somatic); dual_run.py only runs germline. Use the somatic harness or pick a germline/both preset.".format(
+                preset["name"]
+            )
+        )
+
+
+def load_config_preset(preset_path: Path, name: str, lane: str = DUAL_RUN_LANE) -> str:
+    presets = {preset["name"]: preset for preset in load_config_presets(preset_path)}
 
     if name not in presets:
         available = ", ".join(sorted(presets))
@@ -198,18 +246,28 @@ def load_config_preset(preset_path: Path, name: str) -> str:
             "ERROR: Unknown config preset '{}'. Available presets: {}".format(name, available)
         )
 
-    return presets[name]
+    preset = presets[name]
+    ensure_preset_matches_lane(preset, lane)
+    return preset["flags"]
 
 
-def load_all_config_names(preset_path: Path, tier: int = None) -> list:
+def load_all_config_names(
+    preset_path: Path,
+    tier: int = None,
+    lane: str = DUAL_RUN_LANE,
+) -> list:
     presets = load_config_presets(preset_path)
     if tier is not None:
-        presets = [
-            (preset_name, flags, preset_tier)
-            for preset_name, flags, preset_tier in presets
-            if preset_tier == tier
-        ]
-    return [preset_name for preset_name, _flags, _tier in presets]
+        presets = [preset for preset in presets if preset["tier"] == tier]
+
+    config_names = []
+    for preset in presets:
+        if lane == DUAL_RUN_LANE and preset["applies_to"] == "somatic":
+            print("SKIP {} (somatic-only)".format(preset["name"]))
+            continue
+        config_names.append(preset["name"])
+
+    return config_names
 
 
 def load_regions_file(path: Path) -> list:
@@ -793,9 +851,6 @@ def main() -> int:
         print("Rust bin: {}".format(rust_bin))
         print("Output dir: {}".format(output_dir))
 
-    build_java_if_needed(java_bin, project_root, args.verbose)
-    ensure_rust_bin_exists(rust_bin)
-
     if args.debug_modules:
         unsupported = [module for module in args.debug_modules if module in UNSUPPORTED_DEBUG_MODULES]
         if unsupported:
@@ -811,7 +866,12 @@ def main() -> int:
         active_debug_modules = []
 
     if args.all_configs:
-        config_names = load_all_config_names(preset_path, tier=args.tier)
+        config_names = load_all_config_names(
+            preset_path,
+            tier=args.tier,
+            lane=DUAL_RUN_LANE,
+        )
+        selected_config_flags = None
         if not config_names:
             if args.tier is None:
                 raise SystemExit("ERROR: No config presets found in {}".format(preset_path))
@@ -822,8 +882,15 @@ def main() -> int:
                 )
             )
     else:
-        load_config_preset(preset_path, args.config)
+        selected_config_flags = load_config_preset(
+            preset_path,
+            args.config,
+            lane=DUAL_RUN_LANE,
+        )
         config_names = [args.config]
+
+    build_java_if_needed(java_bin, project_root, args.verbose)
+    ensure_rust_bin_exists(rust_bin)
 
     if args.batch or args.push_only:
         all_regions = load_regions_file(batch_path if batch_path else resolve_path(project_root, str(DEFAULT_BATCH_FILE)))
@@ -880,7 +947,11 @@ def main() -> int:
         bam_path=bam_path,
         ref_path=ref_path,
         config_name=config_names[0],
-        extra_flags=load_config_preset(preset_path, config_names[0]),
+        extra_flags=(
+            selected_config_flags
+            if selected_config_flags is not None
+            else load_config_preset(preset_path, config_names[0], lane=DUAL_RUN_LANE)
+        ),
         args=args,
         java_bin=java_bin,
         rust_bin=rust_bin,

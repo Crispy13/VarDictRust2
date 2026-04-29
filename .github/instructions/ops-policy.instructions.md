@@ -27,6 +27,3 @@ applyTo: '**'
 - Allowlist: `scripts/ignored_tests_allowlist.txt` — tests expected to remain ignored. Update when adding/removing `#[ignore]`.
 - Audit: `.github/workflows/ignore-audit.yml` runs nightly at 03:30 UTC. Flags any passing ignored test not in the allowlist.
 - When a previously-failing ignored test starts passing, either remove `#[ignore]` or add to allowlist with justification.
-
-## Standby finish of terminal tasks
-- If you run a long running task, run it in background and then enter discussion mode.

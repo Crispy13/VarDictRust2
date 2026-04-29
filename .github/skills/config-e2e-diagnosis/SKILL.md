@@ -1,10 +1,10 @@
 ---
 name: config-e2e-diagnosis
 description: >
-  Diagnose and fix config-specific E2E parity mismatches by isolating failures
-  to individual pipeline modules. Use when: config E2E test fails, E2E mismatch
-  with non-default config, final gate after all modules pass per-module cycle,
-  config regression found at E2E level.
+   Diagnose and fix config-specific chr1 sweep E2E parity mismatches by isolating
+   failures to individual pipeline modules. Use when: a chr1 sweep preset fails,
+   E2E mismatch with non-default config, final gate after all modules pass
+   per-module cycle, config regression found at E2E level.
 ---
 
 # Config E2E Diagnosis
@@ -16,9 +16,23 @@ description: >
 
 ## Prerequisites
 - All 6 modules have passed per-module Tier 1 + Tier 2 gates
-- `parity_config_e2e.rs` tests exist and golden fixtures are generated
-- Java and Rust binaries are built
-- `cargo test --test-threads=N` runs the 44 per-config tests in-process (thread-local `GlobalReadOnlyScope` isolation); no `cargo-nextest` install is required.
+- Sweep BED root is populated for the active tag (for hg002 chr1 runs: `tmp/sweep_beds_chr1only`)
+- Sweep fixtures are populated under `tmp/sweep_fixtures/output/<preset>/<chrom>/<tag>_<chrom>.tsv.zst`; regenerate one preset at a time with:
+
+```bash
+preset=T1-01
+bash scripts/gen_e2e_sweep_golden.sh --config "$preset" --tags hg002
+```
+
+- VarDictJava is built, and the Rust `parity_e2e_sweep` test target builds successfully
+- The ignored sweep test runs for the active tag with `--include-ignored`:
+
+```bash
+VARDICT_E2E_SWEEP_CONFIG=T1-01 \
+VARDICT_E2E_SWEEP_BED_ROOT="$PWD/tmp/sweep_beds_chr1only" \
+CI=true \
+cargo test --profile debug-release --test parity_e2e_sweep -- --include-ignored --exact hg002_sweep::parity_e2e_sweep_hg002 --test-threads=1
+```
 
 ### Single-Cell Invocation (Binary B)
 Run a single cell by its exact name; use this when a failure points to one (config, region) pair.
@@ -43,20 +57,45 @@ Cells live in `parity_config_e2e_cells` (libtest-mimic harness, `--test parity_c
 ## Phase 1: Run Config E2E
 
 ### Goal
-Identify which (config, region) pairs produce mismatches at E2E level.
+Identify which (preset, region) pairs produce mismatches at E2E level.
 
 ### Procedure
-1. Run the `parity_config_e2e_push_*` test family (10 regions × 44 configs = 440 test cells):
+1. Run the chr1 sweep gate serially across the current 44 presets in `tests/common/mod.rs` `CONFIG_PRESETS` (mirrored in `scripts/config_presets.tsv`):
+   ```bash
+   set -euo pipefail
+   tail -n +2 scripts/config_presets.tsv | cut -f1 | while read -r preset; do
+     bash scripts/e2e_sweep_gate.sh \
+       --preset "$preset" \
+       --tag hg002 \
+       --chrom 1 \
+       --sweep-bed-root tmp/sweep_beds_chr1only \
+       --fixture-source tmp/sweep_fixtures/output \
+       --force
+   done
+   ```
+2. Budget roughly 6-11 minutes per preset, or about 4-8 hours serial for all 44 presets.
+3. If you already know which preset to chase, rerun just that preset:
+   ```bash
+   preset=T1-01
+   bash scripts/e2e_sweep_gate.sh \
+     --preset "$preset" \
+     --tag hg002 \
+     --chrom 1 \
+     --sweep-bed-root tmp/sweep_beds_chr1only \
+     --fixture-source tmp/sweep_fixtures/output \
+     --force
+   ```
+4. If ALL PASS → config E2E gate passes. Report PASS.
+5. If any FAIL → record the failing `(preset, region_str)` pair from `tmp/parity-iteration/<preset>/parity-failure-report.json`.
+6. Optional fast smoke: run the `parity_config_e2e_push_*` family when you want a 10-region sanity check, but do not treat it as the Phase 1 gate:
    ```bash
    cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push_ -- --test-threads=10
    ```
-2. If ALL PASS → config E2E gate passes. Report PASS.
-3. If any FAIL → record failing (config, region) pairs from test output.
-4. **Coverage promotion:** Re-run the `parity_config_e2e_cell_*` family (Binary B, 4,400 cell-level trials) for broader region coverage and use `tiered-config-test` for nightly/sweep expansion across the existing 44-config matrix.
+7. **Coverage promotion:** Re-run the `parity_config_e2e_cell_*` family (Binary B, 4,400 cell-level trials) as a broader-region complement to the chr1 sweep result, and use `tiered-config-test` for nightly/sweep expansion across the existing 44-config matrix.
 
 ### Outputs
-- List of failing (config_name, region_str) pairs
-- Test output showing first divergence per failure
+- List of failing (preset_name, region_str) pairs
+- Per-preset failure report showing first divergence per failure
 
 ## Phase 2: Isolate to Module
 
@@ -84,7 +123,7 @@ set). In that case, the inference must be explicitly labeled as such in
 the report.
 
 ### Primary Method: `dual_run.py --debug-modules`
-Use `scripts/dual_run.py --debug-modules` to capture per-module JSONL intermediates for the failing region and config, then compare Java vs Rust outputs in pipeline order.
+Use `scripts/dual_run.py --debug-modules` to capture per-module JSONL intermediates for the failing region and config (for example, `1:2324084-2324612` from the chr1 sweep tiles; if a tile is too large, narrow to the smallest sub-window that still reproduces the mismatch), then compare Java vs Rust outputs in pipeline order.
 
 ```bash
 python scripts/dual_run.py --region {region} --bam {bam} --ref {ref} \
@@ -181,12 +220,19 @@ Confirm the fix resolves the original failure without introducing regressions.
    ```bash
    cargo test --profile debug-release --test parity_sweep_suite {module}_sweep:: -- --include-ignored --nocapture --test-threads=1
    ```
-3. Re-run the `parity_config_e2e_push_*` test family — must PASS:
+3. Re-run the chr1 sweep gate for the formerly failing preset — must PASS:
    ```bash
-   cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push_ -- --test-threads=10
+   preset=T1-01
+   bash scripts/e2e_sweep_gate.sh \
+     --preset "$preset" \
+     --tag hg002 \
+     --chrom 1 \
+     --sweep-bed-root tmp/sweep_beds_chr1only \
+     --fixture-source tmp/sweep_fixtures/output \
+     --force
    ```
 4. If additional (config, region) pairs still fail, loop back to Phase 2 for the next failure.
-5. When all config E2E tests pass → report CONFIG-E2E PASS.
+5. When all chr1 sweep presets pass → report CONFIG-E2E PASS.
 
 ### Outputs
 - Final PASS/FAIL status
@@ -201,7 +247,7 @@ Phase 1 → [for each failure:] Phase 2 → Phase 3 → Phase 4 → Phase 5 → 
 ```
 
 The loop terminates when:
-- All `parity_config_e2e_push_*` tests pass (PASS verdict), OR
+- All required chr1 sweep presets pass (PASS verdict), OR
 - A fix introduces a regression requiring manual intervention (ESCALATE)
 
 ## Related Skills

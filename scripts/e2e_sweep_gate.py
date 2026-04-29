@@ -118,6 +118,16 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ARG",
         help="Additional argument(s) appended after the cargo test selector arguments.",
     )
+    parser.add_argument(
+        "--test-threads",
+        type=int,
+        default=4,
+        help=(
+            "Thread count passed to cargo test. Default: 4. Each parity sweep chunk peaks "
+            "around 4.6 GB RAM and 1.5 cores of internal work, so 4 keeps the host within "
+            "~18 GB and avoids paging. Set higher only on machines with plenty of free RAM."
+        ),
+    )
     return parser
 
 
@@ -142,6 +152,8 @@ def normalize_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         parser.error("--fixture-source is required when no manifest snapshot exists for --unstage")
     args.sweep_bed_root = Path(args.sweep_bed_root).expanduser().resolve()
     args.report_dir = Path(args.report_dir).expanduser().resolve()
+    if args.test_threads < 1:
+        parser.error("--test-threads must be >= 1")
     return args
 
 
@@ -174,7 +186,7 @@ def sweep_test_command(args: argparse.Namespace, selector: str) -> list[str]:
         "--include-ignored",
         "--exact",
         selector,
-        "--test-threads=1",
+        f"--test-threads={args.test_threads}",
         *args.cargo_extra_arg,
     ]
 

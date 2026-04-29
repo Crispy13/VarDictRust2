@@ -15,11 +15,11 @@
 //! - `CI=true` converts missing-cache handling into a hard panic instead of a local skip.
 //!
 //! Run with:
-//! `cargo test --profile debug-release --test parity_e2e_sweep -- --include-ignored --test-threads=1`
+//! `cargo test --profile debug-release --test parity_e2e_sweep -- --include-ignored --test-threads=10`
 //!
 //! To add a new BAM tag:
 //! 1. Add the lookup entry in `tests/common/mod.rs::bam_tag_lookup`.
-//! 2. Add a `<tag>_sweep.rs` stub plus its `#[path]` line in `tests/parity_e2e_sweep.rs`.
+//! 2. Add a `<tag>_sweep.rs` trial-builder stub plus its `#[path]` line in `tests/parity_e2e_sweep.rs`.
 //! 3. Append the tag in `scripts/gen_e2e_sweep_golden.sh`.
 //! 4. Regenerate the cache before running this harness.
 //!
@@ -44,11 +44,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, BufReader, Read};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
+use libtest_mimic::{Failed, Trial};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use vardict_rs::config::{BamNames, Configuration};
@@ -59,6 +62,8 @@ use vardict_rs::scope::{GlobalReadOnlyScope, VariantPrinter};
 
 pub const MAX_FAILURES: usize = 10;
 pub const CHUNK_SIZE: usize = 20_000;
+
+static FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 fn sweep_bed_root() -> PathBuf {
     if let Ok(root) = std::env::var("VARDICT_E2E_SWEEP_BED_ROOT") {
@@ -87,66 +92,255 @@ struct SweepScopeGuard;
 
 impl Drop for SweepScopeGuard {
     fn drop(&mut self) {
-        GlobalReadOnlyScope::clear();
+        GlobalReadOnlyScope::clear_thread_local();
     }
 }
 
-pub fn run_tag(tag: &str) {
-    let (bam_path, ref_path) = bam_paths_for_tag(tag);
-    let bam = PathBuf::from(bam_path);
-    let ref_path = PathBuf::from(ref_path);
-    let sample = sample_name_for_bam(&bam);
-    let config = active_config();
+struct TagContext {
+    tag: String,
+    config_name: String,
+    scope_config: Configuration,
+    reference_resource: ReferenceResource,
+    chr_lengths: HashMap<String, i32>,
+    chroms: Vec<String>,
+    sample: String,
+    cache_validation: OnceLock<Result<(), String>>,
+    cache_skip_logged: AtomicBool,
+}
 
-    if let Err(error) = check_e2e_sweep_manifest(&config, tag) {
-        handle_missing_cache(tag, &error);
-        return;
-    }
+struct ChunkPlan {
+    trial_name: String,
+    chrom: String,
+    ordinal: usize,
+    tiles: Arc<Vec<TileKey>>,
+    start: usize,
+    end: usize,
+}
 
-    let chroms = discover_chroms(tag)
-        .unwrap_or_else(|error| panic!("Failed to discover sweep chromosomes for {tag}: {error}"));
+pub fn reset_failure_count() {
+    FAILURE_COUNT.store(0, Ordering::Relaxed);
+}
 
-    for chrom in &chroms {
-        let java_path = java_tsv_path(tag, chrom, &config);
-        if !java_path.is_file() {
-            handle_missing_cache(
-                tag,
-                &format!("Missing Java TSV cache for {tag}/{chrom} at {}", java_path.display()),
-            );
-            return;
-        }
-    }
+pub fn legacy_selector_to_chunk_filter(selector: &str) -> Option<String> {
+    let (module_name, trial_name) = selector.split_once("::")?;
+    let tag = module_name.strip_suffix("_sweep")?;
+    (trial_name == format!("parity_e2e_sweep_{tag}"))
+        .then(|| format!("{module_name}::parity_e2e_sweep_{tag}_chr"))
+}
+
+pub fn build_trials(tag: &str) -> Vec<Trial> {
+    let Some(context) = prepare_tag_context(tag) else {
+        return Vec::new();
+    };
 
     let shard = parse_shard_env();
-    let mut failures = Vec::new();
+    let plans = build_chunk_plans(&context, shard).unwrap_or_else(|error| {
+        panic!("Failed to load sweep BED tiles for {tag}: {error}")
+    });
 
-    for chrom in chroms {
-        let tiles = load_tiles_for_chrom(tag, &chrom)
-            .unwrap_or_else(|error| panic!("Failed to load sweep BED tiles for {tag}/{chrom}: {error}"));
+    plans
+        .into_iter()
+        .map(|plan| {
+            let context = Arc::clone(&context);
+            let trial_name = plan.trial_name.clone();
+            let display_name = plan.trial_name.clone();
+            let chrom = plan.chrom.clone();
+            let tiles = Arc::clone(&plan.tiles);
 
+            // NOTE: Each libtest-mimic trial owns one chunk execution. Total RSS scales
+            // roughly with `--test-threads` times the per-chunk working set.
+            Trial::test(trial_name, move || {
+                run_chunk_trial(
+                    Arc::clone(&context),
+                    chrom.clone(),
+                    plan.ordinal,
+                    Arc::clone(&tiles),
+                    plan.start,
+                    plan.end,
+                    display_name.clone(),
+                )
+                .map_err(Failed::from)
+            })
+            .with_ignored_flag(true)
+        })
+        .collect()
+}
+
+fn prepare_tag_context(tag: &str) -> Option<Arc<TagContext>> {
+    let (bam_path, ref_path) = bam_paths_for_tag(tag);
+    let bam_path = PathBuf::from(bam_path);
+    let ref_path = PathBuf::from(ref_path);
+    let sample = sample_name_for_bam(&bam_path);
+    let config_name = active_config();
+
+    let chroms = match discover_chroms(tag) {
+        Ok(chroms) => chroms,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+        Err(error) => panic!("Failed to discover sweep chromosomes for {tag}: {error}"),
+    };
+
+    let bam_path_string = bam_path.to_string_lossy().into_owned();
+    let ref_path_string = ref_path.to_string_lossy().into_owned();
+    let fai_path = format!("{ref_path_string}.fai");
+    let chr_lengths = super::common::load_chr_lengths(&fai_path);
+    let scope_config = sweep_config(&config_name, &bam_path_string, &ref_path_string);
+    let reference_resource = ReferenceResource::new(
+        ref_path_string.clone(),
+        1200,
+        0,
+        chr_lengths.clone(),
+        false,
+    );
+
+    Some(Arc::new(TagContext {
+        tag: tag.to_string(),
+        config_name,
+        scope_config,
+        reference_resource,
+        chr_lengths,
+        chroms,
+        sample,
+        cache_validation: OnceLock::new(),
+        cache_skip_logged: AtomicBool::new(false),
+    }))
+}
+
+fn build_chunk_plans(
+    context: &TagContext,
+    shard: Option<(u64, u64)>,
+) -> io::Result<Vec<ChunkPlan>> {
+    let mut plans = Vec::new();
+
+    for chrom in &context.chroms {
+        let tiles = Arc::new(load_tiles_for_chrom(&context.tag, chrom)?);
         for (ordinal, window) in tiles.chunks(CHUNK_SIZE).enumerate() {
             if let Some((index, total)) = shard {
-                if chunk_id(tag, &chrom, ordinal as u64) % total != index {
+                if chunk_id(&context.tag, chrom, ordinal as u64) % total != index {
                     continue;
                 }
             }
 
-            let java = load_java_tsv_chunk(tag, &chrom, &config, window).unwrap_or_else(|error| {
-                panic!("Failed to load cached Java TSV chunk for {tag}/{chrom}: {error}")
+            let start = ordinal * CHUNK_SIZE;
+            let end = start + window.len();
+            plans.push(ChunkPlan {
+                trial_name: chunk_trial_name(&context.tag, chrom, ordinal),
+                chrom: chrom.clone(),
+                ordinal,
+                tiles: Arc::clone(&tiles),
+                start,
+                end,
             });
-            let rust = run_rust_chunk(&bam, &ref_path, &sample, &config, window).unwrap_or_else(
-                |error| panic!("Failed to run Rust chunk for {tag}/{chrom}: {error}"),
-            );
-
-            failures.extend(diff_chunk(&java, &rust, &config));
-            if failures.len() >= MAX_FAILURES {
-                panic!("{}", format_report(&failures));
-            }
         }
     }
 
-    if !failures.is_empty() {
-        panic!("{}", format_report(&failures));
+    Ok(plans)
+}
+
+fn chunk_trial_name(tag: &str, chrom: &str, ordinal: usize) -> String {
+    let chrom_label = chrom.strip_prefix("chr").unwrap_or(chrom);
+    format!(
+        "{tag}_sweep::parity_e2e_sweep_{tag}_chr{chrom_label}_chunk{ordinal:03}"
+    )
+}
+
+fn run_chunk_trial(
+    context: Arc<TagContext>,
+    chrom: String,
+    ordinal: usize,
+    tiles: Arc<Vec<TileKey>>,
+    start: usize,
+    end: usize,
+    trial_name: String,
+) -> Result<(), String> {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if FAILURE_COUNT.load(Ordering::Relaxed) >= MAX_FAILURES {
+            eprintln!(
+                "{trial_name}: skipped after MAX_FAILURES cap ({MAX_FAILURES})"
+            );
+            return Ok(());
+        }
+
+        if let Err(error) = validate_tag_cache(&context) {
+            if is_ci() {
+                return fail_or_skip_after_cap(
+                    &trial_name,
+                    format!(
+                        "E2E sweep cache validation failed for {}: {error}",
+                        context.tag
+                    ),
+                );
+            }
+            if !context.cache_skip_logged.swap(true, Ordering::Relaxed) {
+                handle_missing_cache(&context.tag, &error);
+            }
+            return Ok(());
+        }
+
+        let window = &tiles[start..end];
+        let java = load_java_tsv_chunk(&context.tag, &chrom, &context.config_name, window)
+            .map_err(|error| {
+                format!(
+                    "Failed to load cached Java TSV chunk for {}/{chrom} chunk {ordinal}: {error}",
+                    context.tag
+                )
+            })?;
+        let rust = run_rust_chunk(&context, window).map_err(|error| {
+            format!(
+                "Failed to run Rust chunk for {}/{chrom} chunk {ordinal}: {error}",
+                context.tag
+            )
+        })?;
+        let failures = diff_chunk(&java, &rust, &context.config_name);
+        if failures.is_empty() {
+            return Ok(());
+        }
+
+        fail_or_skip_after_cap(&trial_name, format_report(&failures))
+    }));
+
+    match result {
+        Ok(result) => result,
+        Err(payload) => {
+            if let Some(message) = payload.downcast_ref::<&'static str>() {
+                return Err((*message).to_string());
+            }
+            if let Some(message) = payload.downcast_ref::<String>() {
+                return Err(message.clone());
+            }
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+fn fail_or_skip_after_cap(trial_name: &str, message: String) -> Result<(), String> {
+    let previous = FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if previous >= MAX_FAILURES {
+        eprintln!(
+            "{trial_name}: skipped after MAX_FAILURES cap ({MAX_FAILURES})"
+        );
+        return Ok(());
+    }
+
+    Err(message)
+}
+
+fn validate_tag_cache(context: &TagContext) -> Result<(), String> {
+    match context.cache_validation.get_or_init(|| {
+        check_e2e_sweep_manifest(&context.config_name, &context.tag)?;
+        for chrom in &context.chroms {
+            let java_path = java_tsv_path(&context.tag, chrom, &context.config_name);
+            if !java_path.is_file() {
+                return Err(format!(
+                    "Missing Java TSV cache for {}/{chrom} at {}",
+                    context.tag,
+                    java_path.display()
+                ));
+            }
+        }
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(error) => Err(error.clone()),
     }
 }
 
@@ -374,28 +568,17 @@ fn load_java_tsv_chunk(
 }
 
 fn run_rust_chunk(
-    bam_path: &Path,
-    ref_path: &Path,
-    sample: &str,
-    config_name: &str,
+    context: &TagContext,
     tiles: &[TileKey],
 ) -> io::Result<BTreeMap<TileKey, Vec<String>>> {
-    let bam_path_string = bam_path.to_string_lossy().into_owned();
-    let ref_path_string = ref_path.to_string_lossy().into_owned();
-    let fai_path = format!("{}.fai", ref_path.display());
-    let chr_lengths = super::common::load_chr_lengths(&fai_path);
     let regions = build_regions(tiles)?;
-    let reference_resource = ReferenceResource::new(
-        ref_path_string.clone(),
-        1200,
-        0,
-        chr_lengths.clone(),
-        false,
+    let _guard = init_sweep_scope(
+        context.scope_config.clone(),
+        context.chr_lengths.clone(),
+        &context.sample,
     );
-    let config = sweep_config(config_name, &bam_path_string, &ref_path_string);
-    let _guard = init_sweep_scope(config, chr_lengths, sample);
     let captured = Arc::new(Mutex::new(String::new()));
-    let simple_mode = SimpleMode::new(vec![regions], reference_resource);
+    let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
     GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Buffer(captured.clone()));
     simple_mode.not_parallel();
 
@@ -510,8 +693,8 @@ fn init_sweep_scope(
     chr_lengths: HashMap<String, i32>,
     sample: &str,
 ) -> SweepScopeGuard {
-    GlobalReadOnlyScope::clear();
-    GlobalReadOnlyScope::init(
+    GlobalReadOnlyScope::clear_thread_local();
+    GlobalReadOnlyScope::init_thread_local(
         config,
         chr_lengths,
         sample,
