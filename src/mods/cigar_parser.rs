@@ -660,9 +660,12 @@ impl CigarParser {
     /// Ported from: CigarParser.java:L665-L677 (skipSitesOutRegionOfInterest)
     /// CRISPR mode: skip reads outside the region of interest.
     pub fn skip_sites_out_region_of_interest(&self) -> bool {
-        let conf = &GlobalReadOnlyScope::instance().conf;
-        let cut_site = conf.crispr_cutting_site;
-        let filter_bp = conf.crispr_filtering_bp;
+        let (cut_site, filter_bp) = GlobalReadOnlyScope::with_instance(|scope| {
+            (
+                scope.conf.crispr_cutting_site,
+                scope.conf.crispr_filtering_bp,
+            )
+        });
         if cut_site != 0 {
             // The total aligned length, excluding soft-clipped bases and insertions
             let cigar_string = self.cigar.to_string();
@@ -2302,8 +2305,14 @@ impl CigarParser {
         position: i32,
         total_length_including_soft_clipped: i32,
     ) {
-        let instance = GlobalReadOnlyScope::instance();
-        let conf = &instance.conf;
+        let (goodq, inssize, insstdamt, insstd) = GlobalReadOnlyScope::with_instance(|scope| {
+            (
+                scope.conf.goodq,
+                scope.conf.inssize,
+                scope.conf.insstdamt,
+                scope.conf.insstd,
+            )
+        });
 
         // Java: CigarParser.java#L1995
         let mate_start = record.mpos() as i32 + 1; // 0-based to 1-based
@@ -2322,7 +2331,7 @@ impl CigarParser {
                 if tt != 0 {
                     let idx = (tt - 1) as usize;
                     if idx < query_quality.as_bytes().len()
-                        && (query_quality.as_bytes()[idx] as i32 - 33) as f64 > conf.goodq
+                        && (query_quality.as_bytes()[idx] as i32 - 33) as f64 > goodq
                     {
                         soft5 = position;
                     }
@@ -2338,7 +2347,7 @@ impl CigarParser {
                 if tt != 0 {
                     let idx = query_quality.len().saturating_sub(tt as usize);
                     if idx < query_quality.as_bytes().len()
-                        && (query_quality.as_bytes()[idx] as i32 - 33) as f64 > conf.goodq
+                        && (query_quality.as_bytes()[idx] as i32 - 33) as f64 > goodq
                     {
                         soft3 = end;
                     }
@@ -2387,7 +2396,7 @@ impl CigarParser {
                 } else {
                     end - mate_start
                 };
-                if mlen.abs() > conf.inssize + conf.insstdamt * conf.insstd {
+                if mlen.abs() > inssize + insstdamt * insstd {
                     if read_dir_num == 1 {
                         // Java: CigarParser.java#L2043-L2048
                         if self.sv_structures.svfdel.is_empty()
