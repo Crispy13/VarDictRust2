@@ -400,6 +400,32 @@ pub fn adj_ref_factor(ref_var: Option<&mut Variation>, factor_f: f64) {
     correct_cnt(ref_var);
 }
 
+// PARITY: VariationRealigner.realignlgins30()/realignlgins() mutate the reference
+// Variation fetched from nonInsertionVariants in place in Java
+// (VariationRealigner.java:L1555-L1572, L1752-L1763, L1888-L1934).
+// Rust clones that entry to satisfy borrowing, so the decremented clone must be
+// written back after adj_cnt_with_reference().
+fn write_back_cloned_reference_variation(
+    non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    reference_sequences: &HashMap<i32, u8>,
+    position: i32,
+    reference_var: Option<Variation>,
+) {
+    let Some(reference_var) = reference_var else {
+        return;
+    };
+    let Some(reference_base) = reference_sequences.get(&position) else {
+        return;
+    };
+    let reference_key = (*reference_base as char).to_string();
+    if let Some(entry) = non_insertion_variants
+        .get_mut(&position)
+        .and_then(|m| m.entries.get_mut(&reference_key))
+    {
+        *entry = reference_var;
+    }
+}
+
 /// Ported from: VariationRealigner.addVarFactor()
 /// Java: VariationRealigner.java#L2701-L2722
 ///
@@ -3965,16 +3991,22 @@ pub fn realignlgins30(
                         adj_cnt(vref, sc5b);
                     }
                 }
+                write_back_cloned_reference_variation(
+                    non_insertion_variants,
+                    reference_sequences,
+                    bi,
+                    mvref_clone,
+                );
 
                 // Java: VariationRealigner.java#L1563-L1569
                 if let Some(bams_vec) = instance_bams.as_ref() {
+                    let mut mvref_for_check = get_variation_maybe(
+                        non_insertion_variants,
+                        bi,
+                        reference_sequences.get(&bi).copied(),
+                    )
+                    .cloned();
                     if !bams_vec.is_empty() && p3 - p5 >= 5 && p3 - p5 < max_read_length - 10 {
-                        let mut mvref_for_check = get_variation_maybe(
-                            non_insertion_variants,
-                            bi,
-                            reference_sequences.get(&bi).copied(),
-                        )
-                        .cloned();
                         if let Some(ref mut mvref) = mvref_for_check {
                             if mvref.vars_count != 0 && no_passing_reads(chr, p5, p3, bams_vec) {
                                 let vref_vc = insertion_variants
@@ -3990,6 +4022,12 @@ pub fn realignlgins30(
                             }
                         }
                     }
+                    write_back_cloned_reference_variation(
+                        non_insertion_variants,
+                        reference_sequences,
+                        bi,
+                        mvref_for_check,
+                    );
                 }
 
                 // Java: VariationRealigner.java#L1570-L1575 — recursive realignins
@@ -4033,6 +4071,12 @@ pub fn realignlgins30(
                         adj_cnt(vref, sc5b);
                     }
                 }
+                write_back_cloned_reference_variation(
+                    non_insertion_variants,
+                    reference_sequences,
+                    bi,
+                    mvref_clone,
+                );
 
                 // Java: VariationRealigner.java#L1580-L1584 — recursive realigndel
                 let vref_vc = non_insertion_variants
@@ -4362,18 +4406,18 @@ pub fn realignlgins(
         }
 
         // Java: VariationRealigner.java#L1765-L1771 — rpflag-based adjustment
+        let mut mref_clone = get_variation_maybe(
+            non_insertion_variants,
+            bi,
+            reference_sequences.get(&bi).copied(),
+        )
+        .cloned();
         if let Some(bams_vec) = instance_bams.as_ref() {
             if rpflag
                 && !bams_vec.is_empty()
                 && ins.len() >= 5
                 && ins.len() < (max_read_length - 10) as usize
             {
-                let mut mref_clone = get_variation_maybe(
-                    non_insertion_variants,
-                    bi,
-                    reference_sequences.get(&bi).copied(),
-                )
-                .cloned();
                 if let Some(ref mut mref) = mref_clone {
                     if mref.vars_count != 0
                         && no_passing_reads(chr, bi, bi + ins.len() as i32, bams_vec)
@@ -4392,6 +4436,12 @@ pub fn realignlgins(
                 }
             }
         }
+        write_back_cloned_reference_variation(
+            non_insertion_variants,
+            reference_sequences,
+            bi,
+            mref_clone,
+        );
     }
 
     // ── 3' pass ──────────────────────────────────────────────────────
@@ -4574,6 +4624,12 @@ pub fn realignlgins(
             if let Some(ref sc3b) = sc3v_clone {
                 adj_cnt_with_reference(iref, sc3b, lref_clone.as_mut());
             }
+            write_back_cloned_reference_variation(
+                non_insertion_variants,
+                reference_sequences,
+                bi,
+                lref_clone,
+            );
         }
 
         // Java: VariationRealigner.java#L1907-L1913 — rpflag check
@@ -4713,6 +4769,12 @@ pub fn realignlgins(
                 }
             }
         }
+        write_back_cloned_reference_variation(
+            non_insertion_variants,
+            reference_sequences,
+            bi,
+            mref_clone,
+        );
     }
 }
 
