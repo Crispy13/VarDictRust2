@@ -56,10 +56,47 @@ fn iupac_replacement(code: char) -> Option<char> {
 // Cluster B: MSI + validateRefallele
 // ---------------------------------------------------------------------------
 
+fn repeated_motif_suffix_len(sequence: &str, motif: &str) -> usize {
+    let sequence = sequence.as_bytes();
+    let motif = motif.as_bytes();
+    let motif_len = motif.len();
+    if motif_len == 0 {
+        return 0;
+    }
+
+    let mut matched = 0usize;
+    while matched + motif_len <= sequence.len() {
+        let start = sequence.len() - matched - motif_len;
+        if &sequence[start..start + motif_len] != motif {
+            break;
+        }
+        matched += motif_len;
+    }
+    matched
+}
+
+fn repeated_motif_prefix_len(sequence: &str, motif: &str) -> usize {
+    let sequence = sequence.as_bytes();
+    let motif = motif.as_bytes();
+    let motif_len = motif.len();
+    if motif_len == 0 {
+        return 0;
+    }
+
+    let mut matched = 0usize;
+    while matched + motif_len <= sequence.len() {
+        if &sequence[matched..matched + motif_len] != motif {
+            break;
+        }
+        matched += motif_len;
+    }
+    matched
+}
+
 /// Ported from: ToVarsBuilder.java:L573-L621
 /// Find microsatellite instability by testing repeat patterns of length 1-6 bases.
 ///
-/// Parity traps addressed: T20 (regex compiled fresh each iter), T14 (msint length stored not string)
+/// Parity traps addressed: T20 (repeat matching), T14 (msint length stored not string)
 pub fn find_msi(tseq1: &str, tseq2: &str, left: Option<&str>) -> (f64, i32, String) {
     let mut nmsi: usize = 1;
     let mut shift3: i32;
@@ -71,34 +108,22 @@ pub fn find_msi(tseq1: &str, tseq2: &str, left: Option<&str>) -> (f64, i32, Stri
         let msint_bytes = substr_with_len(tseq1.as_bytes(), -(nmsi as i32), nmsi as i32);
         let msint = String::from_utf8_lossy(&msint_bytes).to_string();
 
-        // Pattern: (({msint})+)$
-        let pattern_str = format!("(({})+)$", regex::escape(&msint));
-        let pattern = Regex::new(&pattern_str).unwrap();
-
-        let mut msimatch = String::new();
-        if let Some(caps) = pattern.captures(tseq1) {
-            msimatch = caps.get(1).map_or("", |m| m.as_str()).to_string();
-        }
+        // Java regex: ((msint)+)$
+        let mut msimatch_len = repeated_motif_suffix_len(tseq1, &msint);
 
         // If left context is provided and non-empty, try concatenated match
         if let Some(left_str) = left {
             if !left_str.is_empty() {
                 let combined = format!("{}{}", left_str, tseq1);
-                if let Some(caps) = pattern.captures(&combined) {
-                    // Overwrites previous match entirely (Java behavior)
-                    msimatch = caps.get(1).map_or("", |m| m.as_str()).to_string();
-                }
+                // Overwrites previous match entirely (Java behavior)
+                msimatch_len = repeated_motif_suffix_len(&combined, &msint);
             }
         }
 
-        let mut curmsi = msimatch.len() as f64 / nmsi as f64;
+        let mut curmsi = msimatch_len as f64 / nmsi as f64;
 
-        // Pattern: ^(({msint})+) — match repeat at start of right context
-        let start_pattern_str = format!("^(({})+)", regex::escape(&msint));
-        let start_pattern = Regex::new(&start_pattern_str).unwrap();
-        if let Some(caps) = start_pattern.captures(tseq2) {
-            curmsi += caps.get(1).map_or(0, |m| m.as_str().len()) as f64 / nmsi as f64;
-        }
+        // Java regex: ^((msint)+)
+        curmsi += repeated_motif_prefix_len(tseq2, &msint) as f64 / nmsi as f64;
 
         if curmsi > msicnt {
             maxmsi = msint;
@@ -1483,11 +1508,10 @@ mod tests {
 
     #[test]
     fn test_find_msi_simple_repeat() {
-        // "ATATAT" should detect AT repeat
         let (msi, shift3, msint) = find_msi("ATATAT", "ATATGC", None);
-        assert!(msi > 0.0, "msi should be positive for repeat");
-        assert!(shift3 >= 0);
-        assert!(!msint.is_empty());
+        assert_eq!(msi, 5.0);
+        assert_eq!(shift3, 4);
+        assert_eq!(msint, "AT");
     }
 
     #[test]
@@ -1500,8 +1524,10 @@ mod tests {
 
     #[test]
     fn test_find_msi_with_left_context() {
-        let (msi, _shift3, _msint) = find_msi("AT", "ATATAT", Some("ATATAT"));
-        assert!(msi > 0.0, "msi should be positive with left context");
+        let (msi, shift3, msint) = find_msi("AT", "ATATAT", Some("ATATAT"));
+        assert_eq!(msi, 7.0);
+        assert_eq!(shift3, 6);
+        assert_eq!(msint, "AT");
     }
 
     #[test]
@@ -1509,6 +1535,14 @@ mod tests {
         let (msi, _shift3, msint) = find_msi("AAAA", "AAAACC", None);
         assert!(msi >= 4.0, "msi should detect mono-A repeat");
         assert_eq!(msint, "A");
+    }
+
+    #[test]
+    fn test_repeated_motif_lengths_match_greedy_regex_cases() {
+        assert_eq!(repeated_motif_suffix_len("CCATATAT", "AT"), 6);
+        assert_eq!(repeated_motif_suffix_len("CCATATA", "AT"), 0);
+        assert_eq!(repeated_motif_prefix_len("ATATGC", "AT"), 4);
+        assert_eq!(repeated_motif_prefix_len("TATATG", "AT"), 0);
     }
 
     #[test]
