@@ -26,10 +26,7 @@ const REF_50_BASES: i32 = 50;
 const REF_70_BASES: i32 = 70;
 
 fn chromosome_limit(region: &Region, ref_map: &HashMap<i32, u8>) -> i32 {
-    GlobalReadOnlyScope::instance()
-        .chr_lengths
-        .get(&region.chr)
-        .copied()
+    GlobalReadOnlyScope::with_instance(|scope| scope.chr_lengths.get(&region.chr).copied())
         .or_else(|| ref_map.keys().copied().max())
         .unwrap_or(0)
 }
