@@ -590,16 +590,30 @@ pub fn is_the_same_variation_on_ref(
     ref_map: &HashMap<i32, u8>,
     conf: &Configuration,
 ) -> bool {
-    let mut vk: std::collections::HashSet<String> =
-        vars_at_cur_position.entries.keys().cloned().collect();
+    let mut single_key: Option<&str> = None;
+    for key in vars_at_cur_position.entries.keys() {
+        if let Some(existing_key) = single_key {
+            if existing_key != key.as_str() {
+                return false;
+            }
+        } else {
+            single_key = Some(key);
+        }
+    }
+
     // Trap T27: add synthetic "I" key
     if insertion_variants.contains_key(&position) {
-        vk.insert("I".to_string());
+        if let Some(existing_key) = single_key {
+            if existing_key != "I" {
+                return false;
+            }
+        } else {
+            single_key = Some("I");
+        }
     }
-    if vk.len() == 1 {
+    if let Some(only_key) = single_key {
         if let Some(ref_base) = ref_map.get(&position) {
-            let ref_str = char::from(*ref_base).to_string();
-            if vk.contains(&ref_str) {
+            if only_key.len() == 1 && only_key.as_bytes()[0] == *ref_base {
                 let has_amplicon_based_calling = GlobalReadOnlyScope::with_instance(|scope| {
                     scope.amplicon_based_calling.is_some()
                 });
