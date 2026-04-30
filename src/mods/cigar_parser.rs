@@ -563,8 +563,9 @@ impl CigarParser {
     /// Ported from: CigarParser.java:L907-L910 (isNextInsertion)
     /// Checks if the next CIGAR element is an insertion (requires performLocalRealignment).
     pub fn is_next_insertion(&self, ci: usize) -> bool {
-        let conf = &GlobalReadOnlyScope::instance().conf;
-        conf.perform_local_realignment
+        let perform_local_realignment =
+            GlobalReadOnlyScope::with_instance(|scope| scope.conf.perform_local_realignment);
+        perform_local_realignment
             && self.cigar.num_cigar_elements() > ci + 1
             && self.cigar.get_cigar_element(ci + 1).operator == CigarOp::I
     }
@@ -572,8 +573,9 @@ impl CigarParser {
     /// Ported from: CigarParser.java:L911-L914 (isNextMatched)
     /// Checks if the next CIGAR element is a match (requires performLocalRealignment).
     pub fn is_next_matched(&self, ci: usize) -> bool {
-        let conf = &GlobalReadOnlyScope::instance().conf;
-        conf.perform_local_realignment
+        let perform_local_realignment =
+            GlobalReadOnlyScope::with_instance(|scope| scope.conf.perform_local_realignment);
+        perform_local_realignment
             && self.cigar.num_cigar_elements() > ci + 1
             && self.cigar.get_cigar_element(ci + 1).operator == CigarOp::M
     }
@@ -582,11 +584,13 @@ impl CigarParser {
     /// Checks for D/I M D/I pattern (multi-indel within VEXT).
     /// Note: accesses ci+3 — caller must ensure CIGAR is long enough.
     pub fn is_insertion_or_deletion_with_next_matched(&self, ci: usize) -> bool {
-        let conf = &GlobalReadOnlyScope::instance().conf;
+        let (perform_local_realignment, vext) = GlobalReadOnlyScope::with_instance(|scope| {
+            (scope.conf.perform_local_realignment, scope.conf.vext)
+        });
         let num_elems = self.cigar.num_cigar_elements();
-        conf.perform_local_realignment
+        perform_local_realignment
             && num_elems > ci + 2
-            && self.cigar.get_cigar_element(ci + 1).length <= conf.vext
+            && self.cigar.get_cigar_element(ci + 1).length <= vext
             && self.cigar.get_cigar_element(ci + 1).operator == CigarOp::M
             && (self.cigar.get_cigar_element(ci + 2).operator == CigarOp::I
                 || self.cigar.get_cigar_element(ci + 2).operator == CigarOp::D)
@@ -2006,8 +2010,13 @@ impl CigarParser {
         total_length_including_soft_clipped: i32,
         ci: usize,
     ) {
-        let instance = GlobalReadOnlyScope::instance();
-        let conf = &instance.conf;
+        let (chimeric, debug_y, chr_length) = GlobalReadOnlyScope::with_instance(|scope| {
+            (
+                scope.conf.chimeric,
+                scope.conf.y,
+                scope.chr_lengths.get(chr_name).copied().unwrap_or(i32::MAX),
+            )
+        });
         let qs_bytes = query_sequence.as_bytes();
         let qq_bytes = query_quality.as_bytes();
 
@@ -2015,7 +2024,7 @@ impl CigarParser {
         if ci == 0 {
             // ── 5' soft clip ──────────────────────────────────────────────
             // Java: CigarParser.java#L1120-L1155 — chimeric detection
-            if !conf.chimeric {
+            if !chimeric {
                 let sa_tag_string: Option<String> = record.aux(b"SA").ok().and_then(|a| match a {
                     Aux::String(s) => Some(s.to_string()),
                     _ => None,
@@ -2053,7 +2062,7 @@ impl CigarParser {
                                     self.cigar_element_length;
                                 self.offset = 0;
                                 self.start = position;
-                                if conf.y {
+                                if debug_y {
                                     eprintln!(
                                         "{} at 5' is a chimeric at {} by SEED {}",
                                         String::from_utf8_lossy(&seq),
@@ -2071,7 +2080,7 @@ impl CigarParser {
             // Java: CigarParser.java#L1158-L1173 — match-back loop (5')
             while self.cigar_element_length - 1 >= 0
                 && self.start - 1 > 0
-                && self.start - 1 <= *instance.chr_lengths.get(chr_name).unwrap_or(&i32::MAX)
+                && self.start - 1 <= chr_length
                 && is_has_and_equals_str(
                     ref_map,
                     self.start - 1,
@@ -2151,7 +2160,7 @@ impl CigarParser {
         } else if ci == self.cigar.num_cigar_elements() - 1 {
             // ── 3' soft clip ──────────────────────────────────────────────
             // Java: CigarParser.java#L1204-L1243 — chimeric detection (3')
-            if !conf.chimeric {
+            if !chimeric {
                 let sa_tag_string: Option<String> = record.aux(b"SA").ok().and_then(|a| match a {
                     Aux::String(s) => Some(s.to_string()),
                     _ => None,
@@ -2195,7 +2204,7 @@ impl CigarParser {
                                     self.cigar_element_length;
                                 self.offset = 0;
                                 self.start = position;
-                                if conf.y {
+                                if debug_y {
                                     eprintln!(
                                         "{} at 3' is a chimeric at {} by SEED {}",
                                         String::from_utf8_lossy(&seq),
@@ -3198,7 +3207,7 @@ impl CigarParser {
         // Java: CigarParser.java#L1435
         variation.number_of_mismatches += number_of_mismatches as f64;
         // Java: CigarParser.java#L1436-L1440
-        let goodq = GlobalReadOnlyScope::instance().conf.goodq;
+        let goodq = GlobalReadOnlyScope::with_instance(|scope| scope.conf.goodq);
         if base_quality >= goodq {
             variation.high_quality_reads_count += 1;
         } else {
@@ -3230,7 +3239,7 @@ impl CigarParser {
         // Java: CigarParser.java#L1415
         variation.number_of_mismatches -= number_of_mismatches as f64;
         // Java: CigarParser.java#L1416-L1420
-        let goodq = GlobalReadOnlyScope::instance().conf.goodq;
+        let goodq = GlobalReadOnlyScope::with_instance(|scope| scope.conf.goodq);
         if base_quality >= goodq {
             variation.high_quality_reads_count -= 1;
         } else {
