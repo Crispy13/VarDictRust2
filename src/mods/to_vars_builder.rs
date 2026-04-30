@@ -586,6 +586,7 @@ pub fn is_the_same_variation_on_ref(
     insertion_variants: &HashMap<i32, VariationMap>,
     ref_map: &HashMap<i32, u8>,
     conf: &Configuration,
+    has_amplicon_based_calling: bool,
 ) -> bool {
     let mut single_key: Option<&str> = None;
     for key in vars_at_cur_position.entries.keys() {
@@ -611,9 +612,6 @@ pub fn is_the_same_variation_on_ref(
     if let Some(only_key) = single_key {
         if let Some(ref_base) = ref_map.get(&position) {
             if only_key.len() == 1 && only_key.as_bytes()[0] == *ref_base {
-                let has_amplicon_based_calling = GlobalReadOnlyScope::with_instance(|scope| {
-                    scope.amplicon_based_calling.is_some()
-                });
                 if !conf.do_pileup
                     && !conf.bam.as_ref().map_or(false, |b| b.has_bam2())
                     && !has_amplicon_based_calling
@@ -710,6 +708,7 @@ pub fn collect_reference_variants(
     non_insertion_variants: &HashMap<i32, VariationMap>,
     duprate: f64,
     conf: &Configuration,
+    has_amplicon_based_calling: bool,
 ) {
     let mut reference_forward_coverage: i32 = 0;
     let mut reference_reverse_coverage: i32 = 0;
@@ -772,7 +771,6 @@ pub fn collect_reference_variants(
     }
 
     let mut positions_for_changed_ref_variant: Vec<i32> = Vec::new();
-    let scope = GlobalReadOnlyScope::instance();
     let chr0 = chromosome_limit(region, ref_map);
 
     // Step 9: Non-reference variants exist
@@ -1030,7 +1028,7 @@ pub fn collect_reference_variants(
     if variations_at_pos.reference_variant.is_some()
         && conf.do_pileup
         && (positions_for_changed_ref_variant.contains(&position)
-            || scope.amplicon_based_calling.is_some())
+            || has_amplicon_based_calling)
     {
         let vref = variations_at_pos.reference_variant.as_mut().unwrap();
         update_ref_variant(
@@ -1323,8 +1321,9 @@ pub fn process(
     non_insertion_variants: &mut HashMap<i32, VariationMap>,
     duprate: f64,
 ) -> AlignedVarsData {
-    let conf = &GlobalReadOnlyScope::instance().conf;
-    let scope = GlobalReadOnlyScope::instance();
+    let (conf, has_amplicon_based_calling) = GlobalReadOnlyScope::with_instance(|scope| {
+        (scope.conf.clone(), scope.amplicon_based_calling.is_some())
+    });
 
     if conf.y {
         eprintln!(
@@ -1353,8 +1352,8 @@ pub fn process(
                 non_insertion_variants,
                 region,
                 duprate,
-                conf,
-                &scope,
+                &conf,
+                has_amplicon_based_calling,
             )
         }));
 
@@ -1388,7 +1387,7 @@ fn process_position(
     region: &Region,
     duprate: f64,
     conf: &Configuration,
-    scope: &GlobalReadOnlyScope,
+    has_amplicon_based_calling: bool,
 ) {
     let vars_at_cur_position = match non_insertion_variants.get(&position) {
         Some(vm) => vm.clone(), // Clone to release borrow for later mut access
@@ -1419,6 +1418,7 @@ fn process_position(
         insertion_variants,
         ref_map,
         conf,
+        has_amplicon_based_calling,
     ) {
         return;
     }
@@ -1479,7 +1479,7 @@ fn process_position(
     let maxfreq = collect_vars_at_position(aligned_variants, position, &var, ref_map);
 
     // Frequency gate
-    if !conf.do_pileup && maxfreq <= conf.freq && scope.amplicon_based_calling.is_none() {
+    if !conf.do_pileup && maxfreq <= conf.freq && !has_amplicon_based_calling {
         if !conf.bam.as_ref().map_or(false, |b| b.has_bam2()) {
             aligned_variants.remove(&position);
             return;
@@ -1499,6 +1499,7 @@ fn process_position(
         non_insertion_variants,
         duprate,
         conf,
+        has_amplicon_based_calling,
     );
 
     variations_at_pos.var_description_string_to_variants = variations_at_pos
