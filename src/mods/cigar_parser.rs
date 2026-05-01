@@ -20,8 +20,8 @@ use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{get_reverse_complemented_sequence, global_find, substr_with_len};
 use crate::variations::{
     get_variation, get_variation_from_seq, inc_cnt, is_equals, is_has_and_equals_base,
-    is_has_and_equals_str, is_has_and_not_equals_base, is_reference_mismatch_and_not_n,
-    is_not_equals,
+    is_has_and_equals_str, is_has_and_not_equals_base, is_has_and_not_equals_str,
+    is_reference_mismatch_and_not_n, is_not_equals,
 };
 
 // ─── CIGAR representation ─────────────────────────────────────────────────────

@@ -1357,20 +1357,20 @@ pub fn process(
         (scope.conf.clone(), scope.amplicon_based_calling.is_some())
     });
 
-        if conf.y {
-            eprintln!(
-                "Current segment: {}:{}-{} ",
-                region.chr, region.start, region.end
-            );
-        }
+    if conf.y {
+        eprintln!(
+            "Current segment: {}:{}-{} ",
+            region.chr, region.start, region.end
+        );
+    }
 
-        let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
+    let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
 
-        // Collect and sort positions for deterministic iteration.
-        // Java uses HashMap for outer map — iteration order is JVM-dependent.
-        // Sort ascending so position+1 mutation from createInsertion is processed correctly.
-        let mut positions: Vec<i32> = non_insertion_variants.keys().copied().collect();
-        positions.sort();
+    // Collect and sort positions for deterministic iteration.
+    // Java uses HashMap for outer map — iteration order is JVM-dependent.
+    // Sort ascending so position+1 mutation from createInsertion is processed correctly.
+    let mut positions: Vec<i32> = non_insertion_variants.keys().copied().collect();
+    positions.sort();
 
     for &position in &positions {
         // Trap T28: error-and-continue — wrap in closure that can handle errors
@@ -1389,23 +1389,22 @@ pub fn process(
             )
         }));
 
-            if let Err(e) = result {
-                eprintln!(
-                    "Error processing position {} in {}:{}-{}: {:?}",
-                    position, region.chr, region.start, region.end, e
-                );
-            }
+        if let Err(e) = result {
+            eprintln!(
+                "Error processing position {} in {}:{}-{}: {:?}",
+                position, region.chr, region.start, region.end, e
+            );
         }
+    }
 
-        if conf.y {
-            eprintln!("TIME: Finish preparing vars");
-        }
+    if conf.y {
+        eprintln!("TIME: Finish preparing vars");
+    }
 
-        AlignedVarsData {
-            max_read_length,
-            aligned_variants,
-        }
-    })
+    AlignedVarsData {
+        max_read_length,
+        aligned_variants,
+    }
 }
 
 /// Process a single position in the main loop.
