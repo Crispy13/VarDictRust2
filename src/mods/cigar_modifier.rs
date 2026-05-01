@@ -106,7 +106,7 @@ pub fn modify_cigar(
 
 /// Ported from: CigarModifier.java:L57-L248 (core modifyCigar body)
 #[allow(clippy::collapsible_if)]
-fn modify_cigar_inner(s: &mut CigarModifierState) {
+fn modify_cigar_inner(s: &mut CigarModifierState<'_>) {
     // Trap T6: flag loop control — flag starts true
     let mut flag = true;
 
@@ -143,8 +143,9 @@ fn modify_cigar_inner(s: &mut CigarModifierState) {
 
     if let Some(caps5) = sc5_caps {
         let cigar_element: i32 = caps5[1].parse().unwrap();
-        let conf = &GlobalReadOnlyScope::instance().conf;
-        if !conf.chimeric && cigar_element >= SEED_2 {
+        let (chimeric, debug_y) =
+            GlobalReadOnlyScope::with_instance(|scope| (scope.conf.chimeric, scope.conf.y));
+        if !chimeric && cigar_element >= SEED_2 {
             let sseq = substr_with_len(s.query_sequence.as_bytes(), 0, cigar_element);
             let reversed = reverse_sequence(&sseq);
             let sequence = complement_sequence(&reversed);
@@ -173,7 +174,7 @@ fn modify_cigar_inner(s: &mut CigarModifierState) {
                             cigar_element,
                         ))
                         .to_string();
-                        if conf.y {
+                        if debug_y {
                             eprintln!(
                                 "{} at 5' is a chimeric at {} by SEED {}",
                                 sequence_str, s.position, SEED_2
@@ -185,8 +186,9 @@ fn modify_cigar_inner(s: &mut CigarModifierState) {
         }
     } else if let Some(caps3) = sc3_caps {
         let cigar_element: i32 = caps3[1].parse().unwrap();
-        let conf = &GlobalReadOnlyScope::instance().conf;
-        if !conf.chimeric && cigar_element >= SEED_2 {
+        let (chimeric, debug_y) =
+            GlobalReadOnlyScope::with_instance(|scope| (scope.conf.chimeric, scope.conf.y));
+        if !chimeric && cigar_element >= SEED_2 {
             // Trap T7b: substr with negative index for 3' end
             let sseq = substr_with_len(s.query_sequence.as_bytes(), -cigar_element, cigar_element);
             let reversed = reverse_sequence(&sseq);
@@ -221,7 +223,7 @@ fn modify_cigar_inner(s: &mut CigarModifierState) {
                         qual_len - cigar_element,
                     ))
                     .to_string();
-                    if conf.y {
+                    if debug_y {
                         eprintln!(
                             "{} at 3' is a chimeric at {} by SEED {}",
                             sequence_str, s.position, SEED_2
@@ -393,7 +395,7 @@ fn modify_cigar_inner(s: &mut CigarModifierState) {
 
 /// Ported from: CigarModifier.java:L255-L278 (combineBeginDigM)
 /// Convert leading mismatches to soft-clip.
-fn combine_begin_dig_m(s: &mut CigarModifierState, mut mch: i32) {
+fn combine_begin_dig_m(s: &mut CigarModifierState<'_>, mut mch: i32) {
     let mut rn: i32 = 0;
     let mut rrn: i32 = 0;
     let mut rmch: i32 = 0;
@@ -425,7 +427,7 @@ fn combine_begin_dig_m(s: &mut CigarModifierState, mut mch: i32) {
 
 /// Ported from: CigarModifier.java:L284-L358 (combineDigSDigM)
 /// Adjust the boundary between a leading soft-clip and matched region.
-fn combine_dig_s_dig_m(s: &mut CigarModifierState, mut soft: i32, mut mch: i32) {
+fn combine_dig_s_dig_m(s: &mut CigarModifierState<'_>, mut soft: i32, mut mch: i32) {
     let mut rn: i32 = 0;
     let mut rn_set: HashSet<u8> = HashSet::new();
 
@@ -563,7 +565,7 @@ fn compute_read_offset(ov5: &str) -> i32 {
 
 /// Ported from: CigarModifier.java:L364-L399 (captureMisSoftly3Mismatches)
 /// For CIGARs ending with M only: convert trailing mismatches to soft-clip.
-fn capture_mis_softly_3_mismatches(s: &mut CigarModifierState, ov5: &str, mut mch: i32) {
+fn capture_mis_softly_3_mismatches(s: &mut CigarModifierState<'_>, ov5: &str, mut mch: i32) {
     let mut refoff = s.position + mch;
     let mut rdoff = mch;
     if !ov5.is_empty() {
@@ -614,7 +616,7 @@ fn capture_mis_softly_3_mismatches(s: &mut CigarModifierState, ov5: &str, mut mc
 
 /// Ported from: CigarModifier.java:L405-L486 (captureMisSoftlyMS)
 /// For CIGARs with trailing M-S: extend or retract M↔S boundary.
-fn capture_mis_softly_ms(s: &mut CigarModifierState, ov5: &str, mut mch: i32, mut soft: i32) {
+fn capture_mis_softly_ms(s: &mut CigarModifierState<'_>, ov5: &str, mut mch: i32, mut soft: i32) {
     // Part A: Compute offsets
     let mut refoff = s.position + mch;
     let mut rdoff = mch;
@@ -736,7 +738,7 @@ fn capture_mis_softly_ms(s: &mut CigarModifierState, ov5: &str, mut mch: i32, mu
 /// Merge I-M-D/I complex where internal M ≤ 15bp into single D+I.
 /// Trap T3: match pattern includes leading non-digit, replace pattern excludes it.
 fn combine_to_close_to_one(
-    s: &mut CigarModifierState,
+    s: &mut CigarModifierState<'_>,
     caps: &regex::Captures,
     mut flag: bool,
 ) -> bool {
@@ -771,7 +773,7 @@ fn combine_to_close_to_one(
 /// Ported from: CigarModifier.java:L535-L569 (combineToCloseToCorrect)
 /// Merge D-M-D/I complex where internal M ≤ 15bp into single D+I.
 fn combine_to_close_to_correct(
-    s: &mut CigarModifierState,
+    s: &mut CigarModifierState<'_>,
     caps: &regex::Captures,
     mut flag: bool,
 ) -> bool {
@@ -802,7 +804,7 @@ fn combine_to_close_to_correct(
 
 /// Ported from: CigarModifier.java:L578-L642 (threeIndels)
 /// Merge 3-indel complex M-D/I-M-D/I-M-D/I-M into simplified D+I+M form.
-fn three_indels(s: &mut CigarModifierState, caps: &regex::Captures, mut flag: bool) -> bool {
+fn three_indels(s: &mut CigarModifierState<'_>, caps: &regex::Captures, mut flag: bool) -> bool {
     let mut tslen: i32 = caps[5].parse::<i32>().unwrap() + caps[8].parse::<i32>().unwrap();
     if &caps[4] == "I" {
         tslen += caps[3].parse::<i32>().unwrap();
@@ -891,7 +893,7 @@ fn three_indels(s: &mut CigarModifierState, caps: &regex::Captures, mut flag: bo
 
 /// Ported from: CigarModifier.java:L651-L701 (threeDeletions)
 /// Merge M-D-M-D-M-D-M into D+optional-I+M form.
-fn three_deletions(s: &mut CigarModifierState, caps: &regex::Captures, mut flag: bool) -> bool {
+fn three_deletions(s: &mut CigarModifierState<'_>, caps: &regex::Captures, mut flag: bool) -> bool {
     let mut tslen: i32 = caps[4].parse::<i32>().unwrap() + caps[6].parse::<i32>().unwrap();
     let mut dlen: i32 = caps[3].parse::<i32>().unwrap()
         + caps[4].parse::<i32>().unwrap()
@@ -946,7 +948,7 @@ fn three_deletions(s: &mut CigarModifierState, caps: &regex::Captures, mut flag:
 /// Ported from: CigarModifier.java:L710-L762 (twoDeletionsInsertionToComplex)
 /// Merge M-D-M-I-M-D-M into D+I+M form.
 fn two_deletions_insertion_to_complex(
-    s: &mut CigarModifierState,
+    s: &mut CigarModifierState<'_>,
     caps: &regex::Captures,
     mut flag: bool,
 ) -> bool {
@@ -1006,7 +1008,7 @@ fn two_deletions_insertion_to_complex(
 /// Convert leading short match + indel into soft-clip.
 /// Trap T2: In Java, match uses jregex but replace uses java.util.regex. In Rust, same regex engine.
 fn begin_digit_m_number_i_or_d_number_m(
-    s: &mut CigarModifierState,
+    s: &mut CigarModifierState<'_>,
     caps: &regex::Captures,
 ) -> bool {
     let tmid: i32 = caps[1].parse().unwrap();

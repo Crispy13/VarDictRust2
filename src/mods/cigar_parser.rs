@@ -601,40 +601,41 @@ impl CigarParser {
     /// Ported from: CigarParser.java:L907-L910 (isNextInsertion)
     /// Checks if the next CIGAR element is an insertion (requires performLocalRealignment).
     pub fn is_next_insertion(&self, ci: usize) -> bool {
-        Self::with_conf(|conf| {
-            conf.perform_local_realignment
-                && self.cigar.num_cigar_elements() > ci + 1
-                && self.cigar.get_cigar_element(ci + 1).operator == CigarOp::I
-        })
+        let perform_local_realignment =
+            GlobalReadOnlyScope::with_instance(|scope| scope.conf.perform_local_realignment);
+        perform_local_realignment
+            && self.cigar.num_cigar_elements() > ci + 1
+            && self.cigar.get_cigar_element(ci + 1).operator == CigarOp::I
     }
 
     /// Ported from: CigarParser.java:L911-L914 (isNextMatched)
     /// Checks if the next CIGAR element is a match (requires performLocalRealignment).
     pub fn is_next_matched(&self, ci: usize) -> bool {
-        Self::with_conf(|conf| {
-            conf.perform_local_realignment
-                && self.cigar.num_cigar_elements() > ci + 1
-                && self.cigar.get_cigar_element(ci + 1).operator == CigarOp::M
-        })
+        let perform_local_realignment =
+            GlobalReadOnlyScope::with_instance(|scope| scope.conf.perform_local_realignment);
+        perform_local_realignment
+            && self.cigar.num_cigar_elements() > ci + 1
+            && self.cigar.get_cigar_element(ci + 1).operator == CigarOp::M
     }
 
     /// Ported from: CigarParser.java:L893-L901 (isInsertionOrDeletionWithNextMatched)
     /// Checks for D/I M D/I pattern (multi-indel within VEXT).
     /// Note: accesses ci+3 — caller must ensure CIGAR is long enough.
     pub fn is_insertion_or_deletion_with_next_matched(&self, ci: usize) -> bool {
-        Self::with_conf(|conf| {
-            let num_elems = self.cigar.num_cigar_elements();
-            conf.perform_local_realignment
-                && num_elems > ci + 2
-                && self.cigar.get_cigar_element(ci + 1).length <= conf.vext
-                && self.cigar.get_cigar_element(ci + 1).operator == CigarOp::M
-                && (self.cigar.get_cigar_element(ci + 2).operator == CigarOp::I
-                    || self.cigar.get_cigar_element(ci + 2).operator == CigarOp::D)
-                // Guard ci+3 access — Java accesses without bounds check but catches exceptions
-                && num_elems > ci + 3
-                && self.cigar.get_cigar_element(ci + 3).operator != CigarOp::I
-                && self.cigar.get_cigar_element(ci + 3).operator != CigarOp::D
-        })
+        let (perform_local_realignment, vext) = GlobalReadOnlyScope::with_instance(|scope| {
+            (scope.conf.perform_local_realignment, scope.conf.vext)
+        });
+        let num_elems = self.cigar.num_cigar_elements();
+        perform_local_realignment
+            && num_elems > ci + 2
+            && self.cigar.get_cigar_element(ci + 1).length <= vext
+            && self.cigar.get_cigar_element(ci + 1).operator == CigarOp::M
+            && (self.cigar.get_cigar_element(ci + 2).operator == CigarOp::I
+                || self.cigar.get_cigar_element(ci + 2).operator == CigarOp::D)
+            // Guard ci+3 access — Java accesses without bounds check but catches exceptions
+            && num_elems > ci + 3
+            && self.cigar.get_cigar_element(ci + 3).operator != CigarOp::I
+            && self.cigar.get_cigar_element(ci + 3).operator != CigarOp::D
     }
 
     /// Ported from: CigarParser.java:L917-L930 (isCloserThenVextAndGoodBase)
@@ -650,7 +651,13 @@ impl CigarParser {
         target_op: CigarOp,
     ) -> bool {
         let (perform_local_realignment, vext, goodq) =
-            Self::with_conf(|conf| (conf.perform_local_realignment, conf.vext, conf.goodq));
+            GlobalReadOnlyScope::with_instance(|scope| {
+                (
+                    scope.conf.perform_local_realignment,
+                    scope.conf.vext,
+                    scope.conf.goodq,
+                )
+            });
         let num_elems = self.cigar.num_cigar_elements();
         // Do not adjust complex if we have hard-clips after insertion/deletion
         if num_elems > ci + 2 && self.cigar.get_cigar_element(ci + 2).operator == CigarOp::H {
@@ -678,7 +685,8 @@ impl CigarParser {
         direction: bool,
         total_length_including_soft_clipped: i32,
     ) -> bool {
-        let trim_bases_after = Self::with_conf(|conf| conf.trim_bases_after);
+        let trim_bases_after =
+            GlobalReadOnlyScope::with_instance(|scope| scope.conf.trim_bases_after);
         if trim_bases_after != 0 {
             if !direction {
                 return self.read_position_including_soft_clipped > trim_bases_after;
@@ -694,8 +702,12 @@ impl CigarParser {
     /// Ported from: CigarParser.java:L665-L677 (skipSitesOutRegionOfInterest)
     /// CRISPR mode: skip reads outside the region of interest.
     pub fn skip_sites_out_region_of_interest(&self) -> bool {
-        let (cut_site, filter_bp) =
-            Self::with_conf(|conf| (conf.crispr_cutting_site, conf.crispr_filtering_bp));
+        let (cut_site, filter_bp) = GlobalReadOnlyScope::with_instance(|scope| {
+            (
+                scope.conf.crispr_cutting_site,
+                scope.conf.crispr_filtering_bp,
+            )
+        });
         if cut_site != 0 {
             // The total aligned length, excluding soft-clipped bases and insertions
             let cigar_string = self.cigar.to_string();
@@ -813,8 +825,30 @@ impl CigarParser {
     /// Main per-record CIGAR parsing loop. Extracts variants from a single BAM record.
     #[allow(clippy::too_many_lines)]
     fn parse_cigar(&mut self, chr_name: &str, record: &bam::Record, header: &HeaderView) {
-        let instance = GlobalReadOnlyScope::instance();
-        let conf = &instance.conf;
+        let (
+            mismatch,
+            perform_local_realignment,
+            minmatch,
+            samfilter_is_nonzero,
+            disable_sv,
+            include_n_in_total_depth,
+            goodq,
+            vext,
+            has_amplicon_based_calling,
+        ) = GlobalReadOnlyScope::with_instance(|instance| {
+            let conf = &instance.conf;
+            (
+                conf.mismatch,
+                conf.perform_local_realignment,
+                conf.minmatch,
+                conf.samfilter != "0",
+                conf.disable_sv,
+                conf.include_n_in_total_depth,
+                conf.goodq,
+                conf.vext,
+                instance.amplicon_based_calling.is_some(),
+            )
+        });
 
         // Java: CigarParser.java#L225-L228
         let mut query_sequence = String::from_utf8(record.seq().as_bytes()).unwrap_or_default();
@@ -834,7 +868,7 @@ impl CigarParser {
         if let Some(nm_val) = number_of_mismatches_nm {
             // Java: CigarParser.java#L247
             total_number_of_mismatches = nm_val - insertion_deletion_length;
-            if total_number_of_mismatches > conf.mismatch {
+            if total_number_of_mismatches > mismatch {
                 return;
             }
         } else {
@@ -855,7 +889,7 @@ impl CigarParser {
         let direction = record.is_reverse();
 
         // Java: CigarParser.java#L265-L269 — amplicon mode
-        if instance.amplicon_based_calling.is_some()
+        if has_amplicon_based_calling
             && self.parse_cigar_with_amp_case(record, header, is_mate_reference_name_equal)
         {
             return;
@@ -867,7 +901,7 @@ impl CigarParser {
 
         // Java: CigarParser.java#L274-L290 — CigarModifier or raw position
         let position: i32;
-        if conf.perform_local_realignment {
+        if perform_local_realignment {
             // Java: CigarParser.java#L278-L290
             let record_cigar_str = self.cigar.to_string();
             let modified = modify_cigar(
@@ -914,7 +948,7 @@ impl CigarParser {
         // Java: CigarParser.java#L309-L312
         let read_length_include_matching_and_insertions =
             Self::get_match_insertion_length(&self.cigar);
-        if conf.minmatch != 0 && read_length_include_matching_and_insertions < conf.minmatch {
+        if minmatch != 0 && read_length_include_matching_and_insertions < minmatch {
             return;
         }
 
@@ -925,7 +959,7 @@ impl CigarParser {
         }
 
         // Java: CigarParser.java#L320-L322 — supplementary alignment filter
-        if conf.samfilter != "0" && record.is_supplementary() {
+        if samfilter_is_nonzero && record.is_supplementary() {
             return;
         }
 
@@ -940,7 +974,7 @@ impl CigarParser {
         // Java: CigarParser.java#L330-L335 — SV prep
         if record.is_paired() && record.is_mate_unmapped() {
             // To be implemented (no-op in Java too)
-        } else if mapping_quality > 10 && !conf.disable_sv {
+        } else if mapping_quality > 10 && !disable_sv {
             self.prepare_sv_structures_for_analysis(
                 record,
                 header,
@@ -1075,7 +1109,7 @@ impl CigarParser {
 
                 // Java: CigarParser.java#L381-L389 — skip 'N' bases
                 if ch1 == b'N' {
-                    if conf.include_n_in_total_depth {
+                    if include_n_in_total_depth {
                         inc_cnt(&mut self.ref_coverage, self.start, 1);
                     }
                     self.start += 1;
@@ -1096,8 +1130,8 @@ impl CigarParser {
                 while (self.start + 1) >= self.region.start
                     && (self.start + 1) <= self.region.end
                     && (i + 1) < self.cigar_element_length
-                    && q >= conf.goodq
-                    && is_reference_mismatch_and_not_n(
+                    && q >= goodq
+                    && is_has_and_not_equals_str(
                         ref_map,
                         self.start,
                         &query_sequence,
@@ -1107,7 +1141,7 @@ impl CigarParser {
                     // Java: CigarParser.java#L413 — require higher quality for MNV
                     let next_n = (self.read_position_including_soft_clipped + 1) as usize;
                     if next_n >= query_qual_bytes.len()
-                        || ((query_qual_bytes[next_n] as i32 - 33) as f64) < conf.goodq + 5.0
+                        || ((query_qual_bytes[next_n] as i32 - 33) as f64) < goodq + 5.0
                     {
                         break;
                     }
@@ -1138,7 +1172,7 @@ impl CigarParser {
                     } else {
                         // Java: CigarParser.java#L436-L458 — look ahead for more mismatches
                         let mut ssn: i32 = 0;
-                        for ssi in 1..=conf.vext {
+                        for ssi in 1..=vext {
                             if i + 1 + ssi >= self.cigar_element_length {
                                 break;
                             }
@@ -1161,7 +1195,7 @@ impl CigarParser {
                         // Java: CigarParser.java#L450 — require higher quality for MNV
                         let ssn_n = (self.read_position_including_soft_clipped + ssn) as usize;
                         if ssn_n >= query_qual_bytes.len()
-                            || ((query_qual_bytes[ssn_n] as i32 - 33) as f64) < conf.goodq + 5.0
+                            || ((query_qual_bytes[ssn_n] as i32 - 33) as f64) < goodq + 5.0
                         {
                             break;
                         }
@@ -2013,11 +2047,11 @@ impl CigarParser {
         total_length_including_soft_clipped: i32,
         ci: usize,
     ) {
-        let (chimeric, y, chr_len) = GlobalReadOnlyScope::with_instance(|scope| {
+        let (chimeric, debug_y, chr_length) = GlobalReadOnlyScope::with_instance(|scope| {
             (
                 scope.conf.chimeric,
                 scope.conf.y,
-                *scope.chr_lengths.get(chr_name).unwrap_or(&i32::MAX),
+                scope.chr_lengths.get(chr_name).copied().unwrap_or(i32::MAX),
             )
         });
         let qs_bytes = query_sequence.as_bytes();
@@ -2065,7 +2099,7 @@ impl CigarParser {
                                     self.cigar_element_length;
                                 self.offset = 0;
                                 self.start = position;
-                                if y {
+                                if debug_y {
                                     eprintln!(
                                         "{} at 5' is a chimeric at {} by SEED {}",
                                         String::from_utf8_lossy(&seq),
@@ -2083,7 +2117,7 @@ impl CigarParser {
             // Java: CigarParser.java#L1158-L1173 — match-back loop (5')
             while self.cigar_element_length - 1 >= 0
                 && self.start - 1 > 0
-                && self.start - 1 <= chr_len
+                && self.start - 1 <= chr_length
                 && is_has_and_equals_str(
                     ref_map,
                     self.start - 1,
@@ -2207,7 +2241,7 @@ impl CigarParser {
                                     self.cigar_element_length;
                                 self.offset = 0;
                                 self.start = position;
-                                if y {
+                                if debug_y {
                                     eprintln!(
                                         "{} at 3' is a chimeric at {} by SEED {}",
                                         String::from_utf8_lossy(&seq),
@@ -2317,8 +2351,14 @@ impl CigarParser {
         position: i32,
         total_length_including_soft_clipped: i32,
     ) {
-        let (goodq, inssize, insstdamt, insstd) =
-            Self::with_conf(|conf| (conf.goodq, conf.inssize, conf.insstdamt, conf.insstd));
+        let (goodq, inssize, insstdamt, insstd) = GlobalReadOnlyScope::with_instance(|scope| {
+            (
+                scope.conf.goodq,
+                scope.conf.inssize,
+                scope.conf.insstdamt,
+                scope.conf.insstd,
+            )
+        });
 
         // Java: CigarParser.java#L1995
         let mate_start = record.mpos() as i32 + 1; // 0-based to 1-based
@@ -2962,7 +3002,7 @@ impl CigarParser {
         ddlen: i32,
         pos: i32,
     ) {
-        let goodq = Self::with_conf(|conf| conf.goodq);
+        let goodq = GlobalReadOnlyScope::with_instance(|scope| scope.conf.goodq);
         // Java: CigarParser.java#L1689-L1699
         let hv: &mut Variation = if s.starts_with('+') {
             // Java: CigarParser.java#L1690
@@ -3204,7 +3244,7 @@ impl CigarParser {
         // Java: CigarParser.java#L1435
         variation.number_of_mismatches += number_of_mismatches as f64;
         // Java: CigarParser.java#L1436-L1440
-        let goodq = Self::with_conf(|conf| conf.goodq);
+        let goodq = GlobalReadOnlyScope::with_instance(|scope| scope.conf.goodq);
         if base_quality >= goodq {
             variation.high_quality_reads_count += 1;
         } else {
@@ -3236,7 +3276,7 @@ impl CigarParser {
         // Java: CigarParser.java#L1415
         variation.number_of_mismatches -= number_of_mismatches as f64;
         // Java: CigarParser.java#L1416-L1420
-        let goodq = Self::with_conf(|conf| conf.goodq);
+        let goodq = GlobalReadOnlyScope::with_instance(|scope| scope.conf.goodq);
         if base_quality >= goodq {
             variation.high_quality_reads_count -= 1;
         } else {
@@ -3356,10 +3396,10 @@ impl CigarParser {
         mate_alignment_start: i32,
     ) -> bool {
         let (unique_mode_alignment_enabled, unique_mode_second_in_pair_enabled) =
-            Self::with_conf(|conf| {
+            GlobalReadOnlyScope::with_instance(|scope| {
                 (
-                    conf.unique_mode_alignment_enabled,
-                    conf.unique_mode_second_in_pair_enabled,
+                    scope.conf.unique_mode_alignment_enabled,
+                    scope.conf.unique_mode_second_in_pair_enabled,
                 )
             });
         // Java: CigarParser.java#L1896-L1898

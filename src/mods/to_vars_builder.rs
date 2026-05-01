@@ -26,14 +26,9 @@ const REF_50_BASES: i32 = 50;
 const REF_70_BASES: i32 = 70;
 
 fn chromosome_limit(region: &Region, ref_map: &HashMap<i32, u8>) -> i32 {
-    GlobalReadOnlyScope::with_instance(|scope| {
-        scope
-            .chr_lengths
-            .get(&region.chr)
-            .copied()
-            .or_else(|| ref_map.keys().copied().max())
-            .unwrap_or(0)
-    })
+    GlobalReadOnlyScope::with_instance(|scope| scope.chr_lengths.get(&region.chr).copied())
+        .or_else(|| ref_map.keys().copied().max())
+        .unwrap_or(0)
 }
 
 /// IUPAC ambiguity code replacements.
@@ -58,10 +53,47 @@ fn iupac_replacement(code: char) -> Option<char> {
 // Cluster B: MSI + validateRefallele
 // ---------------------------------------------------------------------------
 
-/// Ported from: ToVarsBuilder.java:L560-L595
+fn repeated_motif_suffix_len(sequence: &str, motif: &str) -> usize {
+    let sequence = sequence.as_bytes();
+    let motif = motif.as_bytes();
+    let motif_len = motif.len();
+    if motif_len == 0 {
+        return 0;
+    }
+
+    let mut matched = 0usize;
+    while matched + motif_len <= sequence.len() {
+        let start = sequence.len() - matched - motif_len;
+        if &sequence[start..start + motif_len] != motif {
+            break;
+        }
+        matched += motif_len;
+    }
+    matched
+}
+
+fn repeated_motif_prefix_len(sequence: &str, motif: &str) -> usize {
+    let sequence = sequence.as_bytes();
+    let motif = motif.as_bytes();
+    let motif_len = motif.len();
+    if motif_len == 0 {
+        return 0;
+    }
+
+    let mut matched = 0usize;
+    while matched + motif_len <= sequence.len() {
+        if &sequence[matched..matched + motif_len] != motif {
+            break;
+        }
+        matched += motif_len;
+    }
+    matched
+}
+
+/// Ported from: ToVarsBuilder.java:L573-L621
 /// Find microsatellite instability by testing repeat patterns of length 1-6 bases.
 ///
-/// Parity traps addressed: T20 (literal repeat regex semantics), T14 (msint length stored not string)
+/// Parity traps addressed: T20 (repeat matching), T14 (msint length stored not string)
 pub fn find_msi(tseq1: &str, tseq2: &str, left: Option<&str>) -> (f64, i32, String) {
     let mut nmsi: usize = 1;
     let mut maxmsi = String::new();
@@ -70,27 +102,23 @@ pub fn find_msi(tseq1: &str, tseq2: &str, left: Option<&str>) -> (f64, i32, Stri
     while nmsi <= tseq1.len() && nmsi <= 6 {
         let msint_bytes = substr_with_len(tseq1.as_bytes(), -(nmsi as i32), nmsi as i32);
         let msint = String::from_utf8_lossy(&msint_bytes).to_string();
-        let msint_bytes = msint.as_bytes();
 
-        // Java uses /(({msint})+)$/ and keeps group 1 length.
-        let mut msimatch_len = repeated_suffix_len(tseq1.as_bytes(), msint_bytes);
+        // Java regex: ((msint)+)$
+        let mut msimatch_len = repeated_motif_suffix_len(tseq1, &msint);
 
         // If left context is provided and non-empty, try concatenated match
         if let Some(left_str) = left {
             if !left_str.is_empty() {
                 let combined = format!("{}{}", left_str, tseq1);
-                let combined_match_len = repeated_suffix_len(combined.as_bytes(), msint_bytes);
-                if combined_match_len > 0 {
-                    // Overwrites previous match entirely (Java behavior).
-                    msimatch_len = combined_match_len;
-                }
+                // Overwrites previous match entirely (Java behavior)
+                msimatch_len = repeated_motif_suffix_len(&combined, &msint);
             }
         }
 
         let mut curmsi = msimatch_len as f64 / nmsi as f64;
 
-        // Java uses /^(({msint})+)/ and keeps group 1 length.
-        curmsi += repeated_prefix_len(tseq2.as_bytes(), msint_bytes) as f64 / nmsi as f64;
+        // Java regex: ^((msint)+)
+        curmsi += repeated_motif_prefix_len(tseq2, &msint) as f64 / nmsi as f64;
 
         if curmsi > msicnt {
             maxmsi = msint;
@@ -590,31 +618,41 @@ pub fn is_the_same_variation_on_ref(
     insertion_variants: &HashMap<i32, VariationMap>,
     ref_map: &HashMap<i32, u8>,
     conf: &Configuration,
-    scope: &GlobalReadOnlyScope,
+    has_amplicon_based_calling: bool,
 ) -> bool {
-    let Some(ref_base) = ref_map.get(&position) else {
-        return false;
-    };
-
-    let synthetic_insertion = insertion_variants.contains_key(&position);
-    let mut keys = vars_at_cur_position.entries.keys();
-    let only_key_matches_ref = match (keys.next(), keys.next(), synthetic_insertion) {
-        (Some(key), None, false) => key.len() == 1 && key.as_bytes()[0] == *ref_base,
-        // Trap T27: Java adds a synthetic "I" key before checking cardinality.
-        // HashSet dedupes "I" if entries already contains "I", keeping size 1.
-        (Some(key), None, true) => key == "I" && *ref_base == b'I',
-        (None, None, true) => *ref_base == b'I',
-        _ => false,
-    };
-
-    if only_key_matches_ref
-        && !conf.do_pileup
-        && !conf.bam.as_ref().map_or(false, |b| b.has_bam2())
-        && scope.amplicon_based_calling.is_none()
-    {
-        return true;
+    let mut single_key: Option<&str> = None;
+    for key in vars_at_cur_position.entries.keys() {
+        if let Some(existing_key) = single_key {
+            if existing_key != key.as_str() {
+                return false;
+            }
+        } else {
+            single_key = Some(key);
+        }
     }
 
+    // Trap T27: add synthetic "I" key
+    if insertion_variants.contains_key(&position) {
+        if let Some(existing_key) = single_key {
+            if existing_key != "I" {
+                return false;
+            }
+        } else {
+            single_key = Some("I");
+        }
+    }
+    if let Some(only_key) = single_key {
+        if let Some(ref_base) = ref_map.get(&position) {
+            if only_key.len() == 1 && only_key.as_bytes()[0] == *ref_base {
+                if !conf.do_pileup
+                    && !conf.bam.as_ref().map_or(false, |b| b.has_bam2())
+                    && !has_amplicon_based_calling
+                {
+                    return true;
+                }
+            }
+        }
+    }
     false
 }
 
@@ -702,6 +740,7 @@ pub fn collect_reference_variants(
     non_insertion_variants: &HashMap<i32, VariationMap>,
     duprate: f64,
     conf: &Configuration,
+    has_amplicon_based_calling: bool,
 ) {
     let mut reference_forward_coverage: i32 = 0;
     let mut reference_reverse_coverage: i32 = 0;
@@ -764,7 +803,6 @@ pub fn collect_reference_variants(
     }
 
     let mut positions_for_changed_ref_variant: Vec<i32> = Vec::new();
-    let scope = GlobalReadOnlyScope::instance();
     let chr0 = chromosome_limit(region, ref_map);
 
     // Step 9: Non-reference variants exist
@@ -1022,7 +1060,7 @@ pub fn collect_reference_variants(
     if variations_at_pos.reference_variant.is_some()
         && conf.do_pileup
         && (positions_for_changed_ref_variant.contains(&position)
-            || scope.amplicon_based_calling.is_some())
+            || has_amplicon_based_calling)
     {
         let vref = variations_at_pos.reference_variant.as_mut().unwrap();
         update_ref_variant(
@@ -1315,8 +1353,9 @@ pub fn process(
     non_insertion_variants: &mut HashMap<i32, VariationMap>,
     duprate: f64,
 ) -> AlignedVarsData {
-    GlobalReadOnlyScope::with_instance(|scope| {
-        let conf = &scope.conf;
+    let (conf, has_amplicon_based_calling) = GlobalReadOnlyScope::with_instance(|scope| {
+        (scope.conf.clone(), scope.amplicon_based_calling.is_some())
+    });
 
         if conf.y {
             eprintln!(
@@ -1333,22 +1372,22 @@ pub fn process(
         let mut positions: Vec<i32> = non_insertion_variants.keys().copied().collect();
         positions.sort();
 
-        for &position in &positions {
-            // Trap T28: error-and-continue — wrap in closure that can handle errors
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                process_position(
-                    position,
-                    &mut aligned_variants,
-                    ref_map,
-                    ref_coverage,
-                    insertion_variants,
-                    non_insertion_variants,
-                    region,
-                    duprate,
-                    conf,
-                    scope,
-                )
-            }));
+    for &position in &positions {
+        // Trap T28: error-and-continue — wrap in closure that can handle errors
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            process_position(
+                position,
+                &mut aligned_variants,
+                ref_map,
+                ref_coverage,
+                insertion_variants,
+                non_insertion_variants,
+                region,
+                duprate,
+                &conf,
+                has_amplicon_based_calling,
+            )
+        }));
 
             if let Err(e) = result {
                 eprintln!(
@@ -1381,7 +1420,7 @@ fn process_position(
     region: &Region,
     duprate: f64,
     conf: &Configuration,
-    scope: &GlobalReadOnlyScope,
+    has_amplicon_based_calling: bool,
 ) {
     // vars_at_cur_position is an immutable borrow into non_insertion_variants.
     // The borrow must expire BEFORE the create_insertion() call below, which takes
@@ -1417,7 +1456,7 @@ fn process_position(
         insertion_variants,
         ref_map,
         conf,
-        scope,
+        has_amplicon_based_calling,
     ) {
         return;
     }
@@ -1478,7 +1517,7 @@ fn process_position(
     let maxfreq = collect_vars_at_position(aligned_variants, position, &var, ref_map);
 
     // Frequency gate
-    if !conf.do_pileup && maxfreq <= conf.freq && scope.amplicon_based_calling.is_none() {
+    if !conf.do_pileup && maxfreq <= conf.freq && !has_amplicon_based_calling {
         if !conf.bam.as_ref().map_or(false, |b| b.has_bam2()) {
             aligned_variants.remove(&position);
             return;
@@ -1498,6 +1537,7 @@ fn process_position(
         non_insertion_variants,
         duprate,
         conf,
+        has_amplicon_based_calling,
     );
 
     variations_at_pos.var_description_string_to_variants = variations_at_pos
@@ -1518,11 +1558,10 @@ mod tests {
 
     #[test]
     fn test_find_msi_simple_repeat() {
-        // "ATATAT" should detect AT repeat
         let (msi, shift3, msint) = find_msi("ATATAT", "ATATGC", None);
-        assert!(msi > 0.0, "msi should be positive for repeat");
-        assert!(shift3 >= 0);
-        assert!(!msint.is_empty());
+        assert_eq!(msi, 5.0);
+        assert_eq!(shift3, 4);
+        assert_eq!(msint, "AT");
     }
 
     #[test]
@@ -1535,8 +1574,10 @@ mod tests {
 
     #[test]
     fn test_find_msi_with_left_context() {
-        let (msi, _shift3, _msint) = find_msi("AT", "ATATAT", Some("ATATAT"));
-        assert!(msi > 0.0, "msi should be positive with left context");
+        let (msi, shift3, msint) = find_msi("AT", "ATATAT", Some("ATATAT"));
+        assert_eq!(msi, 7.0);
+        assert_eq!(shift3, 6);
+        assert_eq!(msint, "AT");
     }
 
     #[test]
@@ -1544,6 +1585,14 @@ mod tests {
         let (msi, _shift3, msint) = find_msi("AAAA", "AAAACC", None);
         assert!(msi >= 4.0, "msi should detect mono-A repeat");
         assert_eq!(msint, "A");
+    }
+
+    #[test]
+    fn test_repeated_motif_lengths_match_greedy_regex_cases() {
+        assert_eq!(repeated_motif_suffix_len("CCATATAT", "AT"), 6);
+        assert_eq!(repeated_motif_suffix_len("CCATATA", "AT"), 0);
+        assert_eq!(repeated_motif_prefix_len("ATATGC", "AT"), 4);
+        assert_eq!(repeated_motif_prefix_len("TATATG", "AT"), 0);
     }
 
     #[test]

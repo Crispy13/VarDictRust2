@@ -320,12 +320,18 @@ impl RecordPreprocessor {
     /// Core read filter cascade. References `self.current_record`.
     /// Returns `true` if the record should be processed by CigarParser.
     fn preprocess_record(&mut self) -> bool {
-        let instance = GlobalReadOnlyScope::instance();
-        let conf = &instance.conf;
+        let (downsampling, mapping_quality_filter, samfilter_is_nonzero, remove_duplicated_reads) =
+            GlobalReadOnlyScope::with_instance(|scope| {
+                (
+                    scope.conf.downsampling,
+                    scope.conf.mapping_quality,
+                    scope.conf.samfilter != "0",
+                    scope.conf.remove_duplicated_reads,
+                )
+            });
 
         // Step 1 — Downsampling (Java: L132-L134)
-        if conf.is_downsampling() {
-            let threshold = conf.downsampling.unwrap();
+        if let Some(threshold) = downsampling {
             if rand::random::<f64>() <= threshold {
                 return false;
             }
@@ -338,15 +344,17 @@ impl RecordPreprocessor {
         let mapping_quality = self.current_record.mapq();
 
         // Step 3 — Mapping quality filter (Java: L139-L141)
-        if conf.has_mapping_quality() && (mapping_quality as i32) < conf.mapping_quality.unwrap() {
-            return false;
+        if let Some(min_mapping_quality) = mapping_quality_filter {
+            if (mapping_quality as i32) < min_mapping_quality {
+                return false;
+            }
         }
 
         // Step 4 — Secondary alignment filter (Java: L144-L146)
         // Java: record.isSecondaryAlignment() = (flags & 0x100) != 0
         // Java: !instance().conf.samfilter.equals("0") — STRING equality, not numeric
         let is_secondary = (self.current_record.flags() & 0x100) != 0;
-        if is_secondary && conf.samfilter != "0" {
+        if is_secondary && samfilter_is_nonzero {
             return false;
         }
 
@@ -369,7 +377,7 @@ impl RecordPreprocessor {
         };
 
         // Step 8 — Duplicate detection (Java: L156-L181)
-        if conf.remove_duplicated_reads {
+        if remove_duplicated_reads {
             // 1-based alignment start (Java: getAlignmentStart() is 1-based)
             let alignment_start = self.current_record.pos() as i32 + 1;
             // 1-based mate alignment start (Java: getMateAlignmentStart() is 1-based)
