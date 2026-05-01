@@ -143,8 +143,8 @@ pub fn run_pair(tag: &str) {
 }
 
 fn check_somatic_manifest(config: &str, tag: &str) -> Result<BedRootSelection, String> {
-    let manifest_path = Path::new("tmp/sweep_fixtures/manifest.json");
-    let manifest = fs::read_to_string(manifest_path)
+    let manifest_path = super::r2_common::sweep_fixture_root().join("manifest.json");
+    let manifest = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("Failed to read {}: {error}", manifest_path.display()))?;
     let manifest_json: Value = serde_json::from_str(&manifest)
         .map_err(|error| format!("Failed to parse {}: {error}", manifest_path.display()))?;
@@ -224,7 +224,9 @@ fn config_path_segment(config: &str) -> PathBuf {
 }
 
 fn discover_chroms(tag: &str, config: &str) -> io::Result<Vec<String>> {
-    let root = Path::new("tmp/sweep_fixtures/output").join(config_path_segment(config));
+    let root = super::r2_common::sweep_fixture_root()
+        .join("output")
+        .join(config_path_segment(config));
     let mut chroms = Vec::new();
 
     for entry in fs::read_dir(&root)? {
@@ -287,7 +289,8 @@ fn load_tiles_for_chrom(
 }
 
 fn java_tsv_path(tag: &str, chrom: &str, config: &str) -> PathBuf {
-    Path::new("tmp/sweep_fixtures/output")
+    super::r2_common::sweep_fixture_root()
+        .join("output")
         .join(config_path_segment(config))
         .join(chrom)
         .join(format!("{tag}_{chrom}.tsv.zst"))

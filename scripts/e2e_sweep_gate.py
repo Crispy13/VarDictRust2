@@ -23,16 +23,36 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CANONICAL_OUTPUT_ROOT = PROJECT_ROOT / "tmp" / "sweep_fixtures" / "output"
-CANONICAL_MANIFEST = PROJECT_ROOT / "tmp" / "sweep_fixtures" / "manifest.json"
-LOCK_FILE = PROJECT_ROOT / "tmp" / "sweep_fixtures" / ".manifest.lock"
-MANIFEST_SNAPSHOT = PROJECT_ROOT / "tmp" / "sweep_fixtures" / ".manifest.cache_entries.before.json"
+
+
+def _resolve_fixture_root() -> Path:
+    """Resolve the sweep fixture root.
+
+    Honors ``VARDICT_E2E_SWEEP_FIXTURE_ROOT``; falls back to ``tmp/sweep_fixtures`` so
+    default CI behavior is byte-identical when the env var is unset. Relative values
+    resolve under :data:`PROJECT_ROOT`.
+    """
+
+    raw = os.environ.get("VARDICT_E2E_SWEEP_FIXTURE_ROOT")
+    if raw is None or not raw.strip():
+        return PROJECT_ROOT / "tmp" / "sweep_fixtures"
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate
+
+
+CANONICAL_FIXTURE_ROOT = _resolve_fixture_root()
+CANONICAL_OUTPUT_ROOT = CANONICAL_FIXTURE_ROOT / "output"
+CANONICAL_MANIFEST = CANONICAL_FIXTURE_ROOT / "manifest.json"
+LOCK_FILE = CANONICAL_FIXTURE_ROOT / ".manifest.lock"
+MANIFEST_SNAPSHOT = CANONICAL_FIXTURE_ROOT / ".manifest.cache_entries.before.json"
 PARITY_ITERATION_DIR = PROJECT_ROOT / "tmp" / "parity-iteration"
 FAILURE_REPORT = PARITY_ITERATION_DIR / "parity-failure-report.json"
 LAST_PASS = PARITY_ITERATION_DIR / "last-pass.json"
 PRESETS_TSV = PROJECT_ROOT / "scripts" / "config_presets.tsv"
 DEFAULT_TAGS = ("hg002", "na12878_exome", "na12878_lowcov")
-MERGE_PRESERVE_WORK = PROJECT_ROOT / "tmp" / "sweep_fixtures" / ".manifest.cache_entries.gate_working.json"
+MERGE_PRESERVE_WORK = CANONICAL_FIXTURE_ROOT / ".manifest.cache_entries.gate_working.json"
 RUNNING_TESTS_RE = re.compile(r"running (\d+) tests?")
 
 
@@ -58,7 +78,10 @@ def build_parser() -> argparse.ArgumentParser:
             "refuses extra BED chroms unless --allow-extra-beds is set. When --chrom "
             "is exactly '1', the gate refuses to run if --sweep-bed-root/<tag>/ "
             "contains BED files for non-chr1 chromosomes. Set "
-            "VARDICT_E2E_SWEEP_ALLOW_MULTI_CHROM=1 to bypass with a stderr warning."
+            "VARDICT_E2E_SWEEP_ALLOW_MULTI_CHROM=1 to bypass with a stderr warning. "
+            "Fixture root precedence: --fixture-source (CLI, used as the staging "
+            "source) > VARDICT_E2E_SWEEP_FIXTURE_ROOT (env, used as the canonical "
+            "staging destination + manifest location) > default tmp/sweep_fixtures."
         ),
     )
     preset_group = parser.add_mutually_exclusive_group()
@@ -97,6 +120,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true", help="Print the resolved matrix and planned actions, then exit.")
     parser.add_argument("--unstage", action="store_true", help="Remove previously staged symlinks and restore manifest cache_entries.")
+    parser.add_argument(
+        "--manifest-only",
+        action="store_true",
+        help=(
+            "Skip symlink staging and provenance checks; only run the manifest "
+            "cache_entries merge step against existing fixtures already laid out under "
+            "the canonical fixture root (VARDICT_E2E_SWEEP_FIXTURE_ROOT/output)."
+        ),
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -147,8 +179,13 @@ def load_all_presets(tsv_path: Path) -> list[str]:
 def normalize_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> argparse.Namespace:
     args.tag = list(args.tag or ["hg002"])
     args.chrom = [str(chrom) for chrom in (args.chrom or ["1"])]
+    if args.unstage and args.manifest_only:
+        parser.error("--unstage and --manifest-only are mutually exclusive")
     if args.fixture_source:
         args.fixture_source = Path(args.fixture_source).expanduser().resolve()
+    elif args.manifest_only:
+        # --manifest-only operates against the canonical fixture root; no source needed.
+        pass
     elif not args.unstage:
         parser.error("--fixture-source is required unless --unstage is the only mode")
     elif not MANIFEST_SNAPSHOT.exists():
@@ -518,6 +555,40 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> N
         print(f"merged manifest cache_entries for {preset}: {','.join(tags)}")
 
 
+def run_manifest_only(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> None:
+    """Refresh manifest cache_entries against existing fixtures already on disk.
+
+    Skips symlink staging entirely. Used when the canonical fixture root
+    (``VARDICT_E2E_SWEEP_FIXTURE_ROOT`` or default) already contains a populated
+    ``output/`` tree but is missing or has stale ``manifest.json`` cache_entries.
+    """
+
+    validate_bed_scope(args, matrix)
+    snapshot_cache_entries()
+
+    for preset, tags in grouped_tags_by_preset(matrix).items():
+        preserve_path = prepare_merge_preserve_file()
+        logical_flags = (
+            f"--output-only --config {preset} --tags {','.join(tags)} "
+            f"--sweep-bed-root {args.sweep_bed_root}"
+        )
+        merge_cache_entries(
+            config_name=preset,
+            tags_csv=",".join(tags),
+            logical_flags=logical_flags,
+            project_root=PROJECT_ROOT,
+            sweep_bed_root=args.sweep_bed_root,
+            preserve_path=preserve_path,
+            manifest_only=True,
+            fixture_output_root=CANONICAL_OUTPUT_ROOT,
+        )
+        print(f"merged manifest cache_entries for {preset}: {','.join(tags)}")
+    print(
+        f"--manifest-only complete: refreshed cache_entries for "
+        f"{len(grouped_tags_by_preset(matrix))} preset(s) under {CANONICAL_FIXTURE_ROOT}"
+    )
+
+
 def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> None:
     live_commit = live_vardictjava_commit()
     grouped_tags = grouped_tags_by_preset(matrix)
@@ -747,6 +818,9 @@ def main(argv: list[str] | None = None) -> int:
     with manifest_lock():
         if args.unstage:
             return run_unstage(args, matrix)
+        if args.manifest_only:
+            run_manifest_only(args, matrix)
+            return 0
         run_stage(args, matrix)
         run_provenance_check(args, matrix)
         return run_tests_and_report(args, matrix)

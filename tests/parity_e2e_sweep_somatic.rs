@@ -1,15 +1,19 @@
 //! Full-BAM somatic end-to-end parity harness against cached Java TSV shards.
 //!
 //! This binary mirrors the R2 sweep aggregator for tumor/normal SomaticMode runs and compares
-//! Rust output against cached Java TSV under `tmp/sweep_fixtures/output/` using a per-tile
-//! multiset compare.
+//! Rust output against cached Java TSV under the configured fixture root (default
+//! `tmp/sweep_fixtures/output/`; override the parent with the
+//! `VARDICT_E2E_SWEEP_FIXTURE_ROOT` environment variable) using a per-tile multiset compare.
 //!
 //! Prerequisites:
-//! - `tmp/sweep_fixtures/output/` must contain somatic cache shards and `manifest.json`.
+//! - The fixture root (default `tmp/sweep_fixtures/`, override via
+//!   `VARDICT_E2E_SWEEP_FIXTURE_ROOT`) must contain `output/` with somatic cache shards and
+//!   `manifest.json`.
 //! - The somatic cache is generated against `testdata/GRCh38.d1.vd1.fa`.
 //! - Sample naming follows Java's SAMPLE_PATTERN2 applied to the raw `-b tumor|normal` string.
 //!
 //! Environment:
+//! - `VARDICT_E2E_SWEEP_FIXTURE_ROOT=<path>` overrides the fixture-root parent (default `tmp/sweep_fixtures`).
 //! - `VARDICT_E2E_SWEEP_SOMATIC_CONFIG=<name>` selects the cache layout; defaults to `default`.
 //! - `VARDICT_E2E_SWEEP_SHARD=i/N` optionally runs only one shard of the tile set.
 //! - `VARDICT_E2E_SWEEP_BED_ROOT=<path>` optionally overrides sweep BED root discovery.

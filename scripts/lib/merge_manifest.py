@@ -67,12 +67,29 @@ def _discover_bed_paths(project_root: Path, sweep_bed_root: Path, tag: str) -> l
     return sorted(Path(path) for path in glob.glob(str(project_root / sweep_bed_root / tag / "*.bed")))
 
 
+def _fixture_root(project_root: Path) -> Path:
+    """Resolve the sweep fixture root.
+
+    Honors ``VARDICT_E2E_SWEEP_FIXTURE_ROOT``; falls back to ``tmp/sweep_fixtures`` so
+    default behavior is byte-identical when the env var is unset. Relative values
+    resolve under ``project_root``.
+    """
+
+    raw = os.environ.get("VARDICT_E2E_SWEEP_FIXTURE_ROOT")
+    if raw is None or not raw.strip():
+        return project_root / "tmp/sweep_fixtures"
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = project_root / candidate
+    return candidate
+
+
 def _default_manifest_path(project_root: Path) -> Path:
-    return project_root / "tmp/sweep_fixtures/manifest.json"
+    return _fixture_root(project_root) / "manifest.json"
 
 
 def _default_preserve_path(project_root: Path) -> Path:
-    return project_root / "tmp/sweep_fixtures/.manifest.cache_entries.before.json"
+    return _fixture_root(project_root) / ".manifest.cache_entries.before.json"
 
 
 def _resolve_manifest_path(project_root: Path, manifest_path: Path | str | None) -> Path:
@@ -186,7 +203,7 @@ def _validate_manifest_only_fixtures(
     fixture_output_root: Path | str | None,
 ) -> None:
     if fixture_output_root is None:
-        fixture_output_root = project_root / "tmp/sweep_fixtures/output"
+        fixture_output_root = _fixture_root(project_root) / "output"
     else:
         fixture_output_root = Path(fixture_output_root)
         if not fixture_output_root.is_absolute():

@@ -1,11 +1,14 @@
 //! Full-BAM end-to-end parity harness against cached Java TSV shards.
 //!
 //! This module streams large BAM-backed regions in chunked tile windows, dispatches by BAM tag,
-//! and compares Rust output against the pre-generated Java cache under
-//! `tmp/sweep_fixtures/output/`.
+//! and compares Rust output against the pre-generated Java cache under the configured fixture
+//! root (default `tmp/sweep_fixtures/output/`; override with the
+//! `VARDICT_E2E_SWEEP_FIXTURE_ROOT` environment variable).
 //!
 //! Prerequisites:
-//! - `tmp/sweep_fixtures/output/` must exist and contain a valid `manifest.json`.
+//! - The fixture root (default `tmp/sweep_fixtures/`, override via
+//!   `VARDICT_E2E_SWEEP_FIXTURE_ROOT`) must exist and contain `output/` plus a valid
+//!   `manifest.json`.
 //! - Regenerate the cache with `bash scripts/gen_e2e_sweep_golden.sh` when fixtures are missing
 //!   or stale.
 //!
@@ -71,6 +74,16 @@ fn sweep_bed_root() -> PathBuf {
     } else {
         PathBuf::from("tmp/sweep_beds")
     }
+}
+
+/// Root directory for sweep fixtures (manifest + per-config output trees).
+///
+/// Honors `VARDICT_E2E_SWEEP_FIXTURE_ROOT`; falls back to `tmp/sweep_fixtures` so default
+/// CI behavior is byte-identical when the env var is unset.
+pub(crate) fn sweep_fixture_root() -> PathBuf {
+    std::env::var("VARDICT_E2E_SWEEP_FIXTURE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("tmp/sweep_fixtures"))
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -372,8 +385,8 @@ fn config_path_segment(config: &str) -> String {
 }
 
 fn check_e2e_sweep_manifest(config: &str, tag: &str) -> Result<(), String> {
-    let manifest_path = Path::new("tmp/sweep_fixtures/manifest.json");
-    let manifest = fs::read_to_string(manifest_path)
+    let manifest_path = sweep_fixture_root().join("manifest.json");
+    let manifest = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("Failed to read {}: {error}", manifest_path.display()))?;
     let manifest_json: Value = serde_json::from_str(&manifest)
         .map_err(|error| format!("Failed to parse {}: {error}", manifest_path.display()))?;
@@ -520,7 +533,8 @@ fn load_tiles_for_chrom(tag: &str, chrom: &str) -> io::Result<Vec<TileKey>> {
 }
 
 fn java_tsv_path(tag: &str, chrom: &str, config: &str) -> PathBuf {
-    Path::new("tmp/sweep_fixtures/output")
+    sweep_fixture_root()
+        .join("output")
         .join(config_path_segment(config))
         .join(chrom)
         .join(format!("{tag}_{chrom}.tsv.zst"))
