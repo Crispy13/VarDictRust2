@@ -141,6 +141,25 @@ cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e
 
 All tests must pass, including the new regression test.
 
+### Step 2b: Config-e2e failing-test re-run
+
+Use this step when `mismatch-repair` is reached through `config-e2e-diagnosis` Phase 4: the diagnosed mismatch came from a chr1 sweep or cell-binary failure, not from a per-module shard. See `config-e2e-diagnosis` Phase 3 for the fixture-generation procedure; this step is the canonical post-fix execution point for that failing test.
+
+- **Test name pattern:** `parity_{module}_config_{config_slug}_{region_safe}` (for example, `parity_cigar_parser_config_t1_01_1_2324084_2324612`).
+- **Fixture path:** `testdata/fixtures/{module}/{module}_{config_slug}_{region_safe}.jsonl.zst`.
+- **Loader functions:** use `golden_fixture_path_with_config` and `load_golden_data_with_config` from `tests/common/mod.rs`; derive the config slug through `config_name_to_slug`, not by hand.
+- **Harness:** `config-e2e-diagnosis` Phase 3 adds the test to `tests/parity_suite/{module}.rs`, which is mounted by `tests/parity_suite.rs` under the `{module}` module. If the failing test was deliberately added to a different harness, cite that harness file path and its test discovery convention before using an alternative command.
+- **Validation command:**
+   ```bash
+   source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate rust_build_env && export LIBCLANG_PATH="$CONDA_PREFIX/lib"
+   cargo test --profile debug-release --test parity_suite \
+      {module}::parity_{module}_config_{config_slug}_{region_safe} -- --exact
+   ```
+- **Pass criteria:** the test exits 0 with no parity diff; continue with the remaining Phase 3 verification steps.
+- **Fail criteria:** the test still fails, or it fails on a new field. Treat that as a back-edge, not a forward-edge: loop back to **`mismatch-repair` Phase 1** (Root-Cause Localization) with the new observed divergence.
+
+This step extends Phase 3; it does not replace the regression-test, full-test, shard re-run, or new-mismatch checks below.
+
 ### Step 3: Re-run the affected parity shard
 
 Clear stale Rust cache first:

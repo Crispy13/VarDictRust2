@@ -58,8 +58,29 @@ pub fn load_region_config() -> Vec<(String, PathBuf, PathBuf)> {
 
 #[allow(dead_code)]
 pub fn golden_fixture_path(module: &str, region: &str) -> PathBuf {
-    let safe_region = region.replace(':', "_").replace('-', "_");
-    let filename = format!("{module}_{safe_region}.jsonl.zst");
+    golden_fixture_path_with_config(module, None, region)
+}
+
+/// Build a golden fixture path with an optional config slug segment.
+///
+/// When present, `config_slug` is normalized to lowercase ASCII and `-` becomes
+/// `_`, mirroring the existing `safe_region` filesystem treatment before the
+/// filename is rendered as `{module}_{safe_slug}_{safe_region}.jsonl.zst`.
+#[allow(dead_code)]
+pub fn golden_fixture_path_with_config(
+    module: &str,
+    config_slug: Option<&str>,
+    region: &str,
+) -> PathBuf {
+    let safe_region = safe_region_name(region);
+    let filename = match config_slug {
+        Some(slug) => {
+            let safe_slug = config_name_to_slug(slug);
+            format!("{module}_{safe_slug}_{safe_region}.jsonl.zst")
+        }
+        None => format!("{module}_{safe_region}.jsonl.zst"),
+    };
+
     PathBuf::from("testdata/fixtures")
         .join(module)
         .join(filename)
@@ -67,7 +88,16 @@ pub fn golden_fixture_path(module: &str, region: &str) -> PathBuf {
 
 #[allow(dead_code)]
 pub fn load_golden_data(module: &str, region: &str) -> String {
-    let path = golden_fixture_path(module, region);
+    load_golden_data_with_config(module, None, region)
+}
+
+#[allow(dead_code)]
+pub fn load_golden_data_with_config(
+    module: &str,
+    config_slug: Option<&str>,
+    region: &str,
+) -> String {
+    let path = golden_fixture_path_with_config(module, config_slug, region);
     let file = File::open(&path)
         .unwrap_or_else(|error| panic!("Failed to open {}: {error}", path.display()));
     let mut decoder = zstd::stream::read::Decoder::new(file)

@@ -104,7 +104,7 @@ Shell scripts: `aa_gate.sh`, `batch_fixtures.sh`, `bisect_parity.sh`,
 `gen_sweep_bed.sh`, `parity_status.sh`, `sample_regions.sh`, `sweep_aa_check.sh`,
 `sweep_fixtures.sh`
 
-Python scripts: `dual_run.py`, `e2e_sweep_gate.py`, `extract_fixture.py`, `pilot_generate.py`,
+Python scripts: `dual_run.py`, `e2e_sweep_gate.py`, `pilot_generate.py`,
 `sample_regions.py`, `sweep_fixtures_parallel.py`, `sweep_generate_v2.py`
 
 Library modules: `lib/merge_manifest.py`

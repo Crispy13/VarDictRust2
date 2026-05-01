@@ -55,7 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Chrom scoping is enforced through --sweep-bed-root/<tag>/*.bed. The gate "
-            "refuses extra BED chroms unless --allow-extra-beds is set."
+            "refuses extra BED chroms unless --allow-extra-beds is set. When --chrom "
+            "is exactly '1', the gate refuses to run if --sweep-bed-root/<tag>/ "
+            "contains BED files for non-chr1 chromosomes. Set "
+            "VARDICT_E2E_SWEEP_ALLOW_MULTI_CHROM=1 to bypass with a stderr warning."
         ),
     )
     preset_group = parser.add_mutually_exclusive_group()
@@ -358,6 +361,48 @@ def ensure_fixture_source(args: argparse.Namespace) -> Path:
     if not args.fixture_source.is_dir():
         raise SystemExit(f"ERROR: fixture source is not a directory: {args.fixture_source}")
     return args.fixture_source
+
+
+def truncate_guard_items(items: list[str]) -> str:
+    limit = 5
+    if len(items) <= limit:
+        return ", ".join(items)
+    return f"{', '.join(items[:limit])} (and {len(items) - limit} more)"
+
+
+def enforce_chr1_scope_guard(args: argparse.Namespace) -> None:
+    if args.chrom != ["1"]:
+        return
+
+    extra_stems: set[str] = set()
+    extra_paths: list[str] = []
+    for tag in args.tag:
+        for path in (args.sweep_bed_root / tag).glob("*.bed"):
+            if path.stem in {"1", "chr1"}:
+                continue
+            extra_stems.add(path.stem)
+            extra_paths.append(str(path.resolve()))
+
+    if not extra_paths:
+        return
+
+    stems_summary = truncate_guard_items(sorted(extra_stems))
+    paths_summary = truncate_guard_items(sorted(extra_paths))
+    if os.environ.get("VARDICT_E2E_SWEEP_ALLOW_MULTI_CHROM") == "1":
+        print(
+            "WARNING: VARDICT_E2E_SWEEP_ALLOW_MULTI_CHROM=1 set \u2014 running --chrom 1 "
+            f"against multi-chrom BED root {args.sweep_bed_root} "
+            f"(extra chroms: {stems_summary}); compute will exceed chr1 budget",
+            file=sys.stderr,
+        )
+        return
+
+    raise SystemExit(
+        "ERROR: --chrom 1 was requested but --sweep-bed-root "
+        f"{args.sweep_bed_root} contains BED files for non-chr1 chromosomes: {stems_summary} "
+        f"(full paths: {paths_summary}); set VARDICT_E2E_SWEEP_ALLOW_MULTI_CHROM=1 to bypass, "
+        "or point --sweep-bed-root at a chr1-only tree such as tmp/sweep_beds_chr1only."
+    )
 
 
 def validate_bed_scope(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> None:
@@ -692,6 +737,7 @@ def run_unstage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) ->
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = normalize_args(parser.parse_args(argv), parser)
+    enforce_chr1_scope_guard(args)
     matrix = resolve_matrix(args)
     print_matrix(matrix)
     if args.dry_run and not args.unstage:

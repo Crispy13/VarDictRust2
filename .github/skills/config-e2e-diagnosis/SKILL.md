@@ -17,6 +17,10 @@ description: >
 ## Prerequisites
 - All 6 modules have passed per-module Tier 1 + Tier 2 gates
 - Sweep BED root is populated for the active tag (for hg002 chr1 runs: `tmp/sweep_beds_chr1only`)
+
+### chr1 BED-Root Guard
+`scripts/e2e_sweep_gate.py` enforces a hard guard when `--chrom 1` is the only chrom requested: if `--sweep-bed-root/<tag>/` contains BED files for chromosomes other than `1`, the gate exits non-zero. Set `VARDICT_E2E_SWEEP_ALLOW_MULTI_CHROM=1` to bypass (a stderr warning is printed). Use `tmp/sweep_beds_chr1only` for chr1 runs to avoid tripping the guard.
+
 - Sweep fixtures are populated under `tmp/sweep_fixtures/output/<preset>/<chrom>/<tag>_<chrom>.tsv.zst`; regenerate one preset at a time with:
 
 ```bash
@@ -134,7 +138,10 @@ The script sets `VARDICT_PARITY_{MODULE}` env vars for both Java and Rust, captu
 
 Supported by `dual_run.py`: `cigar_parser`, `realigner`, `sv_processor`, `tovars`.
 
-Rust-side ready, manual fallback required until `dual_run.py` support lands: `sam_file_parser`, `cigar_modifier`.
+### Modules without dual-run JSONL coverage
+`sam_file_parser` and `cigar_modifier` are not dual-run comparable yet. Stage 6 F3 verified that Java honors `VARDICT_PARITY_SAM_FILE_PARSER` and `VARDICT_PARITY_CIGAR_MODIFIER` and writes JSONL, but the Java payload schemas do not mirror the Rust snapshot payloads, so `dual_run.py` must keep these modules outside `--debug-modules` until the schemas are aligned.
+
+Implication: if the first divergent stage appears to be `sam_file_parser` or `cigar_modifier`, do not report a clean dual-run module diff. Use the per-module parity suites and the manual raw-intermediate fallback below, and label any schema-normalized comparison as manual evidence rather than `dual_run.py` coverage.
 
 ### Sequential Diagnosis Order (reference)
 Use this order when narrowing the first divergent stage:
@@ -146,17 +153,19 @@ Use this order when narrowing the first divergent stage:
 6. `parity_suite tovars::` / `parity_sweep_suite tovars_sweep::`
 
 ### Secondary Method: Manual `VARDICT_PARITY_{MODULE}` fallback
-For `sam_file_parser` and `cigar_modifier`, use the same failing region and config but set the module env var manually because Rust supports these debug snapshots even though `dual_run.py` still marks them deferred:
+For `sam_file_parser` and `cigar_modifier`, use the same failing region and config but set the module env var manually to a controlled output directory because Rust and Java can emit raw snapshots even though `dual_run.py` cannot compare them directly yet:
 
 ```bash
-VARDICT_PARITY_SAM_FILE_PARSER=1 VARDICT_IMPL=rust cargo test \
+VARDICT_PARITY_SAM_FILE_PARSER=./tmp/manual-sam-file-parser-rust \
+VARDICT_IMPL=rust cargo test \
    --profile debug-release --test parity_sweep_suite sam_file_parser_sweep:: -- --nocapture --test-threads=1
 
-VARDICT_PARITY_CIGAR_MODIFIER=1 VARDICT_IMPL=rust cargo test \
+VARDICT_PARITY_CIGAR_MODIFIER=./tmp/manual-cigar-modifier-rust \
+VARDICT_IMPL=rust cargo test \
    --profile debug-release --test parity_sweep_suite cigar_modifier_sweep:: -- --nocapture --test-threads=1
 ```
 
-Mirror the same `VARDICT_PARITY_{MODULE}` variable on the Java side when comparing raw intermediates outside the Rust test harness.
+Mirror the same `VARDICT_PARITY_{MODULE}=./tmp/...` variable on the Java side when comparing raw intermediates outside the Rust test harness, then account for the current schema mismatch explicitly.
 
 ### Outputs
 - Identified root-cause module name
@@ -165,30 +174,39 @@ Mirror the same `VARDICT_PARITY_{MODULE}` variable on the Java side when compari
 
 ## Phase 3: Create Failing Test
 
-### Goal
-Create a reproducible failing test that targets the identified module with the specific config+region.
+**Canonical execution venue:** When this skill identifies a failing test for a config-specific mismatch, the test is executed and verified inside `mismatch-repair` Phase 3. This skill provides the diagnosis surface; `mismatch-repair` provides the verification loop.
 
-### Procedure
-1. Extract or generate a fixture for the failing (module, config, region) combination.
-2. Add the fixture to `testdata/fixtures/{module}/` with a config-specific name.
-3. Add a `#[test]` to the module's existing parity test file (e.g., `tests/parity_suite/{module}.rs`):
-   ```rust
-   #[test]
-   fn parity_{module}_config_{config_name}_{region_safe}() {
-       // Load fixture with config applied
-       // Assert byte-identical output to Java golden
-   }
-   ```
-4. Confirm the test FAILS before any fix (red-green cycle).
+### Goal
+Create a reproducible failing test that targets the identified module with the specific config+region. The fixture path and loader call must follow the canonical convention defined in `tests/common/mod.rs` (`golden_fixture_path_with_config` / `load_golden_data_with_config`) so the same helpers serve both the bare-region per-module suite and the new config-scoped tests.
 
 ### Naming Convention
-- Fixture: `testdata/fixtures/{module}/{config_name}_{region_safe}.jsonl`
-- Test function: `parity_{module}_config_{config_name}_{short_region_id}`
+- **Config slug** — produced by `config_name_to_slug` in `tests/common/mod.rs`: lowercase ASCII, with `-` mapped to `_` (e.g. `T1-01` → `t1_01`, `CM-amplicon` → `cm_amplicon`). Always derive the slug through this helper; never hand-roll it.
+- **Region slug** — produced by `safe_region_name` in `tests/common/mod.rs` (e.g. `1:2324084-2324612` → `1_2324084_2324612`).
+- **Fixture path** — `testdata/fixtures/{module}/{module}_{config_slug}_{region_safe}.jsonl.zst` (zstd-compressed JSONL, matching the bare-region layout already used by every per-module parity harness).
+- **Test function** — `parity_{module}_config_{config_slug}_{region_safe}` (suite-prefixed inside the module's file under `tests/parity_suite/`).
+
+### Procedure
+1. Generate the fixture for the failing `(module, config, region)` triple. Use the same generator the per-module suite already uses (e.g. `scripts/batch_fixtures.sh` or the module-specific `scripts/gen_*_golden*` driver), pointing it at the failing config preset and region. Place the output at the canonical path above; do **not** invent a parallel directory layout.
+2. Confirm the file lands at exactly `testdata/fixtures/{module}/{module}_{config_slug}_{region_safe}.jsonl.zst` — file existence is the first thing the loader checks.
+3. Add a `#[test]` to the module's existing parity test file (e.g. `tests/parity_suite/{module}.rs`) using the canonical loader:
+   ```rust
+   use crate::common::{golden_fixture_path_with_config, load_golden_data_with_config};
+
+   #[test]
+   fn parity_{module}_config_{config_slug}_{region_safe}() {
+       let region = "1:2324084-2324612";          // failing region from Phase 2
+       let config_slug = "T1-01";                  // failing preset from Phase 1 (raw name; helper slugifies)
+       let golden = load_golden_data_with_config("{module}", Some(config_slug), region);
+       // Drive the module under the matching config and assert byte-identical output to `golden`.
+   }
+   ```
+   The helper accepts the raw preset name (e.g. `"T1-01"`) and applies `config_name_to_slug` internally; do not pre-slugify at the call site.
+4. Run the test once and confirm it FAILS with the same divergence Phase 2 identified (red-green cycle). A fixture-not-found panic from `load_golden_data_with_config` indicates the path or slug is wrong — recheck step 2 before proceeding.
 
 ### Outputs
-- Path to new fixture file
-- Path to test file and function name
-- Confirmation test fails with expected mismatch
+- Canonical fixture path: `testdata/fixtures/{module}/{module}_{config_slug}_{region_safe}.jsonl.zst`
+- Test file and function name (matching the canonical pattern)
+- Confirmation that the test fails with the expected mismatch (not with a missing-fixture or path-mismatch error)
 
 ## Phase 4: Fix (mismatch-repair)
 
@@ -200,9 +218,9 @@ Fix the Rust module to match Java behavior for the identified config+region.
 2. Dispatch Port Engineer with `mismatch-repair` skill:
    - Input: diagnosis report from Phase 2 + shard-diagnosis output
    - Constraint: in-place repair, no adapter patterns
-   - Gate: the Phase 3 failing test must pass after the fix
+   - Gate: the Phase 3 failing test must pass inside `mismatch-repair` Phase 3 after the fix
 3. Port Engineer implements the fix.
-4. Run Phase 3 test — must pass.
+4. Run the Phase 3 test inside `mismatch-repair` Phase 3 — must pass.
 
 ### Agent Routing
 - **Parity Verifier** runs shard-diagnosis
@@ -215,7 +233,7 @@ Fix the Rust module to match Java behavior for the identified config+region.
 Confirm the fix resolves the original failure without introducing regressions.
 
 ### Procedure
-1. Run the Phase 3 test — must PASS.
+1. Run the Phase 3 test inside `mismatch-repair` Phase 3 — must PASS.
 2. Run the full module sweep test — must PASS (no regression):
    ```bash
    cargo test --profile debug-release --test parity_sweep_suite {module}_sweep:: -- --include-ignored --nocapture --test-threads=1
@@ -255,7 +273,7 @@ The loop terminates when:
 |-------|------|
 | tiered-config-test | Expand nightly/sweep coverage and tier promotion across the 44-config matrix |
 | shard-diagnosis | Phase 4: field-level diagnosis within identified module |
-| mismatch-repair | Phase 4: fix methodology for Port Engineer |
+| mismatch-repair | Phase 4: fix methodology for Port Engineer; Phase 3: canonical verification loop for the failing config-e2e test |
 | module-parity-test | Phase 5: per-module regression check |
 
 ## Agent Responsibilities
