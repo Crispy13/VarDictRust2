@@ -172,6 +172,9 @@ Mirror the same `VARDICT_PARITY_{MODULE}=./tmp/...` variable on the Java side wh
 - Specific fixture/shard where divergence occurs
 - Brief description of the divergence (field, Java value, Rust value)
 
+### Rubberduck Checkpoint
+Before moving from Phase 2 isolation into Phase 3 or Phase 4, run `rubberduck-review` in `plan` mode on the isolation result when the module attribution depends on partial evidence, manual fallback output, or an expensive rerun plan. The review should challenge whether the isolated module, failing region, and proposed next step are actually the right targets. Resolve any concrete concerns before creating the failing test or entering the fix loop.
+
 ## Phase 3: Create Failing Test
 
 **Canonical execution venue:** When this skill identifies a failing test for a config-specific mismatch, the test is executed and verified inside `mismatch-repair` Phase 3. This skill provides the diagnosis surface; `mismatch-repair` provides the verification loop.
@@ -275,6 +278,7 @@ The loop terminates when:
 | shard-diagnosis | Phase 4: field-level diagnosis within identified module |
 | mismatch-repair | Phase 4: fix methodology for Port Engineer; Phase 3: canonical verification loop for the failing config-e2e test |
 | module-parity-test | Phase 5: per-module regression check |
+| rubberduck-review | Optional checkpoint after Phase 2 isolation to challenge module attribution and rerun scope before entering the fix loop |
 
 ## Agent Responsibilities
 | Agent | Phases |

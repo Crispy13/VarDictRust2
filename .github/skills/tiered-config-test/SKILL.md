@@ -53,6 +53,9 @@ Gate process:
 4. Fix the root cause, rebuild, and re-run the tier.
 5. Promote only after the tier meets its pass threshold.
 
+### Rubberduck Checkpoint
+Before any expensive rerun or promotion step above Tier `1`, run `rubberduck-review` in `tests` mode on the failing-tier summary, planned rerun scope, and cache-clearing plan when the next run is costly or the failure pattern is ambiguous. Use the review to challenge the preset choice, the rerun breadth, and whether a cheaper confirming run should happen first. Resolve concrete concerns before spending the broader tier budget.
+
 ## Promotion Procedure
 
 1. Discover the active harness path in the workspace and confirm it supports the requested preset.

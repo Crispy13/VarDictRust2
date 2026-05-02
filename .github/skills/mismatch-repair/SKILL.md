@@ -71,6 +71,9 @@ Produce a concise statement like:
 
 This statement guides Phase 2. If you can't write a clear divergence statement, you haven't found the root cause yet — keep tracing.
 
+### Rubberduck Checkpoint
+At the end of Phase 1, before touching code, run `rubberduck-review` in `plan` mode on the divergence statement and proposed repair direction when the mismatch sits on a hot path, the control flow is subtle, or the intended fix feels more like a compensation than a root-cause repair. Use the review to challenge whether the identified divergence point is truly the earliest causal break and whether the planned fix violates the anti-adapter rule.
+
 ## Phase 2: In-Place Repair
 
 ### Hard Rules
@@ -206,3 +209,4 @@ shard-diagnosis ──→ mismatch-repair ──→ tiered-config-test
 - **module-parity-test**: Parallel. Used for module-level golden fixture testing during initial porting. This skill is for fixing mismatches found during shard-level parity sweeps.
 - **tiered-config-test**: Downstream. Used after repair to verify no regression across configs.
 - **change-impact-review**: Optional gate for hot-path modules.
+- **rubberduck-review**: Optional checkpoint after Phase 1 to critique the divergence statement and proposed repair before implementation.
