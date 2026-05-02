@@ -16,4 +16,4 @@ fi
 set -u
 export LIBCLANG_PATH="${CONDA_PREFIX}/lib"
 
-exec python3 -m scripts.e2e_sweep_gate "$@"
+exec python3 -u -m scripts.e2e_sweep_gate "$@"

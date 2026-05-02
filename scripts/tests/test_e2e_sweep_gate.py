@@ -5,12 +5,18 @@ Discovered by pytest if pytest is installed.
 """
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
+
+from scripts import e2e_sweep_gate
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -31,6 +37,95 @@ def _run(args: list[str], env: dict[str, str] | None = None) -> subprocess.Compl
 
 
 class GateSmokeTest(unittest.TestCase):
+    def test_progress_log_captures_status_and_warning_lines(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
+            args = mock.Mock(report_dir=Path(report_dir))
+
+            with e2e_sweep_gate.progress_log(args):
+                e2e_sweep_gate.emit_status("tests", event="pair-start", active="T1-01/hg002")
+                e2e_sweep_gate.emit_warning_summary(
+                    "provenance",
+                    {"missing_chunks": 2},
+                    samples=["T1-01/hg002/chr1"],
+                )
+
+            progress_lines = (Path(report_dir) / "progress.log").read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(progress_lines[0], "STATUS phase=tests event=pair-start active=T1-01/hg002 elapsed=00:00:00")
+        self.assertIn("WARNING phase=provenance elapsed=00:00:00 warnings=2", progress_lines[1])
+
+    def test_format_status_line_includes_progress_fields(self) -> None:
+        with mock.patch("scripts.e2e_sweep_gate.time.monotonic", return_value=3661.0):
+            line = e2e_sweep_gate.format_status_line(
+                "tests",
+                started_at=1.0,
+                completed=3,
+                total=44,
+                active="T1-01/hg002",
+                event="pair-pass",
+                detail="warnings=0",
+            )
+
+        self.assertIn("STATUS phase=tests", line)
+        self.assertIn("event=pair-pass", line)
+        self.assertIn("progress=3/44", line)
+        self.assertIn("active=T1-01/hg002", line)
+        self.assertIn("elapsed=01:01:00", line)
+        self.assertIn("warnings=0", line)
+
+    def test_run_streaming_subprocess_returns_stdout_and_stderr(self) -> None:
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        command = [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "print('alpha'); "
+                "print('beta', file=sys.stderr); "
+                "print('gamma')"
+            ),
+        ]
+
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            result = e2e_sweep_gate.run_streaming_subprocess(command, cwd=PROJECT_ROOT, env=dict(os.environ))
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.splitlines(), ["alpha", "gamma"])
+        self.assertEqual(result.stderr.splitlines(), ["beta"])
+        self.assertEqual(stdout_buffer.getvalue().splitlines(), ["alpha", "gamma"])
+        self.assertEqual(stderr_buffer.getvalue().splitlines(), ["beta"])
+
+    def test_run_tests_and_report_stops_after_first_failed_pair(self) -> None:
+        matrix = [("T1-01", "hg002", "1"), ("T1-02", "na12878_exome", "1")]
+        first_result = subprocess.CompletedProcess(
+            ["cargo"],
+            1,
+            "running 1 test\nMismatch in tile: 1:100-200\n",
+            "trial: skipped after MAX_FAILURES cap (10)\n",
+        )
+        second_result = subprocess.CompletedProcess(["cargo"], 0, "running 1 test\n", "")
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
+            args = mock.Mock(
+                sweep_bed_root=PROJECT_ROOT / "tmp" / "sweep_beds",
+                cargo_extra_arg=[],
+                test_threads=1,
+                report_dir=Path(report_dir),
+            )
+            with mock.patch("scripts.e2e_sweep_gate.live_vardictjava_commit", return_value="deadbeef"):
+                with mock.patch(
+                    "scripts.e2e_sweep_gate.run_streaming_subprocess",
+                    side_effect=[first_result, second_result],
+                ) as run_subprocess:
+                    rc = e2e_sweep_gate.run_tests_and_report(args, matrix)
+
+            payload = json.loads((Path(report_dir) / "parity-failure-report.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(run_subprocess.call_count, 1)
+        self.assertEqual(payload["failures"][0]["preset"], "T1-01")
+        self.assertEqual(payload["failures"][0]["tag"], "hg002")
+
     def test_help_exits_zero(self) -> None:
         result = _run(["--help"])
         self.assertEqual(result.returncode, 0, result.stderr)

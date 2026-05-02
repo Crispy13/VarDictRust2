@@ -14,12 +14,14 @@ import fcntl
 import json
 import os
 import re
+import selectors
 import shutil
 import subprocess
 import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TextIO
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -54,6 +56,7 @@ PRESETS_TSV = PROJECT_ROOT / "scripts" / "config_presets.tsv"
 DEFAULT_TAGS = ("hg002", "na12878_exome", "na12878_lowcov")
 MERGE_PRESERVE_WORK = CANONICAL_FIXTURE_ROOT / ".manifest.cache_entries.gate_working.json"
 RUNNING_TESTS_RE = re.compile(r"running (\d+) tests?")
+PROGRESS_LOG_HANDLE: TextIO | None = None
 
 
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -260,6 +263,179 @@ def print_planned_actions(args: argparse.Namespace, matrix: list[tuple[str, str,
         print(f"  {sweep_test_reproducer(args, preset, args.sweep_bed_root, selector)}")
 
 
+def format_elapsed(started_at: float | None) -> str:
+    if started_at is None:
+        return "00:00:00"
+
+    elapsed_seconds = max(0, int(time.monotonic() - started_at))
+    hours, remainder = divmod(elapsed_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02}:{minutes:02}:{seconds:02}"
+
+
+def format_status_line(
+    phase: str,
+    *,
+    started_at: float | None = None,
+    completed: int | None = None,
+    total: int | None = None,
+    active: str | None = None,
+    event: str | None = None,
+    detail: str | None = None,
+) -> str:
+    parts = [f"STATUS phase={phase}"]
+    if event is not None:
+        parts.append(f"event={event}")
+    if completed is not None and total is not None:
+        parts.append(f"progress={completed}/{total}")
+    if active is not None:
+        parts.append(f"active={active}")
+    parts.append(f"elapsed={format_elapsed(started_at)}")
+    if detail is not None:
+        parts.append(detail)
+    return " ".join(parts)
+
+
+def emit_status(
+    phase: str,
+    *,
+    started_at: float | None = None,
+    completed: int | None = None,
+    total: int | None = None,
+    active: str | None = None,
+    event: str | None = None,
+    detail: str | None = None,
+) -> None:
+    line = format_status_line(
+        phase,
+        started_at=started_at,
+        completed=completed,
+        total=total,
+        active=active,
+        event=event,
+        detail=detail,
+    )
+    print(line, flush=True)
+    if PROGRESS_LOG_HANDLE is not None:
+        print(line, file=PROGRESS_LOG_HANDLE, flush=True)
+
+
+def emit_warning_summary(
+    phase: str,
+    warning_counts: dict[str, int],
+    *,
+    started_at: float | None = None,
+    samples: list[str] | None = None,
+) -> None:
+    if not warning_counts:
+        return
+
+    total_warnings = sum(warning_counts.values())
+    breakdown = ",".join(f"{key}={value}" for key, value in sorted(warning_counts.items()))
+    detail_parts = [f"warnings={total_warnings}", f"breakdown={breakdown}"]
+    if samples:
+        detail_parts.append(f"samples={truncate_guard_items(samples)}")
+    line = f"WARNING phase={phase} elapsed={format_elapsed(started_at)} {' '.join(detail_parts)}"
+    print(line, file=sys.stderr, flush=True)
+    if PROGRESS_LOG_HANDLE is not None:
+        print(line, file=PROGRESS_LOG_HANDLE, flush=True)
+
+
+def progress_log_path(args: argparse.Namespace) -> Path:
+    return args.report_dir / "progress.log"
+
+
+@contextmanager
+def progress_log(args: argparse.Namespace):
+    global PROGRESS_LOG_HANDLE
+
+    args.report_dir.mkdir(parents=True, exist_ok=True)
+    previous_handle = PROGRESS_LOG_HANDLE
+    handle = progress_log_path(args).open("a", encoding="utf-8", buffering=1)
+    PROGRESS_LOG_HANDLE = handle
+    try:
+        yield
+    finally:
+        handle.close()
+        PROGRESS_LOG_HANDLE = previous_handle
+
+
+def grouped_cells_by_pair(matrix: list[tuple[str, str, str]]) -> list[tuple[str, str, list[str]]]:
+    grouped: dict[tuple[str, str], list[str]] = {}
+    ordered_pairs: list[tuple[str, str]] = []
+    for preset, tag, chrom in matrix:
+        pair = (preset, tag)
+        if pair not in grouped:
+            grouped[pair] = []
+            ordered_pairs.append(pair)
+        grouped[pair].append(chrom)
+    return [(preset, tag, grouped[(preset, tag)]) for preset, tag in ordered_pairs]
+
+
+def track_warning(
+    warning_counts: dict[str, int],
+    warning_key: str,
+    warning_message: str,
+    warning_samples: list[str],
+) -> None:
+    warning_counts[warning_key] = warning_counts.get(warning_key, 0) + 1
+    if len(warning_samples) < 5:
+        warning_samples.append(warning_message)
+
+
+def run_streaming_subprocess(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, data="stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, data="stderr")
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    try:
+        while selector.get_map():
+            for key, _mask in selector.select():
+                stream = key.fileobj
+                raw_line = stream.readline()
+                if raw_line == "":
+                    selector.unregister(stream)
+                    continue
+
+                line = raw_line.rstrip("\n")
+                if key.data == "stderr":
+                    stderr_lines.append(line)
+                    print(line, file=sys.stderr, flush=True)
+                else:
+                    stdout_lines.append(line)
+                    print(line, flush=True)
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+
+    return subprocess.CompletedProcess(
+        cmd,
+        process.wait(),
+        "\n".join(stdout_lines),
+        "\n".join(stderr_lines),
+    )
+
+
 @contextmanager
 def manifest_lock():
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -460,24 +636,27 @@ def validate_bed_scope(args: argparse.Namespace, matrix: list[tuple[str, str, st
         raise SystemExit("\n".join(errors))
 
 
-def stage_symlink(source: Path, target: Path, args: argparse.Namespace, staged_links: list[Path]) -> None:
+def stage_symlink(source: Path, target: Path, args: argparse.Namespace, staged_links: list[Path]) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.is_symlink():
         existing = target.resolve()
         if existing == source.resolve():
-            print(f"already linked: {target} -> {source}")
-            return
+            return "reused"
         if not should_replace_link(target, existing, source, args):
             raise SystemExit(
                 f"ERROR: {target} already points to {existing}; rerun with --force to replace it"
             )
         target.unlink()
-    elif target.exists():
+        link_state = "replaced"
+    else:
+        link_state = "linked"
+
+    if target.exists() and not target.is_symlink():
         raise SystemExit(f"ERROR: refusing to overwrite regular file at {target}")
 
     os.symlink(source.resolve(), target)
     staged_links.append(target)
-    print(f"linked: {target} -> {source.resolve()}")
+    return link_state
 
 
 def should_replace_link(target: Path, existing: Path, source: Path, args: argparse.Namespace) -> bool:
@@ -504,23 +683,60 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> N
     snapshot_cache_entries()
 
     staged_links: list[Path] = []
-    for preset, tag, chrom in matrix:
-        tsv_source = source_path(fixture_source, preset, chrom, tag, ".tsv.zst")
-        stage_symlink(tsv_source, target_path(CANONICAL_OUTPUT_ROOT, preset, chrom, tag, ".tsv.zst"), args, staged_links)
+    stage_started_at = time.monotonic()
+    pair_batches = grouped_cells_by_pair(matrix)
+    total_pairs = len(pair_batches)
+    total_cells = len(matrix)
+    completed_cells = 0
+    link_counts = {"linked": 0, "replaced": 0, "reused": 0}
+    stage_warning_counts: dict[str, int] = {}
+    stage_warning_samples: list[str] = []
+    emit_status("stage", started_at=stage_started_at, completed=0, total=total_pairs, event="start")
 
-        chunks_source = source_path(fixture_source, preset, chrom, tag, ".chunks.json")
-        if chunks_source.is_file():
-            stage_symlink(
-                chunks_source,
-                target_path(CANONICAL_OUTPUT_ROOT, preset, chrom, tag, ".chunks.json"),
-                args,
-                staged_links,
-            )
-        else:
-            print(
-                f"WARNING: legacy shard, no chunks.json for {preset}/{tag}/chr{chrom} at {chunks_source}",
-                file=sys.stderr,
-            )
+    for pair_index, (preset, tag, chroms) in enumerate(pair_batches, start=1):
+        for chrom in chroms:
+            tsv_source = source_path(fixture_source, preset, chrom, tag, ".tsv.zst")
+            link_counts[
+                stage_symlink(
+                    tsv_source,
+                    target_path(CANONICAL_OUTPUT_ROOT, preset, chrom, tag, ".tsv.zst"),
+                    args,
+                    staged_links,
+                )
+            ] += 1
+
+            chunks_source = source_path(fixture_source, preset, chrom, tag, ".chunks.json")
+            if chunks_source.is_file():
+                link_counts[
+                    stage_symlink(
+                        chunks_source,
+                        target_path(CANONICAL_OUTPUT_ROOT, preset, chrom, tag, ".chunks.json"),
+                        args,
+                        staged_links,
+                    )
+                ] += 1
+            else:
+                track_warning(
+                    stage_warning_counts,
+                    "missing_chunks",
+                    f"{preset}/{tag}/chr{chrom}",
+                    stage_warning_samples,
+                )
+            completed_cells += 1
+
+        emit_status(
+            "stage",
+            started_at=stage_started_at,
+            completed=pair_index,
+            total=total_pairs,
+            active=f"{preset}/{tag}",
+            event="pair-complete",
+            detail=(
+                f"cells={completed_cells}/{total_cells} linked={link_counts['linked']} "
+                f"replaced={link_counts['replaced']} reused={link_counts['reused']} "
+                f"warnings={sum(stage_warning_counts.values())}"
+            ),
+        )
 
     for preset, tags in grouped_tags_by_preset(matrix).items():
         preserve_path = prepare_merge_preserve_file()
@@ -538,53 +754,114 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> N
             manifest_only=True,
             fixture_output_root=CANONICAL_OUTPUT_ROOT,
         )
-        print(f"merged manifest cache_entries for {preset}: {','.join(tags)}")
+        emit_status(
+            "stage",
+            started_at=stage_started_at,
+            active=f"{preset}/{','.join(tags)}",
+            event="manifest-merged",
+        )
+
+    emit_warning_summary("stage", stage_warning_counts, started_at=stage_started_at, samples=stage_warning_samples)
+    emit_status(
+        "stage",
+        started_at=stage_started_at,
+        completed=total_pairs,
+        total=total_pairs,
+        event="complete",
+        detail=(
+            f"cells={total_cells}/{total_cells} linked={link_counts['linked']} "
+            f"replaced={link_counts['replaced']} reused={link_counts['reused']} "
+            f"warnings={sum(stage_warning_counts.values())}"
+        ),
+    )
 
 
 def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> None:
     live_commit = live_vardictjava_commit()
     grouped_tags = grouped_tags_by_preset(matrix)
-    for preset, tag, chrom in matrix:
-        chunks_path = target_path(CANONICAL_OUTPUT_ROOT, preset, chrom, tag, ".chunks.json")
-        if not chunks_path.exists():
-            print(
-                f"WARNING: legacy shard, no chunks.json for {preset}/{tag}/chr{chrom}",
-                file=sys.stderr,
-            )
-            continue
+    provenance_started_at = time.monotonic()
+    pair_batches = grouped_cells_by_pair(matrix)
+    total_pairs = len(pair_batches)
+    total_cells = len(matrix)
+    completed_cells = 0
+    warning_counts: dict[str, int] = {}
+    warning_samples: list[str] = []
+    emit_status("provenance", started_at=provenance_started_at, completed=0, total=total_pairs, event="start")
 
-        payload = read_json(chunks_path)
-        vardict_commit = payload.get("vardict_commit")
-        if vardict_commit is None:
-            print(
-                f"WARNING: legacy shard, missing vardict_commit in {chunks_path}",
-                file=sys.stderr,
-            )
-        elif vardict_commit != live_commit:
-            raise SystemExit(
-                f"ERROR: provenance mismatch for {preset}/{tag}/chr{chrom}: "
-                f"vardict_commit={vardict_commit} live={live_commit}"
-            )
-
-        expected_flags = (
-            f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} "
-            f"--sweep-bed-root {args.sweep_bed_root}"
-        )
-        optional_checks = {
-            "generator_flags": expected_flags,
-            "preset": preset,
-            "bed_sha256": bed_sha256(args.sweep_bed_root, tag),
-        }
-        for key, expected_value in optional_checks.items():
-            actual_value = payload.get(key)
-            if actual_value is None:
-                print(f"WARNING: legacy shard, missing {key} in {chunks_path}", file=sys.stderr)
-            elif str(actual_value) != str(expected_value):
-                print(
-                    f"WARNING: legacy shard, {key} mismatch in {chunks_path}: "
-                    f"expected={expected_value} actual={actual_value}",
-                    file=sys.stderr,
+    for pair_index, (preset, tag, chroms) in enumerate(pair_batches, start=1):
+        for chrom in chroms:
+            chunks_path = target_path(CANONICAL_OUTPUT_ROOT, preset, chrom, tag, ".chunks.json")
+            if not chunks_path.exists():
+                track_warning(
+                    warning_counts,
+                    "missing_chunks",
+                    f"{preset}/{tag}/chr{chrom}",
+                    warning_samples,
                 )
+                completed_cells += 1
+                continue
+
+            payload = read_json(chunks_path)
+            vardict_commit = payload.get("vardict_commit")
+            if vardict_commit is None:
+                track_warning(
+                    warning_counts,
+                    "missing_vardict_commit",
+                    str(chunks_path),
+                    warning_samples,
+                )
+            elif vardict_commit != live_commit:
+                raise SystemExit(
+                    f"ERROR: provenance mismatch for {preset}/{tag}/chr{chrom}: "
+                    f"vardict_commit={vardict_commit} live={live_commit}"
+                )
+
+            expected_flags = (
+                f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} "
+                f"--sweep-bed-root {args.sweep_bed_root}"
+            )
+            optional_checks = {
+                "generator_flags": expected_flags,
+                "preset": preset,
+                "bed_sha256": bed_sha256(args.sweep_bed_root, tag),
+            }
+            for key, expected_value in optional_checks.items():
+                actual_value = payload.get(key)
+                if actual_value is None:
+                    track_warning(
+                        warning_counts,
+                        f"missing_{key}",
+                        str(chunks_path),
+                        warning_samples,
+                    )
+                elif str(actual_value) != str(expected_value):
+                    track_warning(
+                        warning_counts,
+                        f"mismatch_{key}",
+                        f"{chunks_path} expected={expected_value} actual={actual_value}",
+                        warning_samples,
+                    )
+            completed_cells += 1
+
+        emit_status(
+            "provenance",
+            started_at=provenance_started_at,
+            completed=pair_index,
+            total=total_pairs,
+            active=f"{preset}/{tag}",
+            event="pair-complete",
+            detail=f"cells={completed_cells}/{total_cells} warnings={sum(warning_counts.values())}",
+        )
+
+    emit_warning_summary("provenance", warning_counts, started_at=provenance_started_at, samples=warning_samples)
+    emit_status(
+        "provenance",
+        started_at=provenance_started_at,
+        completed=total_pairs,
+        total=total_pairs,
+        event="complete",
+        detail=f"cells={total_cells}/{total_cells} warnings={sum(warning_counts.values())}",
+    )
 
 
 def parse_failure_chroms(output: str, expected_chroms: list[str]) -> list[str]:
@@ -604,6 +881,32 @@ def last_pass_path(args: argparse.Namespace) -> Path:
     return args.report_dir / LAST_PASS.name
 
 
+def write_failure_report(
+    args: argparse.Namespace,
+    matrix: list[tuple[str, str, str]],
+    commit: str,
+    failures: list[dict],
+    *,
+    started_at: float,
+    stopped_after: str | None = None,
+) -> int:
+    report_path = failure_report_path(args)
+    payload = failure_report_base(matrix, commit)
+    payload["failures"] = failures
+    write_json_atomic(report_path, payload)
+
+    detail_parts = [f"failures={len(failures)}", f"report={report_path}"]
+    if stopped_after is not None:
+        detail_parts.append(f"stopped_after={stopped_after}")
+    emit_status(
+        "done",
+        started_at=started_at,
+        event="failed",
+        detail=" ".join(detail_parts),
+    )
+    return 1
+
+
 def failure_report_base(matrix: list[tuple[str, str, str]], commit: str) -> dict:
     return {
         "schema_version": 1,
@@ -620,13 +923,18 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
     report_commit = live_vardictjava_commit()
     failures: list[dict] = []
     sweep_bed_root = args.sweep_bed_root.resolve()
+    tests_started_at = time.monotonic()
     chroms_by_pair: dict[tuple[str, str], list[str]] = {}
     for preset, tag, chrom in matrix:
         chroms_by_pair.setdefault((preset, tag), [])
         if chrom not in chroms_by_pair[(preset, tag)]:
             chroms_by_pair[(preset, tag)].append(chrom)
 
-    for preset, tag in grouped_pairs(matrix):
+    pairs = grouped_pairs(matrix)
+    total_pairs = len(pairs)
+    emit_status("tests", started_at=tests_started_at, completed=0, total=total_pairs, event="start")
+
+    for pair_index, (preset, tag) in enumerate(pairs, start=1):
         test_name = sweep_test_selector(tag)
         reproducer = sweep_test_reproducer(args, preset, sweep_bed_root, test_name)
         env = dict(os.environ)
@@ -634,16 +942,19 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
         env["VARDICT_E2E_SWEEP_BED_ROOT"] = str(sweep_bed_root)
         env["CI"] = "true"
         cmd = sweep_test_command(args, test_name)
-        print(f"Running: {reproducer}")
-        result = subprocess.run(
-            cmd,
-            cwd=PROJECT_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
+        emit_status(
+            "tests",
+            started_at=tests_started_at,
+            completed=pair_index - 1,
+            total=total_pairs,
+            active=f"{preset}/{tag}",
+            event="pair-start",
+            detail=f"cmd={reproducer}",
         )
+        result = run_streaming_subprocess(cmd, cwd=PROJECT_ROOT, env=env)
         combined_output = "\n".join(part for part in (result.stdout, result.stderr) if part)
-        stderr_tail = result.stderr.splitlines()[-50:]
+        stderr_source = result.stderr if result.stderr else combined_output
+        stderr_tail = stderr_source.splitlines()[-50:]
         running_match = RUNNING_TESTS_RE.search(result.stdout)
         if running_match and int(running_match.group(1)) == 0:
             for chrom in parse_failure_chroms(combined_output, chroms_by_pair[(preset, tag)]):
@@ -659,13 +970,36 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
                         "message": "selector matched 0 tests (likely module-path drift)",
                     }
                 )
-            print(f"FAIL: {preset}/{tag} exit={result.returncode} selector matched 0 tests")
-            continue
+            emit_status(
+                "tests",
+                started_at=tests_started_at,
+                completed=pair_index,
+                total=total_pairs,
+                active=f"{preset}/{tag}",
+                event="pair-fail",
+                detail=f"exit={result.returncode} fail_fast=1 reason=selector-matched-0-tests",
+            )
+            return write_failure_report(
+                args,
+                matrix,
+                report_commit,
+                failures,
+                started_at=tests_started_at,
+                stopped_after=f"{preset}/{tag}",
+            )
 
         if result.returncode == 0:
-            print(f"PASS: {preset}/{tag}")
+            emit_status(
+                "tests",
+                started_at=tests_started_at,
+                completed=pair_index,
+                total=total_pairs,
+                active=f"{preset}/{tag}",
+                event="pair-pass",
+            )
             continue
 
+        cap_reached = "MAX_FAILURES cap" in combined_output
         for chrom in parse_failure_chroms(combined_output, chroms_by_pair[(preset, tag)]):
             failures.append(
                 {
@@ -678,15 +1012,28 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
                     "exit_code": result.returncode,
                 }
             )
-        print(f"FAIL: {preset}/{tag} exit={result.returncode}")
+        emit_status(
+            "tests",
+            started_at=tests_started_at,
+            completed=pair_index,
+            total=total_pairs,
+            active=f"{preset}/{tag}",
+            event="pair-fail",
+            detail=(
+                f"exit={result.returncode} fail_fast=1 "
+                f"rust_max_failures=10 cap_reached={1 if cap_reached else 0}"
+            ),
+        )
+        return write_failure_report(
+            args,
+            matrix,
+            report_commit,
+            failures,
+            started_at=tests_started_at,
+            stopped_after=f"{preset}/{tag}",
+        )
 
     report_path = failure_report_path(args)
-    if failures:
-        payload = failure_report_base(matrix, report_commit)
-        payload["failures"] = failures
-        write_json_atomic(report_path, payload)
-        print(f"GATE_FAILED: {len(failures)} failure entries written to {report_path}")
-        return 1
 
     pass_payload = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -701,10 +1048,15 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
     green_report = failure_report_base(matrix, report_commit)
     green_report["failures"] = []
     write_json_atomic(report_path, green_report)
-    print(
-        f"GATE_PASSED: {len(matrix)} shards green "
-        f"(presets={len({preset for preset, _, _ in matrix})}, "
-        f"tags={len({tag for _, tag, _ in matrix})}, chroms={len({chrom for _, _, chrom in matrix})})"
+    emit_status(
+        "done",
+        started_at=tests_started_at,
+        event="passed",
+        detail=(
+            f"shards={len(matrix)} presets={len({preset for preset, _, _ in matrix})} "
+            f"tags={len({tag for _, tag, _ in matrix})} chroms={len({chrom for _, _, chrom in matrix})} "
+            f"report={report_path}"
+        ),
     )
     return 0
 
@@ -770,9 +1122,26 @@ def main(argv: list[str] | None = None) -> int:
     with manifest_lock():
         if args.unstage:
             return run_unstage(args, matrix)
-        run_stage(args, matrix)
-        run_provenance_check(args, matrix)
-        return run_tests_and_report(args, matrix)
+        with progress_log(args):
+            emit_status(
+                "matrix",
+                event="resolved",
+                detail=(
+                    f"cells={len(matrix)} pairs={len(grouped_pairs(matrix))} "
+                    f"report_dir={args.report_dir} progress_log={progress_log_path(args)}"
+                ),
+            )
+            try:
+                run_stage(args, matrix)
+                run_provenance_check(args, matrix)
+                return run_tests_and_report(args, matrix)
+            except SystemExit as exc:
+                emit_status(
+                    "done",
+                    event="failed",
+                    detail=f"reason={exc}",
+                )
+                raise
 
 
 if __name__ == "__main__":

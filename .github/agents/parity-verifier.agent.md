@@ -6,7 +6,7 @@ description: >
   reporting divergences. Always use after Port Engineer completes a module.
 name: Parity Verifier
 tools: [vscode/memory, vscode/resolveMemoryFileUri, execute, read, search, edit]
-model: ['GPT-5.5 (copilot)','GPT-5.4 (copilot)',]
+model: Claude Sonnet 4.6 (copilot)
 user-invocable: false
 disable-model-invocation: false
 ---

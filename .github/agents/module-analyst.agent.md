@@ -7,7 +7,7 @@ description: >
   for downstream implementation.
 name: Module Analyst
 tools: [vscode/memory, vscode/resolveMemoryFileUri, read, search, web]
-model: 'Claude Opus 4.7 (copilot)'
+model: GPT-5.5 (copilot)
 user-invocable: false
 disable-model-invocation: false
 ---
