@@ -18,8 +18,9 @@ description: >
 
 Workflow infrastructure changes are rare but high-impact. A single stale agent name
 breaks an orchestrator dispatch. A missing tool grant silently disables a capability.
-A renamed test file drops coverage without warning. This skill prevents those failures
-by requiring full context before any edit.
+A renamed test file drops coverage without warning. A stale description can keep an
+otherwise-correct agent or skill from ever being invoked. This skill prevents those
+failures by requiring full context before any edit.
 
 The protocol has five phases. No phase may be skipped or abbreviated.
 
@@ -37,7 +38,7 @@ Read every `.agent.md` under `.github/agents/`:
 
 | File | What to extract |
 |------|-----------------|
-| Each agent file | Name, description, tools list, model, agents list, user-invocable, disable-model-invocation, full body instructions |
+| Each agent file | Name, description, tools list, model, agents list, user-invocable, disable-model-invocation, any file-level purpose note, full body instructions |
 
 Current agents (update this list if agents are added/removed):
 - `orchestrator.agent.md`
@@ -53,7 +54,7 @@ Read every `SKILL.md` under `.github/skills/*/`:
 
 | Skill | What to extract |
 |-------|-----------------|
-| Each skill | Name, description, which agents reference it, any agent names mentioned in the body, any file paths referenced, workflow phases |
+| Each skill | Name, description, trigger contexts, which agents reference it, any agent names mentioned in the body, any file paths referenced, workflow phases |
 
 Current skills (15):
 `change-impact-review`, `codebase-doc-manage`, `config-e2e-diagnosis`, `faithful-port`,
@@ -67,6 +68,9 @@ Read every `.instructions.md` under `.github/instructions/`:
 - `ops-policy.instructions.md` (applyTo: `**`)
 - `rust-parity.instructions.md` (applyTo: `**/*.rs`)
 - `rust.instructions.md` (applyTo: `**/*.rs`)
+
+For each instruction file, extract `description`, `applyTo`, and any file-level
+purpose note in addition to the rule body.
 
 ### 1.4 Test Harness
 
@@ -208,7 +212,34 @@ every component being created or modified, trace its activation path.
 Flag any component that has **no reachable activation path** — it needs wiring before
 the change is complete. Include reachability findings in the Impact Report (Phase 3).
 
-### 2.4 Risk Classification
+### 2.4 Description & Docstring Contract
+
+Treat frontmatter descriptions and file-level docstrings as part of the workflow
+surface, not optional prose. A workflow change is incomplete if the activation or
+purpose text becomes stale.
+
+For every modified component, answer these questions:
+
+1. Does it have a `description:` field, file-header summary, or purpose docstring?
+2. Would the proposed change make that text stale, vague, or misleading?
+3. Does the text explain both what the component does and how or when it is used?
+
+Component-specific rules:
+
+- Agent: update `description:` when role, routing, tools, or dispatch intent changes.
+  It must state what the agent does and when another agent or the user should invoke it.
+- Skill: update `description:` whenever trigger scope, supported tasks, or workflow
+  shape changes. It must include concrete trigger contexts or phrases, not just a label.
+- Instruction: update `description:` and `applyTo:` together when rule scope changes.
+- Workflow, script, or test helper: update any leading purpose comment, usage block,
+  or docstring when inputs, outputs, prerequisites, or invocation path change. Add a
+  short header only when the file's role would otherwise be unclear; do not add boilerplate.
+- Rename or move: update embedded examples, paths, and quoted identifiers inside
+  descriptions and docstrings, not just code references.
+
+Flag any file where the implementation changed but the descriptive surface did not.
+
+### 2.5 Risk Classification
 
 Classify the change:
 
@@ -248,6 +279,11 @@ Do not proceed to implementation until the report is acknowledged.
 - Ignored test changes: {list or "None"}
 - Allowlist updates needed: {yes/no}
 - CI workflow impact: {description or "None"}
+
+### Description & Docstring Updates
+| File | Surface | Update Needed | Reason |
+|------|---------|---------------|--------|
+| {path or "None identified"} | description/frontmatter/docstring/comment | {yes/no} | {why} |
 
 ### Invocation & Reachability
 | Component | Type | Entry Point | Reachable? | Consumer |
@@ -298,6 +334,21 @@ When creating new files, follow existing conventions:
 - Tests: `tests/parity_suite/{module_name}.rs`, `tests/parity_sweep_suite/{module_name}_sweep.rs`
 - Scripts: `scripts/{snake_case}.sh` or `scripts/{snake_case}.py`
 
+### 4.4 Description and Docstring Hygiene
+
+For each modified component:
+
+- Keep frontmatter `description:` aligned with the current behavior, activation path,
+  and intended consumer.
+- Prefer descriptions that answer both "what does this do?" and "when should it be
+  used or triggered?"
+- If a file already has a purpose comment or docstring, update it when semantics,
+  prerequisites, or outputs change.
+- If no header text exists, add one only when the file's role or invocation path would
+  otherwise be unclear.
+- Remove stale names, old paths, and outdated trigger phrases from examples and
+  narrative text.
+
 ---
 
 ## Phase 5: Validation
@@ -328,27 +379,40 @@ Run a grep-based scan for stale references:
 
 Report findings. Fix any stale references before declaring the change complete.
 
-### 5.3 CI YAML Validation
+### 5.3 Description / Docstring Sanity Check
+
+For every modified agent, skill, or instruction:
+
+- verify `description:` still matches the actual behavior and activation path
+- verify renamed files or components are reflected in examples and narrative text
+
+For modified workflows, scripts, or tests that already carry a purpose comment or
+usage block:
+
+- verify prerequisites, inputs, outputs, and invocation notes are still accurate
+
+### 5.4 CI YAML Validation
 
 If any workflow YAML was modified, validate syntax:
 ```bash
 python -c "import yaml; yaml.safe_load(open('.github/workflows/{file}.yml'))"
 ```
 
-### 5.4 Test Execution (if tests were affected)
+### 5.5 Test Execution (if tests were affected)
 
 If the change modified test files, test configuration, or fixture scripts:
 ```bash
 cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_
 ```
 
-### 5.5 Validation Report
+### 5.6 Validation Report
 
 ```
 ## Validation Results
 
 - Build check: {PASS | FAIL — details}
 - Cross-reference scan: {CLEAN | {N} stale refs found — details}
+- Description/docstring sanity: {PASS | FAIL — details}
 - CI YAML validation: {PASS | FAIL | N/A}
 - Test execution: {PASS | FAIL | N/A}
 - Ignored tests allowlist: {up-to-date | needs update — details}

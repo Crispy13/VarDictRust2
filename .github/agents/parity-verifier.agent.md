@@ -25,7 +25,7 @@ You are the independent validator. Run parity tests, confirm byte-identical outp
 
 ## Workflow
 
-The Orchestrator dispatches you with a task brief that specifies which skill to run. Read the task brief first, then execute the appropriate skill.
+The Orchestrator dispatches you with a task brief or reviewed plan file that specifies which skill to run. Read the provided file first, then execute the appropriate skill. For config E2E work, Phase 1 may arrive as a direct evidence-collection brief; the combined Phase 2/3 diagnosis dispatch uses the reviewed diagnosis plan file; Phase 5 verification reruns use the reviewed repair plan file.
 
 ### Tier 1 Validation (module-parity-test)
 1. Read the task from the path provided by Orchestrator.
@@ -44,7 +44,11 @@ Dispatched on Tier 2 failure. Read the `shard-diagnosis` skill. Diagnose the fai
 Dispatched after logic-parity-audit VERIFIED. Read the `tiered-config-test` skill and follow its tiered procedure.
 
 ### Config E2E Diagnosis (config-e2e-diagnosis)
-Dispatched as the Final Gate after all modules pass their per-module cycle. Read the `config-e2e-diagnosis` skill and follow its 5-phase procedure. Execute Phases 1, 2, and 5 (run tests, isolate module, verify fixes). Report failures with identified root-cause module for Port Engineer routing.
+Dispatched as the Final Gate after all modules pass their per-module cycle. Read the routed file first, then read the `config-e2e-diagnosis` skill and execute only the phase bundle named in that dispatch artifact:
+- Phase 1 for evidence collection (direct evidence brief allowed)
+- Phases 2 and 3 for the diagnosis/handoff dispatch (reviewed diagnosis plan file required)
+- Phase 5 for verification reruns (reviewed repair plan file required)
+Do not implement the fix here; report the combined diagnosis and repair-handoff outputs needed for Orchestrator to write the reviewed repair plan file.
 
 ## Report Templates
 
@@ -167,5 +171,5 @@ E2E config gate passed. Project is ready for release validation.
 **Rust Value:** {rust_value}
 
 ## Recommendation
-Dispatch Port Engineer with `mismatch-repair` for module `{module}`. Failing test to be created in Phase 3.
+Dispatch Port Engineer with `mismatch-repair` for module `{module}` after Orchestrator writes the reviewed repair plan file from the Phase 2/3 outputs.
 ```

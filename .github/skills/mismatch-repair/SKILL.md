@@ -1,18 +1,22 @@
 ---
 name: mismatch-repair
-description: "Fix a parity mismatch between VarDictJava and vardict_rs by modifying existing Rust logic in-place. Use when: parity mismatch found, shard failure diagnosed, fix divergent output, repair Rust logic to match Java, align Rust to Java behavior, fix wrong column value, mismatch root cause identified via shard-diagnosis. Always use this skill after shard-diagnosis identifies a divergent field — this is the skill that actually fixes the code. Do NOT use for initial diagnosis (use shard-diagnosis) or config expansion (use tiered-config-test)."
+description: "Fix a parity mismatch between VarDictJava and vardict_rs by modifying existing Rust logic in-place. Use when: parity mismatch found, shard failure diagnosed, fix divergent output, repair Rust logic to match Java, align Rust to Java behavior, fix wrong column value, mismatch root cause identified via shard-diagnosis, or config-e2e-diagnosis hands off a reviewed repair plan file. Use this skill after diagnosis has identified the divergent field or failing repair surface. Do NOT use for initial diagnosis (use shard-diagnosis or config-e2e-diagnosis) or config expansion (use tiered-config-test)."
 argument-hint: "Describe the mismatch: field name, Java value, Rust value, and position (e.g., 'AF field: Java=0.333 Rust=0.500 at chr20:31024500')"
 ---
 
 # Mismatch Repair
 
-Fix a parity mismatch by modifying the Rust code that produces the wrong value. This skill picks up where `shard-diagnosis` leaves off — it takes a diagnosed mismatch and produces a verified, committed fix.
+Fix a parity mismatch by modifying the Rust code that produces the wrong value. This skill picks up where diagnosis leaves off — it takes either a diagnosed mismatch or a reviewed repair plan file and produces a verified, committed fix.
 
 ## Why This Exists
 
 Stateless LLM agents, when faced with "Java produces X, Rust produces Y", default to the path of least resistance: add a wrapper function that converts Y→X at the output boundary. This appears to fix the parity test but doesn't fix the actual logic divergence. The next BAM file or config exposes the real bug because the adapter's assumptions don't hold.
 
 This skill exists to redirect that instinct. Instead of patching the output, trace backward to the code that computed the wrong value and fix the logic there.
+
+## Handoff Contract
+
+When Orchestrator routes `mismatch-repair` from the E2E config failure path, the required handoff artifact is the reviewed repair plan file produced by the global `plan-duck` skill. Read that plan file first, then read the diagnosis and failing-test artifacts it names. For non-E2E shard repairs, a direct shard-diagnosis task brief remains valid.
 
 ## The Anti-Adapter Rule
 
@@ -29,13 +33,13 @@ This is the most important constraint in the skill. Read it before touching any 
 
 ## Prerequisite
 
-Before using this skill, you need a diagnosed mismatch from `shard-diagnosis`:
+Before using this skill, you need either a diagnosed mismatch from `shard-diagnosis` or a reviewed repair plan file that points at the diagnosis artifacts to consume:
 - The divergent field (column number + field name)
 - Java and Rust values
 - The responsible Rust module and file
 - The genomic position
 
-If you don't have this, run `shard-diagnosis` first.
+If you don't have either handoff, run `shard-diagnosis` first or ask Orchestrator for the reviewed repair plan file.
 
 ## Phase 1: Root-Cause Localization
 
@@ -71,8 +75,8 @@ Produce a concise statement like:
 
 This statement guides Phase 2. If you can't write a clear divergence statement, you haven't found the root cause yet — keep tracing.
 
-### Rubberduck Checkpoint
-At the end of Phase 1, before touching code, run `rubberduck-review` in `plan` mode on the divergence statement and proposed repair direction when the mismatch sits on a hot path, the control flow is subtle, or the intended fix feels more like a compensation than a root-cause repair. Use the review to challenge whether the identified divergence point is truly the earliest causal break and whether the planned fix violates the anti-adapter rule.
+### Plan Freshness Check
+If Phase 1 confirms the divergence described in the routed artifacts, continue directly into Phase 2. If Phase 1 uncovers a materially different divergence, expanded repair scope, or evidence that the reviewed repair plan file is stale, stop and return to Orchestrator so it can refresh the handoff via `plan-duck` before repair work continues.
 
 ## Phase 2: In-Place Repair
 
@@ -146,12 +150,12 @@ All tests must pass, including the new regression test.
 
 ### Step 2b: Config-e2e failing-test re-run
 
-Use this step when `mismatch-repair` is reached through `config-e2e-diagnosis` Phase 4: the diagnosed mismatch came from a chr1 sweep or cell-binary failure, not from a per-module shard. See `config-e2e-diagnosis` Phase 3 for the fixture-generation procedure; this step is the canonical post-fix execution point for that failing test.
+Use this step when `mismatch-repair` is reached through `config-e2e-diagnosis` Phase 4 and the reviewed repair plan file names a chr1 sweep or cell-binary failure, not a per-module shard. See `config-e2e-diagnosis` Phase 3 for the fixture-generation procedure; this step is the canonical post-fix execution point for that failing test.
 
 - **Test name pattern:** `parity_{module}_config_{config_slug}_{region_safe}` (for example, `parity_cigar_parser_config_t1_01_1_2324084_2324612`).
 - **Fixture path:** `testdata/fixtures/{module}/{module}_{config_slug}_{region_safe}.jsonl.zst`.
 - **Loader functions:** use `golden_fixture_path_with_config` and `load_golden_data_with_config` from `tests/common/mod.rs`; derive the config slug through `config_name_to_slug`, not by hand.
-- **Harness:** `config-e2e-diagnosis` Phase 3 adds the test to `tests/parity_suite/{module}.rs`, which is mounted by `tests/parity_suite.rs` under the `{module}` module. If the failing test was deliberately added to a different harness, cite that harness file path and its test discovery convention before using an alternative command.
+- **Harness:** `config-e2e-diagnosis` Phase 3 records the test location in the reviewed repair plan file; add the test to `tests/parity_suite/{module}.rs`, which is mounted by `tests/parity_suite.rs` under the `{module}` module. If the failing test was deliberately added to a different harness, cite that harness file path and its test discovery convention before using an alternative command.
 - **Validation command:**
    ```bash
    source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate rust_build_env && export LIBCLANG_PATH="$CONDA_PREFIX/lib"
@@ -201,12 +205,14 @@ After the fix is committed:
 ## Relationship to Other Skills
 
 ```
-shard-diagnosis ──→ mismatch-repair ──→ tiered-config-test
+shard-diagnosis --------------------\
+                                     -> mismatch-repair -> tiered-config-test
+config-e2e-diagnosis + reviewed repair plan file --/
    (find it)          (fix it)           (verify broadly)
 ```
 
-- **shard-diagnosis**: Upstream. Produces the diagnosed mismatch that this skill consumes.
-- **module-parity-test**: Parallel. Used for module-level golden fixture testing during initial porting. This skill is for fixing mismatches found during shard-level parity sweeps.
+- **shard-diagnosis**: Upstream for the targeted-fix route. Produces the diagnosed mismatch that this skill consumes.
+- **module-parity-test**: Parallel. Used for module-level golden fixture testing during initial porting. This skill is for fixing mismatches after diagnosis, including shard-level parity sweeps and config-E2E repair handoffs.
 - **tiered-config-test**: Downstream. Used after repair to verify no regression across configs.
+- **plan-duck**: Upstream for config-E2E repair routing. Produces the reviewed repair plan file this skill consumes; do not rerun it for simple verification reruns.
 - **change-impact-review**: Optional gate for hot-path modules.
-- **rubberduck-review**: Optional checkpoint after Phase 1 to critique the divergence statement and proposed repair before implementation.

@@ -36,10 +36,10 @@ Use the `faithful-port` skill for porting tasks, and the `mismatch-repair` skill
 
 ### Mismatch Repair
 
-When Orchestrator routes a mismatch-repair task (after shard-diagnosis):
+When Orchestrator routes a mismatch-repair task:
 
-1. Read the task brief from the path provided by Orchestrator. It includes the shard-diagnosis output with the divergent field and root cause.
-2. Use the `mismatch-repair` skill to fix the divergence.
+1. Read the routed file from the path provided by Orchestrator. For the E2E config failure path, this must be the reviewed repair plan file; for other mismatch-repair routes it may be a direct task brief.
+2. If a reviewed repair plan file was provided, read the diagnosis artifacts it names before using the `mismatch-repair` skill. Otherwise, use the task brief's diagnosis output directly.
 3. Run `cargo build --profile debug-release && cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_ --skip sweep`.
 4. Write a repair report to session memory.
 

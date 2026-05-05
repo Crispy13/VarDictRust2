@@ -1,10 +1,11 @@
 ---
 name: config-e2e-diagnosis
 description: >
-   Diagnose and fix config-specific chr1 sweep E2E parity mismatches by isolating
-   failures to individual pipeline modules. Use when: a chr1 sweep preset fails,
-   E2E mismatch with non-default config, final gate after all modules pass
-   per-module cycle, config regression found at E2E level.
+   Diagnose config-specific chr1 sweep E2E parity mismatches by collecting
+   evidence, isolating failures to individual pipeline modules, and handing a
+   reviewed plan file to the repair workflow. Use when: a chr1 sweep preset
+   fails, E2E mismatch with non-default config, final gate after all modules
+   pass per-module cycle, config regression found at E2E level.
 ---
 
 # Config E2E Diagnosis
@@ -50,6 +51,13 @@ cargo test --profile debug-release --test parity_config_e2e_cells \
 
 Cells live in `parity_config_e2e_cells` (libtest-mimic harness, `--test parity_config_e2e_cells`); push tests live in `parity_config_e2e` (standard libtest harness, `--test parity_config_e2e`).
 
+## Dispatch Boundaries
+
+- **Phase 1: Evidence collection** — Orchestrator may dispatch this phase directly. No `plan-duck` checkpoint is required before the first run.
+- **Phase 2 / Phase 3: Diagnosis dispatch and repair handoff** — Before this combined dispatch runs after a failure, Orchestrator must run the global `plan-duck` skill and hand this skill the reviewed diagnosis plan file. The completed Phase 2/3 outputs are the artifact set that `plan-duck` turns into the reviewed repair plan file.
+- **Phase 4: Repair dispatch** — After Phase 2/3 complete, Orchestrator must run `plan-duck` again on the combined outputs and hand Port Engineer the reviewed repair plan file before `mismatch-repair` starts. The canonical E2E path does not require a separate `shard-diagnosis` checkpoint before this dispatch.
+- **Phase 5: Verification reruns** — These are mechanical reruns. Reuse the existing reports and the reviewed repair plan file. Do not insert another `plan-duck` checkpoint unless the scope changes.
+
 ## Pipeline Module Order (diagnosis sequence)
 1. sam_file_parser
 2. cigar_parser
@@ -58,7 +66,7 @@ Cells live in `parity_config_e2e_cells` (libtest-mimic harness, `--test parity_c
 5. sv_processor
 6. tovars
 
-## Phase 1: Run Config E2E
+## Phase 1: Evidence Collection
 
 ### Goal
 Identify which (preset, region) pairs produce mismatches at E2E level.
@@ -101,7 +109,9 @@ Identify which (preset, region) pairs produce mismatches at E2E level.
 - List of failing (preset_name, region_str) pairs
 - Per-preset failure report showing first divergence per failure
 
-## Phase 2: Isolate to Module
+## Phase 2: Diagnosis Dispatch
+
+**Dispatch ownership:** Orchestrator runs Phase 2 and Phase 3 together under one reviewed diagnosis plan file so the repair plan is built from a single completed diagnosis/handoff artifact set.
 
 ### Goal
 For each failing (config, region) pair, identify which pipeline module first produces divergent output.
@@ -172,15 +182,17 @@ Mirror the same `VARDICT_PARITY_{MODULE}=./tmp/...` variable on the Java side wh
 - Specific fixture/shard where divergence occurs
 - Brief description of the divergence (field, Java value, Rust value)
 
-### Rubberduck Checkpoint
-Before moving from Phase 2 isolation into Phase 3 or Phase 4, run `rubberduck-review` in `plan` mode on the isolation result when the module attribution depends on partial evidence, manual fallback output, or an expensive rerun plan. The review should challenge whether the isolated module, failing region, and proposed next step are actually the right targets. Resolve any concrete concerns before creating the failing test or entering the fix loop.
+### Review Boundary
+The global `plan-duck` checkpoint now covers the diagnosis dispatch that runs Phases 2 and 3 together, plus the later repair dispatch. Do not add a duplicate review checkpoint here. If later evidence materially contradicts the isolation result or expands the rerun scope, stop and return to Orchestrator so it can refresh the reviewed plan via `plan-duck` before work continues.
 
-## Phase 3: Create Failing Test
+## Phase 3: Repair Handoff
 
-**Canonical execution venue:** When this skill identifies a failing test for a config-specific mismatch, the test is executed and verified inside `mismatch-repair` Phase 3. This skill provides the diagnosis surface; `mismatch-repair` provides the verification loop.
+**Canonical handoff artifact:** The reviewed repair plan file carries the diagnosis output from this phase into `mismatch-repair`. The failing test is executed and verified inside `mismatch-repair` Phase 3; this skill defines the required inputs and naming contract.
+
+This phase is completed by Parity Verifier as part of the same diagnosis dispatch that runs Phase 2.
 
 ### Goal
-Create a reproducible failing test that targets the identified module with the specific config+region. The fixture path and loader call must follow the canonical convention defined in `tests/common/mod.rs` (`golden_fixture_path_with_config` / `load_golden_data_with_config`) so the same helpers serve both the bare-region per-module suite and the new config-scoped tests.
+Define the reproducible failing test that the reviewed repair plan file must hand off to `mismatch-repair` for the identified module and config+region. The fixture path and loader call must follow the canonical convention defined in `tests/common/mod.rs` (`golden_fixture_path_with_config` / `load_golden_data_with_config`) so the same helpers serve both the bare-region per-module suite and the new config-scoped tests.
 
 ### Naming Convention
 - **Config slug** — produced by `config_name_to_slug` in `tests/common/mod.rs`: lowercase ASCII, with `-` mapped to `_` (e.g. `T1-01` → `t1_01`, `CM-amplicon` → `cm_amplicon`). Always derive the slug through this helper; never hand-roll it.
@@ -189,9 +201,9 @@ Create a reproducible failing test that targets the identified module with the s
 - **Test function** — `parity_{module}_config_{config_slug}_{region_safe}` (suite-prefixed inside the module's file under `tests/parity_suite/`).
 
 ### Procedure
-1. Generate the fixture for the failing `(module, config, region)` triple. Use the same generator the per-module suite already uses (e.g. `scripts/batch_fixtures.sh` or the module-specific `scripts/gen_*_golden*` driver), pointing it at the failing config preset and region. Place the output at the canonical path above; do **not** invent a parallel directory layout.
-2. Confirm the file lands at exactly `testdata/fixtures/{module}/{module}_{config_slug}_{region_safe}.jsonl.zst` — file existence is the first thing the loader checks.
-3. Add a `#[test]` to the module's existing parity test file (e.g. `tests/parity_suite/{module}.rs`) using the canonical loader:
+1. Record the fixture that must be generated for the failing `(module, config, region)` triple. Use the same generator the per-module suite already uses (e.g. `scripts/batch_fixtures.sh` or the module-specific `scripts/gen_*_golden*` driver), point it at the failing config preset and region, and place the output at the canonical path above; do **not** invent a parallel directory layout.
+2. Record the exact canonical path `testdata/fixtures/{module}/{module}_{config_slug}_{region_safe}.jsonl.zst` — file existence is the first thing the loader checks.
+3. Record the `#[test]` that Port Engineer must add to the module's existing parity test file (e.g. `tests/parity_suite/{module}.rs`) using the canonical loader:
    ```rust
    use crate::common::{golden_fixture_path_with_config, load_golden_data_with_config};
 
@@ -204,31 +216,29 @@ Create a reproducible failing test that targets the identified module with the s
    }
    ```
    The helper accepts the raw preset name (e.g. `"T1-01"`) and applies `config_name_to_slug` internally; do not pre-slugify at the call site.
-4. Run the test once and confirm it FAILS with the same divergence Phase 2 identified (red-green cycle). A fixture-not-found panic from `load_golden_data_with_config` indicates the path or slug is wrong — recheck step 2 before proceeding.
+4. Record in the reviewed repair plan file that `mismatch-repair` Phase 3 must run the test once and confirm it FAILS with the same divergence Phase 2 identified (red-green cycle). A fixture-not-found panic from `load_golden_data_with_config` indicates the path or slug is wrong — recheck step 2 before proceeding.
 
 ### Outputs
-- Canonical fixture path: `testdata/fixtures/{module}/{module}_{config_slug}_{region_safe}.jsonl.zst`
-- Test file and function name (matching the canonical pattern)
-- Confirmation that the test fails with the expected mismatch (not with a missing-fixture or path-mismatch error)
+- Inputs for the reviewed repair plan file: canonical fixture path, test file, function name, and expected mismatch signal
 
-## Phase 4: Fix (mismatch-repair)
+## Phase 4: Repair Dispatch (mismatch-repair)
 
 ### Goal
 Fix the Rust module to match Java behavior for the identified config+region.
 
 ### Procedure
-1. Use the `shard-diagnosis` skill to identify the exact field and root cause within the module.
-2. Dispatch Port Engineer with `mismatch-repair` skill:
-   - Input: diagnosis report from Phase 2 + shard-diagnosis output
+1. Use the Phase 2 isolation report and the Phase 3 failing-test contract as the repair inputs. In the canonical E2E path, do not insert a separate `shard-diagnosis` checkpoint before repair dispatch.
+2. Orchestrator runs the global `plan-duck` skill on the Phase 2/3 outputs, writes the reviewed repair plan file, and dispatches Port Engineer with `mismatch-repair`:
+   - Input: reviewed repair plan file naming the diagnosis report from Phase 2 and the failing-test artifacts from Phase 3
    - Constraint: in-place repair, no adapter patterns
    - Gate: the Phase 3 failing test must pass inside `mismatch-repair` Phase 3 after the fix
 3. Port Engineer implements the fix.
-4. Run the Phase 3 test inside `mismatch-repair` Phase 3 — must pass.
+4. Run the Phase 3 test named in the reviewed repair plan file inside `mismatch-repair` Phase 3 — must pass.
 
 ### Agent Routing
-- **Parity Verifier** runs shard-diagnosis
+- **Parity Verifier** runs Phases 1, 2, 3, and 5 and produces the diagnosis report, the Phase 3 failing-test contract named in the reviewed repair plan file, and the final verification report
 - **Port Engineer** implements the fix using mismatch-repair
-- **Orchestrator** coordinates the handoff
+- **Orchestrator** coordinates the handoffs and runs `plan-duck` before diagnosis dispatch and before repair dispatch
 
 ## Phase 5: Verify
 
@@ -236,7 +246,7 @@ Fix the Rust module to match Java behavior for the identified config+region.
 Confirm the fix resolves the original failure without introducing regressions.
 
 ### Procedure
-1. Run the Phase 3 test inside `mismatch-repair` Phase 3 — must PASS.
+1. Reuse the reviewed repair plan file and run the Phase 3 test named there inside `mismatch-repair` Phase 3 — must PASS. Do not insert another `plan-duck` checkpoint before this rerun unless the repair scope changed.
 2. Run the full module sweep test — must PASS (no regression):
    ```bash
    cargo test --profile debug-release --test parity_sweep_suite {module}_sweep:: -- --include-ignored --nocapture --test-threads=1
@@ -274,16 +284,15 @@ The loop terminates when:
 ## Related Skills
 | Skill | Role |
 |-------|------|
+| plan-duck | Pre-dispatch review for the diagnosis and repair plan files; skip it for Phase 5 mechanical reruns |
 | tiered-config-test | Expand nightly/sweep coverage and tier promotion across the 44-config matrix |
-| shard-diagnosis | Phase 4: field-level diagnosis within identified module |
 | mismatch-repair | Phase 4: fix methodology for Port Engineer; Phase 3: canonical verification loop for the failing config-e2e test |
 | module-parity-test | Phase 5: per-module regression check |
-| rubberduck-review | Optional checkpoint after Phase 2 isolation to challenge module attribution and rerun scope before entering the fix loop |
 
 ## Agent Responsibilities
 | Agent | Phases |
 |-------|--------|
-| Parity Verifier | Phases 1, 2, 5 (run tests, diagnose) |
-| Port Engineer | Phases 3, 4 (create test, fix code) |
+| Parity Verifier | Phases 1, 2, 3, 5 (run tests, isolate, define the repair handoff, verify) |
+| Port Engineer | Phase 4 (implement fix in mismatch-repair) |
 | Gerneral-Purpose Agent | Ad-hoc tasks (fixture generation, script execution) |
-| Orchestrator | Coordinates all phases, decides loop/escalate |
+| Orchestrator | Coordinates all phases, runs `plan-duck` before diagnosis and repair dispatches, decides loop/escalate |
