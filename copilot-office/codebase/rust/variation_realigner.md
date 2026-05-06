@@ -6,7 +6,7 @@
 
 ## Overview
 
-VariationRealigner is the second pipeline stage after CigarParser. It takes raw variant maps (insertions, non-insertions, soft clips, SV structures) and performs local realignment: SV filtering, MNP adjustment, short indel absorption, and large indel discovery from soft clips. The module mutates shared variant maps in place throughout. Ported as standalone free functions (no `struct VariationRealigner`) to satisfy the borrow checker while passing `&mut HashMap` parameters for each shared mutable map.
+VariationRealigner is the second pipeline stage after CigarParser. It takes raw variant maps (insertions, non-insertions, soft clips, SV structures) and performs local realignment: SV filtering, MNP adjustment, short indel absorption, and large indel discovery from soft clips. The module mutates shared variant maps in place throughout and can re-enter the partial SAMFileParser/CigarParser path for boundary realignment windows. Ported as standalone free functions (no `struct VariationRealigner`) to satisfy the borrow checker while passing `&mut HashMap` parameters for each shared mutable map.
 
 ## Method Inventory
 
@@ -37,7 +37,7 @@ VariationRealigner is the second pipeline stage after CigarParser. It takes raw 
 | `realignlgins()` | yes | Large insertion from single soft clips |
 | `realign_indels()` | yes | Sequences the 5 realignment sub-procedures |
 | `get_sv()` / `remove_sv()` | yes | SV metadata get-or-create / remove helpers |
-| `partial_pipeline_stub()` | yes | No-op stub for re-entrant CigarParser (S17 integration) |
+| `run_partial_pipeline()` | yes | Re-enters SAMFileParser + CigarParser(true) for boundary realignment windows |
 
 ## Java↔Rust Correspondence
 
@@ -47,9 +47,9 @@ VariationRealigner is the second pipeline stage after CigarParser. It takes raw 
 | `VariationRealigner.fillAndSortTmp()` | `fill_and_sort_tmp()` | Generic over map value type |
 | `VariationRealigner.realigndel()` | `realigndel()` | `bams` null→Option shadowing preserved |
 | `VariationRealigner.realignins()` | `realignins()` | Returns NEWINS String |
-| `VariationRealigner.realignlgdel()` | `realignlgdel()` | partialPipeline stubbed |
+| `VariationRealigner.realignlgdel()` | `realignlgdel()` | partialPipeline side effects wired; Java mutates 5' `dellen` before short-del coverage |
 | `VariationRealigner.realignlgins30()` | `realignlgins30()` | Recursive realigndel/realignins calls |
-| `VariationRealigner.realignlgins()` | `realignlgins()` | partialPipeline stubbed |
+| `VariationRealigner.realignlgins()` | `realignlgins()` | partialPipeline side effects wired |
 | Inner class `SortPositionDescription` | `SortPositionDescription` struct | |
 | Inner class `MismatchResult` | `MismatchResult` struct | |
 | Inner class `Mismatch` | `Mismatch` struct | |
@@ -66,11 +66,12 @@ VariationRealigner is the second pipeline stage after CigarParser. It takes raw 
 8. **ismatch direction formula** — `seq2[dir*n - (dir==-1 ? 1 : 0)]`.
 9. **realignlgdel 3' meanPosition adjustment** — 3' pass adds `dellen * varsCount` before adjCnt; 5' does not.
 10. **Pass-2 reverse loop skips element 0** — `for i in (1..tmp.len()).rev()`.
-11. **partialPipeline stub** — 5 call sites are no-op. Will be wired when S17 pipeline integration is complete.
+11. **partialPipeline re-entry** — Boundary realignment paths thread live variant, coverage, and soft-clip maps through SAMFileParser + CigarParser(true). Keep Java-equivalent window guards and map writeback.
 12. **SV list cloning** — `to_vec()` clones prevent `used` flag mutation from propagating back to `sv_structures`. Borrow-checker workaround; does not affect Tier 1 parity.
+13. **realignlgdel 5' EXTRA dellen mutation** — Java decrements `dellen` by `EXTRA.length()` before both genotype formatting and the later short-deletion coverage loops. Rust must mutate the original scalar, not only an adjusted display value.
 
 ## Architectural Notes
 
 - **No struct**: Entire module is free functions with explicit `&mut` parameters for each shared map. This avoids `&mut self` borrow conflicts.
 - **COMP2 / COMP3 sorts**: Two separate sort closures for soft-clip position lists (COMP2 for lgdel/lgins, COMP3 for lgins30).
-- **Cross-module stubs**: `find_match()`, `mark_sv()`, `mark_dup_sv()` call into `structural_variants_processor` (S17). `partial_pipeline_stub()` is a local no-op.
+- **Cross-module calls**: `find_match()`, `mark_sv()`, and `mark_dup_sv()` call into `structural_variants_processor` (S17). `run_partial_pipeline()` re-enters `sam_file_parser` and `cigar_parser` for Java-equivalent boundary windows.

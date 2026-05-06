@@ -5,10 +5,7 @@ use std::collections::HashSet;
 #[test]
 fn slugs_unique_and_well_formed() {
     let preset_rows = common::load_config_presets_raw_tsv();
-    let tsv_names: HashSet<String> = preset_rows
-        .iter()
-        .map(|(name, _)| name.clone())
-        .collect();
+    let tsv_names: HashSet<String> = preset_rows.iter().map(|(name, _)| name.clone()).collect();
     let expected_names: HashSet<String> = common::CONFIG_PRESETS
         .iter()
         .map(|&name| name.to_string())

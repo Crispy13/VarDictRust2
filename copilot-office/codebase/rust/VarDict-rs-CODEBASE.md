@@ -49,7 +49,7 @@ Rows below mirror the Java cache structure so Java↔Rust correspondence can be 
 
 ## Coverage Summary
 
-- Rust cache docs in this index: 4 module docs (variations.md, scope_data.md, sam_file_parser.md, tsv_output_layer.md), placeholder index for remaining modules
+- Rust cache docs in this index: 8 module docs (cigar_parser.md, sam_file_parser.md, scope_data.md, structural_variants_processor.md, to_vars_builder.md, tsv_output_layer.md, variation_realigner.md, variations.md), placeholder index for remaining modules
 - Expected workflow: create per-module docs as Review Gate updates Rust cache coverage after approved reviews
 
 ## Per-Module File Template

@@ -25,41 +25,37 @@ mod na12878_exome_sweep;
 mod na12878_lowcov_sweep;
 
 fn main() {
-	sweep_common::reset_failure_count();
+    sweep_common::reset_failure_count();
 
-	let args = Arguments::from_iter(rewrite_legacy_exact_filter(std::env::args_os()));
-	let mut trials = Vec::new();
-	trials.extend(hg002_sweep::build_trials());
-	trials.extend(na12878_exome_sweep::build_trials());
-	trials.extend(na12878_lowcov_sweep::build_trials());
-	trials.sort_by(|left, right| left.name().cmp(right.name()));
+    let args = Arguments::from_iter(rewrite_legacy_exact_filter(std::env::args_os()));
+    let mut trials = Vec::new();
+    trials.extend(hg002_sweep::build_trials());
+    trials.extend(na12878_exome_sweep::build_trials());
+    trials.extend(na12878_lowcov_sweep::build_trials());
+    trials.sort_by(|left, right| left.name().cmp(right.name()));
 
-	libtest_mimic::run(&args, trials).exit();
+    libtest_mimic::run(&args, trials).exit();
 }
 
 fn rewrite_legacy_exact_filter<I>(iter: I) -> Vec<OsString>
 where
-	I: IntoIterator,
-	I::Item: Into<OsString>,
+    I: IntoIterator,
+    I::Item: Into<OsString>,
 {
-	let mut args: Vec<OsString> = iter.into_iter().map(Into::into).collect();
-	let Some(exact_index) = args.iter().position(|arg| arg == "--exact") else {
-		return args;
-	};
+    let mut args: Vec<OsString> = iter.into_iter().map(Into::into).collect();
+    let Some(exact_index) = args.iter().position(|arg| arg == "--exact") else {
+        return args;
+    };
 
-	let Some((filter_index, replacement)) = args
-		.iter()
-		.enumerate()
-		.find_map(|(index, arg)| {
-			arg.to_str()
-				.and_then(sweep_common::legacy_selector_to_chunk_filter)
-				.map(|replacement| (index, replacement))
-		})
-	else {
-		return args;
-	};
+    let Some((filter_index, replacement)) = args.iter().enumerate().find_map(|(index, arg)| {
+        arg.to_str()
+            .and_then(sweep_common::legacy_selector_to_chunk_filter)
+            .map(|replacement| (index, replacement))
+    }) else {
+        return args;
+    };
 
-	args[filter_index] = replacement.into();
-	args.remove(exact_index);
-	args
+    args[filter_index] = replacement.into();
+    args.remove(exact_index);
+    args
 }

@@ -6,7 +6,7 @@
 
 ## Overview
 
-Detects structural variants (DEL, INV, DUP) from soft-clipped read consensus sequences and discordant read pairs. Sits between VariationRealigner (S16) and ToVarsBuilder (S18). Processes SV evidence stored in `SVStructures` (populated during BAM traversal), finds consensus sequences, aligns them to reference via seed-based matching, constructs variant description strings, and adjusts variant/coverage counts. Also provides `find_match`, `mark_sv`, and `mark_dup_sv` used by S16's realignlgdel/realignlgins30.
+Detects structural variants (DEL, INV, DUP) from soft-clipped read consensus sequences and discordant read pairs. Sits between VariationRealigner (S16) and ToVarsBuilder (S18). Processes SV evidence stored in `SVStructures` (populated during BAM traversal), finds consensus sequences, aligns them to reference via seed-based matching, constructs variant description strings, and adjusts variant/coverage counts. Boundary SV paths now re-enter the partial pipeline for Java-equivalent reference-extension windows. The module also provides `find_match`, `mark_sv`, and `mark_dup_sv` used by S16's realignlgdel/realignlgins30.
 
 ## Method Inventory
 
@@ -32,7 +32,7 @@ Detects structural variants (DEL, INV, DUP) from soft-clipped read consensus seq
 | `fill_and_sort_tmp_sv()` | yes | Filter to curseg + stable sort by count descending |
 | `adj_snv()` | yes | Short soft-clip rescue as SNVs (≤5bp consensus) |
 | `output_clipping()` | yes | Debug remaining-clip stderr output |
-| `partial_pipeline_stub()` | yes | No-op stub for off-window pipeline re-entry |
+| `run_partial_pipeline()` | yes | Re-enters SAMFileParser + CigarParser(true) for boundary SV reference-extension windows |
 
 ## Java↔Rust Correspondence
 
@@ -41,7 +41,7 @@ Detects structural variants (DEL, INV, DUP) from soft-clipped read consensus seq
 | `StructuralVariantsProcessor` class | Free functions in `structural_variants_processor.rs` | No struct; explicit `&mut` params |
 | `initFromScope()` | Inlined into `process()` argument list | Field transfer via `RealignedVariationData` |
 | `PairsData` inner class | `PairsData` struct | Direct mapping |
-| `getMode().partialPipeline(...)` | `partial_pipeline_stub()` | No-op; requires full pipeline integration |
+| `getMode().partialPipeline(...)` | `run_partial_pipeline()` | Moves live variation/coverage/soft-clip maps through SAMFileParser and CigarParser(true), then writes updated maps back |
 | `StructuralVariantsJsonlWriter` | Not ported | Debug-only; non-blocking for TSV parity |
 
 ## Known Parity Traps
@@ -56,11 +56,11 @@ Detects structural variants (DEL, INV, DUP) from soft-clipped read consensus seq
 8. **DUP extracnt**: `tmp.extracnt = tcnt` set for DUP only.
 9. **Doubled stats in findDELdisc**: `2 * varsCount`, `2 * meanQuality`, etc. for discordant pairs.
 10. **varsCount = 0 explicit reset**: Preserved after `get_variation()` for re-existing entries.
+11. **Partial-pipeline re-entry**: DEL, INV, and DUP boundary branches must stay guarded by Java-equivalent `isLoaded` checks and must thread live `non_insertion_variants`, `insertion_variants`, `ref_coverage`, and soft-clip maps through the re-entry.
 
 ## Divergences
 
-1. **partial_pipeline_stub**: Java re-runs upstream partial pipeline for off-window SV context. Rust no-ops. Affects region-boundary DEL/INV/DUP discovery for SVs extending beyond the window. Does not affect within-region Tier 1 parity (100/100 PASS).
-2. **JSONL writer**: Java debug helper not ported. Non-blocking for TSV parity.
+1. **Partial-pipeline debug snapshots**: Rust now applies the Java-equivalent map side effects for SV boundary re-entry, but does not currently emit a separate partial-pipeline CIGAR debug snapshot. Main-region `sv_processor` and final TSV parity are the acceptance surface.
 
 ## Cross-Module Dependencies
 
@@ -68,4 +68,5 @@ Detects structural variants (DEL, INV, DUP) from soft-clipped read consensus seq
 - **Downstream**: Output consumed by ToVarsBuilder (S18). Writes to `non_insertion_variants`, `insertion_variants`, `ref_coverage`.
 - **Cross-calls to S16**: `find_inv_sub` creates realigndel callback via direct function call with previousScope data.
 - **Cross-calls from S16**: `find_match`, `mark_sv`, `mark_dup_sv` called by `realignlgdel`/`realignlgins30` in variation_realigner.rs.
+- **Partial re-entry**: `run_partial_pipeline` calls `sam_file_parser_process` and `CigarParser::new(true).process_preprocessor` over modified boundary regions, matching Java `AbstractMode.partialPipeline()` side effects.
 - **Shared utilities**: `find_conseq`, `adj_cnt`, `inc_cnt`, `get_variation` from `variations.rs`; `ismatchref_with_mm` from `variation_realigner.rs`; complement/reverse from `utils.rs`.

@@ -6,15 +6,16 @@
 //! Cluster C: adjSNV, outputClipping.
 //! Cluster D: process() entry point.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::config::{DISCPAIRQUAL, MINSVCDIST, SEED_1, SEED_2, SVFLANK};
 use crate::data::{
-    CurrentSegment, Match, RealignedVariationData, Region, SVStructures, Sclip, Side,
+    CurrentSegment, InitialData, Match, RealignedVariationData, Region, SVStructures, Sclip, Side,
     SortPositionSclip, Variation, VariationMap, VariationMapSV,
 };
 use crate::reference::{Reference, ReferenceResource};
-use crate::scope::GlobalReadOnlyScope;
+use crate::scope::{GlobalReadOnlyScope, Scope, VariantPrinter};
 use crate::utils::{
     char_at, complement_base, complement_sequence, get_reverse_complemented_sequence,
     reverse_sequence, substr_with_len,
@@ -711,10 +712,114 @@ fn get_sv(
     vmap.sv.as_mut().unwrap()
 }
 
-/// Stub: partialPipeline — re-entrant CigarParser call.
-/// Java: getMode().partialPipeline(...) — S17 integration stub. No-op for now.
-fn partial_pipeline_stub() {
-    // Java: getMode().partialPipeline(currentScope, executor) — not yet ported
+struct PartialPipelineContext<'a> {
+    bam: &'a str,
+    region: &'a Region,
+    reference_resource: &'a Arc<ReferenceResource>,
+    splice: &'a HashSet<String>,
+    out: &'a Arc<VariantPrinter>,
+}
+
+/// Ported from: AbstractMode.partialPipeline()
+/// Java: AbstractMode.java:L79-L85
+fn run_partial_pipeline(
+    context: &PartialPipelineContext<'_>,
+    ms: i32,
+    me: i32,
+    max_read_length: i32,
+    reference: &mut Reference,
+    non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    insertion_variants: &mut HashMap<i32, VariationMap>,
+    ref_coverage: &mut HashMap<i32, i32>,
+    soft_clips_3_end: &mut HashMap<i32, Sclip>,
+    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+) {
+    let modified_start = std::cmp::max(1, ms - 200);
+    let modified_end = me + 200;
+    if modified_start > modified_end || context.bam.is_empty() {
+        return;
+    }
+
+    let modified_region = Region::new_modified_region(context.region, modified_start, modified_end);
+    if !ReferenceResource::is_loaded(
+        &modified_region.chr,
+        modified_region.start,
+        modified_region.end,
+        reference,
+    ) {
+        let current_reference = std::mem::take(reference);
+        *reference = context
+            .reference_resource
+            .get_reference_with_extension(&modified_region, max_read_length, current_reference)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "Failed to fetch reference for {}: {}",
+                    modified_region.print_region(),
+                    error
+                )
+            });
+    }
+
+    let initial_data = InitialData::new(
+        std::mem::take(non_insertion_variants),
+        std::mem::take(insertion_variants),
+        std::mem::take(ref_coverage),
+        std::mem::take(soft_clips_3_end),
+        std::mem::take(soft_clips_5_end),
+    );
+    let scope = Scope {
+        bam: context.bam.to_string(),
+        region: modified_region,
+        region_ref: Arc::new(reference.clone()),
+        reference_resource: Arc::clone(context.reference_resource),
+        max_read_length,
+        splice: Arc::new(context.splice.clone()),
+        out: Arc::clone(context.out),
+        data: initial_data,
+    };
+    let parsed_scope = crate::mods::sam_file_parser::sam_file_parser_process(scope);
+    let Scope {
+        region,
+        region_ref,
+        max_read_length,
+        splice,
+        mut data,
+        ..
+    } = parsed_scope;
+    let header = data
+        .header_view()
+        .expect("current BAM header must exist before partial CIGAR parsing");
+    let chr_name =
+        crate::mods::sam_file_parser::get_chr_name(&region, &GlobalReadOnlyScope::instance().conf);
+    let InitialData {
+        non_insertion_variants: partial_non_insertion_variants,
+        insertion_variants: partial_insertion_variants,
+        ref_coverage: partial_ref_coverage,
+        soft_clips_5_end: partial_soft_clips_5_end,
+        soft_clips_3_end: partial_soft_clips_3_end,
+    } = std::mem::take(&mut data.initial_data);
+    let total_reads = data.total_reads;
+    let duplicate_reads = data.duplicate_reads;
+    let mut parser = crate::mods::cigar_parser::CigarParser::new(true);
+    parser.init_from_scope(
+        &region,
+        &region_ref,
+        &splice,
+        max_read_length,
+        partial_non_insertion_variants,
+        partial_insertion_variants,
+        partial_ref_coverage,
+        partial_soft_clips_3_end,
+        partial_soft_clips_5_end,
+        total_reads,
+        duplicate_reads,
+    );
+    let variation_data = parser.process_preprocessor(&mut data, &header, &chr_name);
+    *non_insertion_variants = variation_data.non_insertion_variants;
+    *insertion_variants = variation_data.insertion_variants;
+    *ref_coverage = variation_data.ref_coverage;
+    *soft_clips_3_end = variation_data.soft_clips_3_end;
+    *soft_clips_5_end = variation_data.soft_clips_5_end;
 }
 
 /// Reverse-complement a whole string (mirrors Java SequenceUtil.reverseComplement).
@@ -757,6 +862,7 @@ fn extend_reference_if_needed(
 pub fn find_del(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    insertion_variants: &mut HashMap<i32, VariationMap>,
     ref_coverage: &mut HashMap<i32, i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
@@ -764,8 +870,27 @@ pub fn find_del(
     reference_resource: &ReferenceResource,
     region: &Region,
     max_read_length: i32,
+    bams: &Option<Vec<String>>,
+    splice: &Option<std::collections::BTreeSet<String>>,
 ) {
     let instance = GlobalReadOnlyScope::instance();
+    let partial_pipeline_bam = bams
+        .as_ref()
+        .map(|paths| paths.join(":"))
+        .unwrap_or_default();
+    let partial_pipeline_splice: HashSet<String> = splice
+        .as_ref()
+        .map(|sites| sites.iter().cloned().collect())
+        .unwrap_or_default();
+    let partial_pipeline_reference_resource = Arc::new(reference_resource.clone());
+    let partial_pipeline_out = Arc::new(instance.variant_printer.clone());
+    let partial_pipeline_context = PartialPipelineContext {
+        bam: &partial_pipeline_bam,
+        region,
+        reference_resource: &partial_pipeline_reference_resource,
+        splice: &partial_pipeline_splice,
+        out: &partial_pipeline_out,
+    };
 
     // ── Part 1: 5' forward deletions (svfdel loop) ──
     // Java: StructuralVariantsProcessor.java#L149-L316
@@ -821,17 +946,30 @@ pub fn find_del(
                 continue;
             }
 
-            // Java: StructuralVariantsProcessor.java#L178-L182 — extend reference
-            extend_reference_if_needed(
-                &region.chr,
-                del_mstart,
-                del_mend,
-                300,
-                reference,
-                reference_resource,
-                region,
-            );
-            partial_pipeline_stub();
+            // Java: StructuralVariantsProcessor.java#L178-L182 — extend reference + partialPipeline
+            if !ReferenceResource::is_loaded(&region.chr, del_mstart, del_mend, reference) {
+                extend_reference_if_needed(
+                    &region.chr,
+                    del_mstart,
+                    del_mend,
+                    300,
+                    reference,
+                    reference_resource,
+                    region,
+                );
+                run_partial_pipeline(
+                    &partial_pipeline_context,
+                    del_mstart,
+                    del_mend,
+                    max_read_length,
+                    reference,
+                    non_insertion_variants,
+                    insertion_variants,
+                    ref_coverage,
+                    soft_clips_3_end,
+                    soft_clips_5_end,
+                );
+            }
 
             // Java: StructuralVariantsProcessor.java#L184-L188
             let m = find_match_default(&seq, reference, softp, 1);
@@ -889,36 +1027,24 @@ pub fn find_del(
             // Java: StructuralVariantsProcessor.java#L218 — adjCnt with reference variant
             let ref_base = reference.reference_sequences.get(&softp).copied();
             let scv_clone = soft_clips_3_end.get(&softp_initial).unwrap().base.clone();
-
-            // Get reference variant if exists
-            let ref_var: Option<Variation> = ref_base.and_then(|rb| {
-                let rb_str = char::from(rb).to_string();
-                non_insertion_variants
-                    .get(&softp)
-                    .and_then(|m| m.entries.get(&rb_str).cloned())
-            });
-
-            let variation = get_variation(non_insertion_variants, softp, &vn);
-            adj_cnt_with_reference(variation, &scv_clone, None);
-
-            // Now handle reference variant subtraction separately if needed
-            if let Some(_ref_var) = ref_var {
-                if let Some(rb) = ref_base {
+            if let Some(vmap) = non_insertion_variants.get_mut(&softp) {
+                let mut variation = vmap.entries.remove(&vn).unwrap_or_default();
+                let mut ref_var = ref_base.and_then(|rb| {
                     let rb_str = char::from(rb).to_string();
-                    if let Some(vmap) = non_insertion_variants.get_mut(&softp) {
-                        if let Some(rvar) = vmap.entries.get_mut(&rb_str) {
-                            rvar.vars_count -= scv_clone.vars_count;
-                            rvar.high_quality_reads_count -= scv_clone.high_quality_reads_count;
-                            rvar.low_quality_reads_count -= scv_clone.low_quality_reads_count;
-                            rvar.mean_position -= scv_clone.mean_position;
-                            rvar.mean_quality -= scv_clone.mean_quality;
-                            rvar.mean_mapping_quality -= scv_clone.mean_mapping_quality;
-                            rvar.number_of_mismatches -= scv_clone.number_of_mismatches;
-                            rvar.vars_count_on_forward -= scv_clone.vars_count_on_forward;
-                            rvar.vars_count_on_reverse -= scv_clone.vars_count_on_reverse;
-                            crate::variations::correct_cnt(rvar);
-                        }
-                    }
+                    vmap.entries
+                        .remove(&rb_str)
+                        .map(|variation| (rb_str, variation))
+                });
+
+                adj_cnt_with_reference(
+                    &mut variation,
+                    &scv_clone,
+                    ref_var.as_mut().map(|(_, variation)| variation),
+                );
+
+                vmap.entries.insert(vn.clone(), variation);
+                if let Some((rb_str, reference_variation)) = ref_var {
+                    vmap.entries.insert(rb_str, reference_variation);
                 }
             }
 
@@ -1125,16 +1251,29 @@ pub fn find_del(
                 continue;
             }
 
-            extend_reference_if_needed(
-                &region.chr,
-                del_mstart,
-                del_mend,
-                300,
-                reference,
-                reference_resource,
-                region,
-            );
-            partial_pipeline_stub();
+            if !ReferenceResource::is_loaded(&region.chr, del_mstart, del_mend, reference) {
+                extend_reference_if_needed(
+                    &region.chr,
+                    del_mstart,
+                    del_mend,
+                    300,
+                    reference,
+                    reference_resource,
+                    region,
+                );
+                run_partial_pipeline(
+                    &partial_pipeline_context,
+                    del_mstart,
+                    del_mend,
+                    max_read_length,
+                    reference,
+                    non_insertion_variants,
+                    insertion_variants,
+                    ref_coverage,
+                    soft_clips_3_end,
+                    soft_clips_5_end,
+                );
+            }
 
             // Java: StructuralVariantsProcessor.java#L359-L368
             let m = find_match_default(&seq, reference, softp, -1);
@@ -1342,6 +1481,7 @@ pub fn find_del(
 pub fn find_inv(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    insertion_variants: &mut HashMap<i32, VariationMap>,
     ref_coverage: &mut HashMap<i32, i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
@@ -1350,20 +1490,34 @@ pub fn find_inv(
     region: &Region,
     max_read_length: i32,
     bams: &Option<Vec<String>>,
-    previous_scope_non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    previous_scope_ref_coverage: &mut HashMap<i32, i32>,
-    previous_scope_soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    previous_scope_soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    previous_scope_reference_sequences: &HashMap<i32, u8>,
-    previous_scope_chr: &str,
-    previous_scope_max_read_length: i32,
+    splice: &Option<std::collections::BTreeSet<String>>,
 ) {
+    let instance = GlobalReadOnlyScope::instance();
+    let partial_pipeline_bam = bams
+        .as_ref()
+        .map(|paths| paths.join(":"))
+        .unwrap_or_default();
+    let partial_pipeline_splice: HashSet<String> = splice
+        .as_ref()
+        .map(|sites| sites.iter().cloned().collect())
+        .unwrap_or_default();
+    let partial_pipeline_reference_resource = Arc::new(reference_resource.clone());
+    let partial_pipeline_out = Arc::new(instance.variant_printer.clone());
+    let partial_pipeline_context = PartialPipelineContext {
+        bam: &partial_pipeline_bam,
+        region,
+        reference_resource: &partial_pipeline_reference_resource,
+        splice: &partial_pipeline_splice,
+        out: &partial_pipeline_out,
+    };
+
     // Java: StructuralVariantsProcessor.java#L687
     find_inv_sub(
         &mut sv_structures.svfinv5,
         1,
         Side::Five,
         non_insertion_variants,
+        insertion_variants,
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
@@ -1371,14 +1525,8 @@ pub fn find_inv(
         reference_resource,
         region,
         max_read_length,
+        &partial_pipeline_context,
         bams,
-        previous_scope_non_insertion_variants,
-        previous_scope_ref_coverage,
-        previous_scope_soft_clips_3_end,
-        previous_scope_soft_clips_5_end,
-        previous_scope_reference_sequences,
-        previous_scope_chr,
-        previous_scope_max_read_length,
     );
     // Java: StructuralVariantsProcessor.java#L688
     find_inv_sub(
@@ -1386,6 +1534,7 @@ pub fn find_inv(
         -1,
         Side::Five,
         non_insertion_variants,
+        insertion_variants,
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
@@ -1393,14 +1542,8 @@ pub fn find_inv(
         reference_resource,
         region,
         max_read_length,
+        &partial_pipeline_context,
         bams,
-        previous_scope_non_insertion_variants,
-        previous_scope_ref_coverage,
-        previous_scope_soft_clips_3_end,
-        previous_scope_soft_clips_5_end,
-        previous_scope_reference_sequences,
-        previous_scope_chr,
-        previous_scope_max_read_length,
     );
     // Java: StructuralVariantsProcessor.java#L689
     find_inv_sub(
@@ -1408,6 +1551,7 @@ pub fn find_inv(
         1,
         Side::Three,
         non_insertion_variants,
+        insertion_variants,
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
@@ -1415,14 +1559,8 @@ pub fn find_inv(
         reference_resource,
         region,
         max_read_length,
+        &partial_pipeline_context,
         bams,
-        previous_scope_non_insertion_variants,
-        previous_scope_ref_coverage,
-        previous_scope_soft_clips_3_end,
-        previous_scope_soft_clips_5_end,
-        previous_scope_reference_sequences,
-        previous_scope_chr,
-        previous_scope_max_read_length,
     );
     // Java: StructuralVariantsProcessor.java#L690
     find_inv_sub(
@@ -1430,6 +1568,7 @@ pub fn find_inv(
         -1,
         Side::Three,
         non_insertion_variants,
+        insertion_variants,
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
@@ -1437,14 +1576,8 @@ pub fn find_inv(
         reference_resource,
         region,
         max_read_length,
+        &partial_pipeline_context,
         bams,
-        previous_scope_non_insertion_variants,
-        previous_scope_ref_coverage,
-        previous_scope_soft_clips_3_end,
-        previous_scope_soft_clips_5_end,
-        previous_scope_reference_sequences,
-        previous_scope_chr,
-        previous_scope_max_read_length,
     );
 }
 
@@ -1455,11 +1588,12 @@ pub fn find_inv(
 ///
 /// Find INV structural variants from one direction/side combination.
 #[allow(clippy::too_many_arguments)]
-pub fn find_inv_sub(
+fn find_inv_sub(
     svref: &mut Vec<Sclip>,
     dir: i32,
     side: Side,
     non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    insertion_variants: &mut HashMap<i32, VariationMap>,
     ref_coverage: &mut HashMap<i32, i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
@@ -1467,15 +1601,8 @@ pub fn find_inv_sub(
     reference_resource: &ReferenceResource,
     region: &Region,
     max_read_length: i32,
+    partial_pipeline_context: &PartialPipelineContext<'_>,
     bams: &Option<Vec<String>>,
-    // previousScope fields for realigndel callback
-    prev_non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    prev_ref_coverage: &mut HashMap<i32, i32>,
-    prev_soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    prev_soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    prev_reference_sequences: &HashMap<i32, u8>,
-    prev_chr: &str,
-    prev_max_read_length: i32,
 ) {
     let instance = GlobalReadOnlyScope::instance();
 
@@ -1501,13 +1628,6 @@ pub fn find_inv_sub(
                 soft_entries[0].0
             };
 
-            // Java: StructuralVariantsProcessor.java#L715
-            let sclip: &mut HashMap<i32, Sclip> = if dir == 1 {
-                soft_clips_3_end
-            } else {
-                soft_clips_5_end
-            };
-
             let inv = &svref[inv_idx];
             let inv_mstart = inv.mstart;
             let inv_mend = inv.mend;
@@ -1523,17 +1643,30 @@ pub fn find_inv_sub(
                 );
             }
 
-            // Java: StructuralVariantsProcessor.java#L720-L726 — extend reference
-            extend_reference_if_needed(
-                &region.chr,
-                inv_mstart,
-                inv_mend,
-                500,
-                reference,
-                reference_resource,
-                region,
-            );
-            partial_pipeline_stub();
+            // Match Java: refresh local variation state after extending the INV window.
+            if !ReferenceResource::is_loaded(&region.chr, inv_mstart, inv_mend, reference) {
+                extend_reference_if_needed(
+                    &region.chr,
+                    inv_mstart,
+                    inv_mend,
+                    500,
+                    reference,
+                    reference_resource,
+                    region,
+                );
+                run_partial_pipeline(
+                    partial_pipeline_context,
+                    inv_mstart,
+                    inv_mend,
+                    max_read_length,
+                    reference,
+                    non_insertion_variants,
+                    insertion_variants,
+                    ref_coverage,
+                    soft_clips_3_end,
+                    soft_clips_5_end,
+                );
+            }
 
             let mut bp: i32 = 0;
             let mut scv_vars_count = 0i32;
@@ -1543,6 +1676,11 @@ pub fn find_inv_sub(
 
             if softp != 0 {
                 // Java: StructuralVariantsProcessor.java#L730-L746
+                let sclip: &mut HashMap<i32, Sclip> = if dir == 1 {
+                    soft_clips_3_end
+                } else {
+                    soft_clips_5_end
+                };
                 if !sclip.contains_key(&softp) {
                     return Ok(false);
                 }
@@ -1570,6 +1708,11 @@ pub fn find_inv_sub(
                 }
             } else {
                 // Java: StructuralVariantsProcessor.java#L748-L775 — scan within 2*maxReadLength
+                let sclip: &mut HashMap<i32, Sclip> = if dir == 1 {
+                    soft_clips_3_end
+                } else {
+                    soft_clips_5_end
+                };
                 let sp = if dir == 1 { inv_end } else { inv_start };
                 for i in 1..=(2 * max_read_length) {
                     let cp = sp + i * dir;
@@ -1802,15 +1945,14 @@ pub fn find_inv_sub(
                     bams_slice,
                     bams,
                     &dels5,
-                    prev_non_insertion_variants,
-                    prev_ref_coverage,
-                    prev_soft_clips_3_end,
-                    prev_soft_clips_5_end,
-                    prev_reference_sequences,
-                    prev_chr,
-                    prev_max_read_length,
+                    non_insertion_variants,
+                    ref_coverage,
+                    soft_clips_3_end,
+                    soft_clips_5_end,
+                    &reference.reference_sequences,
+                    &region.chr,
+                    max_read_length,
                 );
-
                 if instance.conf.y {
                     let refcov = ref_coverage.get(&softp).copied().unwrap_or(0);
                     let ratio = if inv_mlen.abs() > 0 {
@@ -2857,8 +2999,27 @@ pub fn find_dup_disc(
     reference_resource: &ReferenceResource,
     region: &Region,
     max_read_length: i32,
+    bams: &Option<Vec<String>>,
+    splice: &Option<std::collections::BTreeSet<String>>,
 ) {
     let instance = GlobalReadOnlyScope::instance();
+    let partial_pipeline_bam = bams
+        .as_ref()
+        .map(|paths| paths.join(":"))
+        .unwrap_or_default();
+    let partial_pipeline_splice: HashSet<String> = splice
+        .as_ref()
+        .map(|sites| sites.iter().cloned().collect())
+        .unwrap_or_default();
+    let partial_pipeline_reference_resource = Arc::new(reference_resource.clone());
+    let partial_pipeline_out = Arc::new(instance.variant_printer.clone());
+    let partial_pipeline_context = PartialPipelineContext {
+        bam: &partial_pipeline_bam,
+        region,
+        reference_resource: &partial_pipeline_reference_resource,
+        splice: &partial_pipeline_splice,
+        out: &partial_pipeline_out,
+    };
 
     // ── Pass 1: svfdup ──
     // Java: StructuralVariantsProcessor.java#L1400-L1501
@@ -2893,20 +3054,18 @@ pub fn find_dup_disc(
 
             // Java: StructuralVariantsProcessor.java#L1419-L1425 — isLoaded + partialPipeline
             if !ReferenceResource::is_loaded(&region.chr, ms, me, reference) {
-                if !reference.reference_sequences.contains_key(&bp) {
-                    let modified_region = Region::new_modified_region(region, bp - 150, bp + 150);
-                    let old_ref = std::mem::take(reference);
-                    match reference_resource.get_reference_with_extension(
-                        &modified_region,
-                        300,
-                        old_ref,
-                    ) {
-                        Ok(new_ref) => *reference = new_ref,
-                        Err(e) => eprintln!("Warning: get_reference failed: {}", e),
-                    }
-                }
-                // Java: partialPipeline — stubbed
-                partial_pipeline_stub();
+                run_partial_pipeline(
+                    &partial_pipeline_context,
+                    ms,
+                    me,
+                    max_read_length,
+                    reference,
+                    non_insertion_variants,
+                    insertion_variants,
+                    ref_coverage,
+                    soft_clips_3_end,
+                    soft_clips_5_end,
+                );
             }
 
             let mut cntf = cnt;
@@ -3081,19 +3240,18 @@ pub fn find_dup_disc(
 
             // Java: StructuralVariantsProcessor.java#L1523-L1530 — isLoaded + partialPipeline
             if !ReferenceResource::is_loaded(&region.chr, ms, me, reference) {
-                if !reference.reference_sequences.contains_key(&pe) {
-                    let modified_region = Region::new_modified_region(region, pe - 150, pe + 150);
-                    let old_ref = std::mem::take(reference);
-                    match reference_resource.get_reference_with_extension(
-                        &modified_region,
-                        300,
-                        old_ref,
-                    ) {
-                        Ok(new_ref) => *reference = new_ref,
-                        Err(e) => eprintln!("Warning: get_reference failed: {}", e),
-                    }
-                }
-                partial_pipeline_stub();
+                run_partial_pipeline(
+                    &partial_pipeline_context,
+                    ms,
+                    me,
+                    max_read_length,
+                    reference,
+                    non_insertion_variants,
+                    insertion_variants,
+                    ref_coverage,
+                    soft_clips_3_end,
+                    soft_clips_5_end,
+                );
             }
 
             let mut cntf = cnt;
@@ -3227,6 +3385,47 @@ pub fn find_dup_disc(
 /// Ported from: StructuralVariantsProcessor.findAllSVs()
 /// Java: StructuralVariantsProcessor.java#L117-L145
 ///
+/// Parity helper: Java's SOFTP2SV stores live Sclip references. Rust stores
+/// cloned values, so rebuild that view from current svStructures before
+/// consumers inspect used flags or serialize snapshots.
+fn rebuild_softp2sv_from_sv_structures(
+    sv_structures: &SVStructures,
+    softp2sv: &mut HashMap<i32, Vec<Sclip>>,
+) {
+    fn push_softp2sv_entries(softp2sv: &mut HashMap<i32, Vec<Sclip>>, sv_list: &[Sclip]) {
+        for sv in sv_list {
+            if sv.softp != 0 {
+                softp2sv.entry(sv.softp).or_default().push(sv.clone());
+            }
+        }
+    }
+
+    softp2sv.clear();
+
+    push_softp2sv_entries(softp2sv, &sv_structures.svfinv3);
+    push_softp2sv_entries(softp2sv, &sv_structures.svrinv3);
+    push_softp2sv_entries(softp2sv, &sv_structures.svfinv5);
+    push_softp2sv_entries(softp2sv, &sv_structures.svrinv5);
+    push_softp2sv_entries(softp2sv, &sv_structures.svfdel);
+    push_softp2sv_entries(softp2sv, &sv_structures.svrdel);
+    push_softp2sv_entries(softp2sv, &sv_structures.svfdup);
+    push_softp2sv_entries(softp2sv, &sv_structures.svrdup);
+
+    for (_chr, sv_list) in &sv_structures.svffus {
+        push_softp2sv_entries(softp2sv, sv_list);
+    }
+    for (_chr, sv_list) in &sv_structures.svrfus {
+        push_softp2sv_entries(softp2sv, sv_list);
+    }
+
+    for sclips in softp2sv.values_mut() {
+        sclips.sort_by(|a, b| b.base.vars_count.cmp(&a.base.vars_count));
+    }
+}
+
+/// Ported from: StructuralVariantsProcessor.findAllSVs()
+/// Java: StructuralVariantsProcessor.java#L117-L145
+///
 /// Thin orchestrator: findDEL → findINV → findsv → findDELdisc → findINVdisc → findDUPdisc.
 /// Order is load-bearing — each routine marks clusters as used, preventing reprocessing.
 #[allow(clippy::too_many_arguments)]
@@ -3241,18 +3440,10 @@ pub fn find_all_svs(
     reference_resource: &ReferenceResource,
     region: &Region,
     max_read_length: i32,
-    softp2sv: &HashMap<i32, Vec<Sclip>>,
+    softp2sv: &mut HashMap<i32, Vec<Sclip>>,
     curseg: &CurrentSegment,
     bams: &Option<Vec<String>>,
     splice: &Option<std::collections::BTreeSet<String>>,
-    // previousScope fields for findINV's realigndel callback
-    prev_non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    prev_ref_coverage: &mut HashMap<i32, i32>,
-    prev_soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    prev_soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    prev_reference_sequences: &HashMap<i32, u8>,
-    prev_chr: &str,
-    prev_max_read_length: i32,
 ) {
     let instance = GlobalReadOnlyScope::instance();
 
@@ -3263,6 +3454,7 @@ pub fn find_all_svs(
     find_del(
         sv_structures,
         non_insertion_variants,
+        insertion_variants,
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
@@ -3270,6 +3462,8 @@ pub fn find_all_svs(
         reference_resource,
         region,
         max_read_length,
+        bams,
+        splice,
     );
 
     // Java: StructuralVariantsProcessor.java#L122-L124
@@ -3279,6 +3473,7 @@ pub fn find_all_svs(
     find_inv(
         sv_structures,
         non_insertion_variants,
+        insertion_variants,
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
@@ -3287,14 +3482,10 @@ pub fn find_all_svs(
         region,
         max_read_length,
         bams,
-        prev_non_insertion_variants,
-        prev_ref_coverage,
-        prev_soft_clips_3_end,
-        prev_soft_clips_5_end,
-        prev_reference_sequences,
-        prev_chr,
-        prev_max_read_length,
+        splice,
     );
+
+    rebuild_softp2sv_from_sv_structures(sv_structures, softp2sv);
 
     // Java: StructuralVariantsProcessor.java#L126-L128
     if instance.conf.y {
@@ -3361,7 +3552,11 @@ pub fn find_all_svs(
         reference_resource,
         region,
         max_read_length,
+        bams,
+        splice,
     );
+
+    rebuild_softp2sv_from_sv_structures(sv_structures, softp2sv);
 }
 
 /// Ported from: StructuralVariantsProcessor.adjSNV()
@@ -3537,14 +3732,13 @@ pub fn process(
     region: &Region,
     bams: &Option<Vec<String>>,
     splice: &Option<std::collections::BTreeSet<String>>,
-    // previousScope data for findINV's realigndel callback
-    prev_non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    prev_ref_coverage: &mut HashMap<i32, i32>,
-    prev_soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    prev_soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    prev_reference_sequences: &HashMap<i32, u8>,
-    prev_chr: &str,
-    prev_max_read_length: i32,
+    _prev_non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    _prev_ref_coverage: &mut HashMap<i32, i32>,
+    _prev_soft_clips_3_end: &mut HashMap<i32, Sclip>,
+    _prev_soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    _prev_reference_sequences: &HashMap<i32, u8>,
+    _prev_chr: &str,
+    _prev_max_read_length: i32,
 ) {
     let instance = GlobalReadOnlyScope::instance();
     let max_read_length = data.max_read_length.unwrap_or(0);
@@ -3562,17 +3756,10 @@ pub fn process(
             reference_resource,
             region,
             max_read_length,
-            &data.softp2sv,
+            &mut data.softp2sv,
             &data.curseg,
             bams,
             splice,
-            prev_non_insertion_variants,
-            prev_ref_coverage,
-            prev_soft_clips_3_end,
-            prev_soft_clips_5_end,
-            prev_reference_sequences,
-            prev_chr,
-            prev_max_read_length,
         );
     }
 

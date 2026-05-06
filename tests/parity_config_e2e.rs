@@ -257,16 +257,19 @@ fn binary_b_list_terse_format_regression() {
     );
 
     assert_eq!(
-        seen_names.len(), 4400,
+        seen_names.len(),
+        4400,
         "Phase 4 expects 4400 unique trial names; got {}",
         seen_names.len()
     );
     assert_eq!(
-        slug_counts.len(), expected_slugs.len(),
+        slug_counts.len(),
+        expected_slugs.len(),
         "unexpected slug cardinality in Binary B list output"
     );
     assert_eq!(
-        slug_indices.len(), expected_slugs.len(),
+        slug_indices.len(),
+        expected_slugs.len(),
         "unexpected slug coverage cardinality in Binary B list output"
     );
 
@@ -316,7 +319,6 @@ fn parse_cell_slug_and_index(name: &str) -> Option<(&str, usize)> {
     Some((slug, digits.parse().ok()?))
 }
 
-
 fn assert_config_matches_java_flags(
     preset_name: &str,
     java_flags: &HashMap<String, String>,
@@ -356,7 +358,14 @@ fn assert_config_matches_java_flags(
         defaults.mismatch,
         "mismatch",
     );
-    assert_int_flag(preset_name, java_flags, "-X", config.vext, defaults.vext, "vext");
+    assert_int_flag(
+        preset_name,
+        java_flags,
+        "-X",
+        config.vext,
+        defaults.vext,
+        "vext",
+    );
     assert_int_flag(
         preset_name,
         java_flags,
@@ -419,8 +428,7 @@ fn assert_config_matches_java_flags(
         "Preset {preset_name} unexpectedly changed downsampling"
     );
     assert_eq!(
-        config.chromosome_name_is_number,
-        defaults.chromosome_name_is_number,
+        config.chromosome_name_is_number, defaults.chromosome_name_is_number,
         "Preset {preset_name} unexpectedly changed chromosome_name_is_number"
     );
     assert_opt_int_flag(
@@ -435,7 +443,10 @@ fn assert_config_matches_java_flags(
         config.remove_duplicated_reads, defaults.remove_duplicated_reads,
         "Preset {preset_name} unexpectedly changed remove_duplicated_reads"
     );
-    assert_eq!(config.y, defaults.y, "Preset {preset_name} unexpectedly changed y");
+    assert_eq!(
+        config.y, defaults.y,
+        "Preset {preset_name} unexpectedly changed y"
+    );
     assert_eq!(
         config.trim_bases_after, defaults.trim_bases_after,
         "Preset {preset_name} unexpectedly changed trim_bases_after"
@@ -517,13 +528,11 @@ fn assert_config_matches_java_flags(
         "Preset {preset_name} unexpectedly changed include_n_in_total_depth"
     );
     assert_eq!(
-        config.unique_mode_alignment_enabled,
-        defaults.unique_mode_alignment_enabled,
+        config.unique_mode_alignment_enabled, defaults.unique_mode_alignment_enabled,
         "Preset {preset_name} unexpectedly changed unique_mode_alignment_enabled"
     );
     assert_eq!(
-        config.unique_mode_second_in_pair_enabled,
-        defaults.unique_mode_second_in_pair_enabled,
+        config.unique_mode_second_in_pair_enabled, defaults.unique_mode_second_in_pair_enabled,
         "Preset {preset_name} unexpectedly changed unique_mode_second_in_pair_enabled"
     );
     assert_eq!(
@@ -623,9 +632,7 @@ fn assert_int_flag(
         .get(flag)
         .map(|value| {
             value.parse::<i32>().unwrap_or_else(|error| {
-                panic!(
-                    "Preset {preset_name} had invalid integer for {flag}: {value} ({error})"
-                )
+                panic!("Preset {preset_name} had invalid integer for {flag}: {value} ({error})")
             })
         })
         .unwrap_or(default_value);
@@ -648,9 +655,7 @@ fn assert_opt_int_flag(
         .get(flag)
         .map(|value| {
             value.parse::<i32>().unwrap_or_else(|error| {
-                panic!(
-                    "Preset {preset_name} had invalid integer for {flag}: {value} ({error})"
-                )
+                panic!("Preset {preset_name} had invalid integer for {flag}: {value} ({error})")
             })
         })
         .or(default_value);
@@ -716,9 +721,7 @@ fn assert_float_flag(
         .get(flag)
         .map(|value| {
             value.parse::<f64>().unwrap_or_else(|error| {
-                panic!(
-                    "Preset {preset_name} had invalid float for {flag}: {value} ({error})"
-                )
+                panic!("Preset {preset_name} had invalid float for {flag}: {value} ({error})")
             })
         })
         .unwrap_or(default_value);

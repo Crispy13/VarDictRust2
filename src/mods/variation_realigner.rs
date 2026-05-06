@@ -15,8 +15,8 @@ use rust_htslib::bam::{self, Read as BamRead};
 
 use crate::config::{EXTENSION, MINSVCDIST, SEED_1, SVFLANK, SVMAXLEN};
 use crate::data::{
-    BaseInsertion, Cluster, CurrentSegment, InitialData, Match35, RealignedVariationData,
-    Region, Sclip, SortPositionSclip, Variation, VariationData, VariationMap, VariationMapSV,
+    BaseInsertion, Cluster, CurrentSegment, InitialData, Match35, RealignedVariationData, Region,
+    Sclip, SortPositionSclip, Variation, VariationData, VariationMap, VariationMapSV,
 };
 use crate::patterns::{
     AMP_ATGC, ATGSs_AMP_ATGSs_END, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_ANY, BEGIN_PLUS_ATGC,
@@ -2976,10 +2976,8 @@ fn run_partial_pipeline(
     let header = data
         .header_view()
         .expect("current BAM header must exist before partial CIGAR parsing");
-    let chr_name = crate::mods::sam_file_parser::get_chr_name(
-        &region,
-        &GlobalReadOnlyScope::instance().conf,
-    );
+    let chr_name =
+        crate::mods::sam_file_parser::get_chr_name(&region, &GlobalReadOnlyScope::instance().conf);
     let InitialData {
         non_insertion_variants: partial_non_insertion_variants,
         insertion_variants: partial_insertion_variants,
@@ -3159,7 +3157,7 @@ fn realignlgdel(
         }
 
         // Java: VariationRealigner.java#L1067
-        let dellen = p - bp;
+        let mut dellen = p - bp;
         let mut en = 0i32;
         let mut gt = format!("-{}", dellen);
 
@@ -3182,12 +3180,12 @@ fn realignlgdel(
                 bp -= extra.len() as i32;
             }
         } else {
-            // Java: VariationRealigner.java#L1082-L1083
-            let adjusted_dellen = dellen - extra_upper.len() as i32;
-            if adjusted_dellen == 0 {
+            // Java mutates dellen before the short-del coverage update below.
+            dellen -= extra_upper.len() as i32;
+            if dellen == 0 {
                 gt = format!("-{}^{}", extra_upper.len(), extra_upper);
             } else {
-                gt = format!("-{}&{}", adjusted_dellen, extra_upper);
+                gt = format!("-{}&{}", dellen, extra_upper);
             }
         }
 
@@ -3410,16 +3408,16 @@ fn realignlgdel(
         );
 
         // Java: VariationRealigner.java#L1181-L1183 — SV splits update
-        let new_gt_vc = dels5
+        let tv_vc_after_splits = non_insertion_variants
             .get(&bp)
-            .and_then(|m| m.get(&gt))
-            .copied()
-            .unwrap_or(tv_vc);
+            .and_then(|m| m.entries.get(&gt))
+            .map(|v| v.vars_count)
+            .unwrap_or(0);
         if let Some(sv) = non_insertion_variants
             .get_mut(&bp)
             .and_then(|m| m.sv.as_mut())
         {
-            sv.splits += tv_vc - new_gt_vc;
+            sv.splits += tv_vc_after_splits - tv_vc;
         }
 
         // Java: VariationRealigner.java#L1185-L1187 — addVarFactor
@@ -3711,16 +3709,16 @@ fn realignlgdel(
         );
 
         // Java: VariationRealigner.java#L1365-L1367 — SV splits update
-        let new_gt_vc = dels5
+        let tv_vc_after_splits = non_insertion_variants
             .get(&bp)
-            .and_then(|m| m.get(&gt))
-            .copied()
-            .unwrap_or(tv_vc);
+            .and_then(|m| m.entries.get(&gt))
+            .map(|v| v.vars_count)
+            .unwrap_or(0);
         if let Some(sv) = non_insertion_variants
             .get_mut(&bp)
             .and_then(|m| m.sv.as_mut())
         {
-            sv.splits += tv_vc - new_gt_vc;
+            sv.splits += tv_vc_after_splits - tv_vc;
         }
 
         if instance.conf.y {
@@ -4610,43 +4608,25 @@ fn realignlgins(
         tmp.push(SortPositionSclip::new(p, sc.clone(), 0));
     }
     tmp.sort_by(comp2);
-    let mut accepted_low_count_clip = false;
 
     // Java: VariationRealigner.java#L1792
     for t in &tmp {
         let original_p = t.position;
         let mut p = original_p;
-        let sc3v_snapshot = match soft_clips_3_end.get(&original_p) {
-            Some(sc3v) => sc3v.clone(),
-            None => continue,
-        };
-
-        let cnt = sc3v_snapshot.base.vars_count;
-        let is_low_count_clip = cnt < instance.conf.minr;
-        let mut probed_sequence: Option<Option<String>> = None;
-        let seq = if is_low_count_clip {
-            if soft_clips_3_end.get(&original_p).is_some_and(|sc3v| sc3v.used) {
-                continue; // Match Java's skip for already-consumed clips.
-            }
-
-            let mut sc3v_probe = sc3v_snapshot.clone();
-            let seq = find_conseq(&mut sc3v_probe, 0);
-            probed_sequence = Some(sc3v_probe.sequence.clone());
-            if accepted_low_count_clip {
-                if let Some(sc3v) = soft_clips_3_end.get_mut(&original_p) {
-                    sc3v.sequence = sc3v_probe.sequence.clone();
-                }
-            }
-            seq
-        } else {
+        let (cnt, seq, sc3v_snapshot) = {
             let sc3v = match soft_clips_3_end.get_mut(&original_p) {
                 Some(s) => s,
                 None => continue,
             };
+            let cnt = sc3v.base.vars_count;
+            if cnt < instance.conf.minr {
+                break;
+            }
             if sc3v.used {
                 continue; // Java: VariationRealigner.java#L1790-L1792
             }
-            find_conseq(sc3v, 0)
+            let seq = find_conseq(sc3v, 0);
+            (cnt, seq, sc3v.clone())
         };
 
         if seq.is_empty() {
@@ -4837,23 +4817,23 @@ fn realignlgins(
         // Java: VariationRealigner.java#L1921-L1933 — Extend remaining bases from sc3v.seq
         // **Parity trap T15**: 3' starts at ii = len (NOT len + 1)
         {
-            let seq_data: Option<Vec<(i32, Vec<(String, Variation)>)>> = (!sc3v_snapshot.seq
-                .is_empty())
-                .then_some(&sc3v_snapshot.seq)
-                .map(|seq_map| {
-                    let len_seq = seq_map.keys().last().map(|k| k + 1).unwrap_or(0);
-                    let mut result = Vec::new();
-                    for ii in len..len_seq {
-                        if let Some(inner_map) = seq_map.get(&ii) {
-                            let entries: Vec<(String, Variation)> = inner_map
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect();
-                            result.push((ii, entries));
+            let seq_data: Option<Vec<(i32, Vec<(String, Variation)>)>> =
+                (!sc3v_snapshot.seq.is_empty())
+                    .then_some(&sc3v_snapshot.seq)
+                    .map(|seq_map| {
+                        let len_seq = seq_map.keys().last().map(|k| k + 1).unwrap_or(0);
+                        let mut result = Vec::new();
+                        for ii in len..len_seq {
+                            if let Some(inner_map) = seq_map.get(&ii) {
+                                let entries: Vec<(String, Variation)> = inner_map
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect();
+                                result.push((ii, entries));
+                            }
                         }
-                    }
-                    result
-                });
+                        result
+                    });
 
             if let Some(seq_entries) = seq_data {
                 for (ii, entries) in &seq_entries {
@@ -4871,13 +4851,7 @@ fn realignlgins(
 
         // Java: VariationRealigner.java#L1934 — sc3v.used = true (unconditional)
         if let Some(sc3v) = soft_clips_3_end.get_mut(&original_p) {
-            if let Some(sequence) = probed_sequence {
-                sc3v.sequence = sequence;
-            }
             sc3v.used = true;
-        }
-        if is_low_count_clip {
-            accepted_low_count_clip = true;
         }
 
         // Java: VariationRealigner.java#L1935-L1936 — recursive realignins

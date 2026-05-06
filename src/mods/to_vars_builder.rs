@@ -1059,8 +1059,7 @@ pub fn collect_reference_variants(
     // Trap T30: Pileup ref variant double-update
     if variations_at_pos.reference_variant.is_some()
         && conf.do_pileup
-        && (positions_for_changed_ref_variant.contains(&position)
-            || has_amplicon_based_calling)
+        && (positions_for_changed_ref_variant.contains(&position) || has_amplicon_based_calling)
     {
         let vref = variations_at_pos.reference_variant.as_mut().unwrap();
         update_ref_variant(

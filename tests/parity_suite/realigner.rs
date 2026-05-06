@@ -101,8 +101,9 @@ fn parity_realigner_region_1_2324084_2324612() {
     let reference = Arc::new(reference);
 
     let cp_golden = super::common::load_golden_data("cigar_parser", region_str);
-    let variation_data: VariationData = serde_json::from_str(&cp_golden)
-        .unwrap_or_else(|e| panic!("Failed to deserialize cigar_parser golden for {region_str}: {e}"));
+    let variation_data: VariationData = serde_json::from_str(&cp_golden).unwrap_or_else(|e| {
+        panic!("Failed to deserialize cigar_parser golden for {region_str}: {e}")
+    });
 
     let bam_str = bam_path.to_str().unwrap();
     let scope = Scope::new(
@@ -151,8 +152,9 @@ fn parity_realigner_region_1_9967324_9968024() {
     let reference = Arc::new(reference);
 
     let cp_golden = super::common::load_golden_data("cigar_parser", region_str);
-    let variation_data: VariationData = serde_json::from_str(&cp_golden)
-        .unwrap_or_else(|e| panic!("Failed to deserialize cigar_parser golden for {region_str}: {e}"));
+    let variation_data: VariationData = serde_json::from_str(&cp_golden).unwrap_or_else(|e| {
+        panic!("Failed to deserialize cigar_parser golden for {region_str}: {e}")
+    });
 
     let bam_str = bam_path.to_str().unwrap();
     let scope = Scope::new(
@@ -201,8 +203,9 @@ fn parity_realigner_region_1_8926126_8926826() {
     let reference = Arc::new(reference);
 
     let cp_golden = super::common::load_golden_data("cigar_parser", region_str);
-    let variation_data: VariationData = serde_json::from_str(&cp_golden)
-        .unwrap_or_else(|e| panic!("Failed to deserialize cigar_parser golden for {region_str}: {e}"));
+    let variation_data: VariationData = serde_json::from_str(&cp_golden).unwrap_or_else(|e| {
+        panic!("Failed to deserialize cigar_parser golden for {region_str}: {e}")
+    });
 
     let bam_str = bam_path.to_str().unwrap();
     let scope = Scope::new(

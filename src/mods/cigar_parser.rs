@@ -13,15 +13,15 @@ use crate::data::{
     VariationData, VariationMap,
 };
 use crate::mods::cigar_modifier::modify_cigar;
-use crate::mods::sam_file_parser::{get_mate_reference_name, RecordPreprocessor};
+use crate::mods::sam_file_parser::{RecordPreprocessor, get_mate_reference_name};
 use crate::patterns::*;
 use crate::reference::Reference;
 use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{get_reverse_complemented_sequence, global_find, substr_with_len};
 use crate::variations::{
     get_variation, get_variation_from_seq, inc_cnt, is_equals, is_has_and_equals_base,
-    is_has_and_equals_str, is_has_and_not_equals_base, is_has_and_not_equals_str,
-    is_reference_mismatch_and_not_n, is_not_equals,
+    is_has_and_equals_str, is_has_and_not_equals_base, is_has_and_not_equals_str, is_not_equals,
+    is_reference_mismatch_and_not_n,
 };
 
 // ─── CIGAR representation ─────────────────────────────────────────────────────
@@ -404,10 +404,7 @@ impl CigarParser {
         if output_splicing {
             for (intron, cnt) in &self.splice_count {
                 let count = cnt.first().copied().unwrap_or(0);
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    sample, self.region.chr, intron, count
-                );
+                println!("{}\t{}\t{}\t{}", sample, self.region.chr, intron, count);
             }
             return VariationData::default();
         }
@@ -1518,9 +1515,7 @@ impl CigarParser {
                         break;
                     }
                     // Java: CigarParser.java#L720
-                    if tn_vi >= qq_bytes.len()
-                        || ((qq_bytes[tn_vi] as i32 - 33) as f64) < goodq
-                    {
+                    if tn_vi >= qq_bytes.len() || ((qq_bytes[tn_vi] as i32 - 33) as f64) < goodq {
                         break;
                     }
                     // Java: CigarParser.java#L723
@@ -1589,9 +1584,7 @@ impl CigarParser {
                     if tn_vi >= qs_bytes.len() || qs_bytes[tn_vi] == b'N' {
                         break;
                     }
-                    if tn_vi >= qq_bytes.len()
-                        || ((qq_bytes[tn_vi] as i32 - 33) as f64) < goodq
-                    {
+                    if tn_vi >= qq_bytes.len() || ((qq_bytes[tn_vi] as i32 - 33) as f64) < goodq {
                         break;
                     }
                     if let Some(&ref_ch) = ref_map.get(&(ts + vi)) {
@@ -1638,8 +1631,7 @@ impl CigarParser {
                     if n_vi >= qs_bytes.len() || qs_bytes[n_vi] == b'N' {
                         break;
                     }
-                    if n_vi >= qq_bytes.len() || ((qq_bytes[n_vi] as i32 - 33) as f64) < goodq
-                    {
+                    if n_vi >= qq_bytes.len() || ((qq_bytes[n_vi] as i32 - 33) as f64) < goodq {
                         break;
                     }
                     if let Some(&ref_ch) =
@@ -1834,8 +1826,7 @@ impl CigarParser {
                         break;
                     }
                     // Java: CigarParser.java#L999
-                    if n_vi >= qq_bytes.len() || ((qq_bytes[n_vi] as i32 - 33) as f64) < goodq
-                    {
+                    if n_vi >= qq_bytes.len() || ((qq_bytes[n_vi] as i32 - 33) as f64) < goodq {
                         break;
                     }
                     // Java: CigarParser.java#L1003
@@ -3178,9 +3169,7 @@ impl CigarParser {
                 break;
             }
             // Java: CigarParser.java#L1519
-            if rp < query_qual_bytes.len()
-                && ((query_qual_bytes[rp] as i32 - 33) as f64) < goodq
-            {
+            if rp < query_qual_bytes.len() && ((query_qual_bytes[rp] as i32 - 33) as f64) < goodq {
                 break;
             }
             // Java: CigarParser.java#L1522
@@ -3957,8 +3946,14 @@ mod tests {
     #[test]
     fn test_round_duplicate_rate_matches_java_half_up_examples() {
         assert_eq!(CigarParser::round_duplicate_rate(1, 8), 125.0 / 1_000.0);
-        assert_eq!(CigarParser::round_duplicate_rate(889, 2_000), 445.0 / 1_000.0);
-        assert_eq!(CigarParser::round_duplicate_rate(1_111, 2_000), 556.0 / 1_000.0);
+        assert_eq!(
+            CigarParser::round_duplicate_rate(889, 2_000),
+            445.0 / 1_000.0
+        );
+        assert_eq!(
+            CigarParser::round_duplicate_rate(1_111, 2_000),
+            556.0 / 1_000.0
+        );
         assert_eq!(CigarParser::round_duplicate_rate(3_998, 4_000), 1.0);
     }
 

@@ -141,11 +141,11 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
     } else {
         Some(splice.iter().cloned().collect::<BTreeSet<_>>())
     };
-    let mut prev_non_insertion_variants: HashMap<i32, VariationMap> = HashMap::new();
-    let mut prev_ref_coverage: HashMap<i32, i32> = HashMap::new();
-    let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
-    let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
-    let prev_reference_sequences: HashMap<i32, u8> = HashMap::new();
+    let mut prev_non_insertion_variants = HashMap::<i32, VariationMap>::new();
+    let mut prev_ref_coverage = HashMap::<i32, i32>::new();
+    let mut prev_soft_clips_3_end = HashMap::<i32, Sclip>::new();
+    let mut prev_soft_clips_5_end = HashMap::<i32, Sclip>::new();
+    let prev_reference_sequences = HashMap::<i32, u8>::new();
     structural_variants_processor::process(
         &mut data,
         &mut reference,
@@ -195,7 +195,7 @@ pub trait ParallelMode: AbstractMode + Sync {
     fn post_parallel_hook(&self) {}
 
     fn parallel(&self, threads: usize) {
-        use crossbeam_channel::{bounded, Receiver};
+        use crossbeam_channel::{Receiver, bounded};
         use rayon::ThreadPoolBuilder;
 
         let pool = ThreadPoolBuilder::new()

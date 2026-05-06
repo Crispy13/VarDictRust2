@@ -65,11 +65,13 @@ pub enum VarMaybeArg<'a> {
 
 #[cfg(test)]
 fn current_scope() -> VariationUtilsScope {
-    with_current_scope(|conf, adaptor_forward, adaptor_reverse| VariationUtilsScope {
-        conf: conf.clone(),
-        adaptor_forward: adaptor_forward.clone(),
-        adaptor_reverse: adaptor_reverse.clone(),
-    })
+    with_current_scope(
+        |conf, adaptor_forward, adaptor_reverse| VariationUtilsScope {
+            conf: conf.clone(),
+            adaptor_forward: adaptor_forward.clone(),
+            adaptor_reverse: adaptor_reverse.clone(),
+        },
+    )
 }
 
 fn with_current_scope<R>(
@@ -208,8 +210,7 @@ pub fn strand_bias(forward_count: i32, reverse_count: i32) -> i32 {
         };
     }
 
-    let (bias, min_bias_reads) =
-        with_current_scope(|conf, _, _| (conf.bias, conf.min_bias_reads));
+    let (bias, min_bias_reads) = with_current_scope(|conf, _, _| (conf.bias, conf.min_bias_reads));
     let total = (forward_count + reverse_count) as f64;
     let forward_ratio = forward_count as f64 / total;
     let reverse_ratio = reverse_count as f64 / total;

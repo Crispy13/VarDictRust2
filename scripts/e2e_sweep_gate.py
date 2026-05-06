@@ -1,8 +1,9 @@
 """E2E sweep parity gate (manual-only).
 
 Stages existing fixtures from --fixture-source into tmp/sweep_fixtures/output/,
-populates manifest.json cache_entries via scripts.lib.merge_manifest, and runs
-scoped parity_e2e_sweep cargo tests. Produces parity-failure-report.json on red.
+initializes manifest.json for fresh staging roots, populates cache_entries via
+scripts.lib.merge_manifest, and runs scoped parity_e2e_sweep cargo tests.
+Produces parity-failure-report.json on red.
 
 Stdlib only.
 """
@@ -505,6 +506,21 @@ def write_json_atomic(path: Path, payload: dict, *, sort_keys: bool = True) -> N
     os.replace(temp_path, path)
 
 
+def ensure_stage_manifest() -> bool:
+    if CANONICAL_MANIFEST.is_file():
+        return False
+
+    payload = {
+        "vardictjava_commit": live_vardictjava_commit(),
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "mode": "staged_existing_fixtures",
+        "cache_entries": {},
+    }
+    write_json(CANONICAL_MANIFEST, payload, sort_keys=False)
+    print(f"Initialized manifest -> {CANONICAL_MANIFEST}")
+    return True
+
+
 def snapshot_cache_entries() -> bool:
     if MANIFEST_SNAPSHOT.is_file():
         print(f"Preserving existing manifest snapshot: {MANIFEST_SNAPSHOT}")
@@ -680,6 +696,7 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> N
     if missing_sources:
         raise SystemExit("ERROR: missing source TSV fixtures:\n" + "\n".join(missing_sources))
 
+    ensure_stage_manifest()
     snapshot_cache_entries()
 
     staged_links: list[Path] = []

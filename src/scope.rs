@@ -243,9 +243,7 @@ impl GlobalReadOnlyScope {
         read_local_scope()
     }
 
-    pub fn with_thread_local_instance<R>(
-        f: impl FnOnce(Option<&GlobalReadOnlyScope>) -> R,
-    ) -> R {
+    pub fn with_thread_local_instance<R>(f: impl FnOnce(Option<&GlobalReadOnlyScope>) -> R) -> R {
         LOCAL_GROS.with(|scope| {
             let scope = scope.borrow();
             f(scope.as_ref())

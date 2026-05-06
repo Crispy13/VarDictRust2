@@ -145,8 +145,9 @@ fn parity_sv_processor_region_1_9967324_9968024() {
         prev_max_read_length,
     );
 
-    let result_json = serde_json::to_string(&data)
-        .unwrap_or_else(|e| panic!("Failed to serialize sv_processor output for {region_str}: {e}"));
+    let result_json = serde_json::to_string(&data).unwrap_or_else(|e| {
+        panic!("Failed to serialize sv_processor output for {region_str}: {e}")
+    });
 
     super::common::assert_module_parity("sv_processor", region_str, &result_json);
 }

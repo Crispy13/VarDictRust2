@@ -147,9 +147,8 @@ pub fn build_trials(tag: &str) -> Vec<Trial> {
     };
 
     let shard = parse_shard_env();
-    let plans = build_chunk_plans(&context, shard).unwrap_or_else(|error| {
-        panic!("Failed to load sweep BED tiles for {tag}: {error}")
-    });
+    let plans = build_chunk_plans(&context, shard)
+        .unwrap_or_else(|error| panic!("Failed to load sweep BED tiles for {tag}: {error}"));
 
     plans
         .into_iter()
@@ -197,13 +196,8 @@ fn prepare_tag_context(tag: &str) -> Option<Arc<TagContext>> {
     let fai_path = format!("{ref_path_string}.fai");
     let chr_lengths = super::common::load_chr_lengths(&fai_path);
     let scope_config = sweep_config(&config_name, &bam_path_string, &ref_path_string);
-    let reference_resource = ReferenceResource::new(
-        ref_path_string.clone(),
-        1200,
-        0,
-        chr_lengths.clone(),
-        false,
-    );
+    let reference_resource =
+        ReferenceResource::new(ref_path_string.clone(), 1200, 0, chr_lengths.clone(), false);
 
     Some(Arc::new(TagContext {
         tag: tag.to_string(),
@@ -251,9 +245,7 @@ fn build_chunk_plans(
 
 fn chunk_trial_name(tag: &str, chrom: &str, ordinal: usize) -> String {
     let chrom_label = chrom.strip_prefix("chr").unwrap_or(chrom);
-    format!(
-        "{tag}_sweep::parity_e2e_sweep_{tag}_chr{chrom_label}_chunk{ordinal:03}"
-    )
+    format!("{tag}_sweep::parity_e2e_sweep_{tag}_chr{chrom_label}_chunk{ordinal:03}")
 }
 
 fn run_chunk_trial(
@@ -267,9 +259,7 @@ fn run_chunk_trial(
 ) -> Result<(), String> {
     let result = catch_unwind(AssertUnwindSafe(|| {
         if FAILURE_COUNT.load(Ordering::Relaxed) >= MAX_FAILURES {
-            eprintln!(
-                "{trial_name}: skipped after MAX_FAILURES cap ({MAX_FAILURES})"
-            );
+            eprintln!("{trial_name}: skipped after MAX_FAILURES cap ({MAX_FAILURES})");
             return Ok(());
         }
 
@@ -328,9 +318,7 @@ fn run_chunk_trial(
 fn fail_or_skip_after_cap(trial_name: &str, message: String) -> Result<(), String> {
     let previous = FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
     if previous >= MAX_FAILURES {
-        eprintln!(
-            "{trial_name}: skipped after MAX_FAILURES cap ({MAX_FAILURES})"
-        );
+        eprintln!("{trial_name}: skipped after MAX_FAILURES cap ({MAX_FAILURES})");
         return Ok(());
     }
 
@@ -438,7 +426,11 @@ fn check_e2e_sweep_manifest(config: &str, tag: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn compare_manifest_field(entry: &Value, field: &str, expected: &Value) -> Result<(), String> {
+pub(crate) fn compare_manifest_field(
+    entry: &Value,
+    field: &str,
+    expected: &Value,
+) -> Result<(), String> {
     let actual = entry
         .get(field)
         .ok_or_else(|| format!("Missing {field} in cache entry"))?;
@@ -467,8 +459,14 @@ pub(crate) fn parse_shard_env() -> Option<(u64, u64)> {
     let total = total
         .parse::<u64>()
         .unwrap_or_else(|_| panic!("Invalid shard count in VARDICT_E2E_SWEEP_SHARD: {trimmed}"));
-    assert!(total > 0, "VARDICT_E2E_SWEEP_SHARD must have N > 0: {trimmed}");
-    assert!(index < total, "VARDICT_E2E_SWEEP_SHARD index must be < N: {trimmed}");
+    assert!(
+        total > 0,
+        "VARDICT_E2E_SWEEP_SHARD must have N > 0: {trimmed}"
+    );
+    assert!(
+        index < total,
+        "VARDICT_E2E_SWEEP_SHARD index must be < N: {trimmed}"
+    );
     Some((index, total))
 }
 
@@ -517,10 +515,16 @@ fn load_tiles_for_chrom(tag: &str, chrom: &str) -> io::Result<Vec<TileKey>> {
             )));
         }
         let start = fields[1].parse::<u32>().map_err(|error| {
-            invalid_data(format!("Invalid BED start in {}: {error}", bed_path.display()))
+            invalid_data(format!(
+                "Invalid BED start in {}: {error}",
+                bed_path.display()
+            ))
         })?;
         let end = fields[2].parse::<u32>().map_err(|error| {
-            invalid_data(format!("Invalid BED end in {}: {error}", bed_path.display()))
+            invalid_data(format!(
+                "Invalid BED end in {}: {error}",
+                bed_path.display()
+            ))
         })?;
         tiles.push(TileKey {
             chrom: fields[0].to_string(),
@@ -560,7 +564,10 @@ fn load_java_tsv_chunk(
 
         let columns: Vec<&str> = line.split('\t').collect();
         if region_index.is_none() {
-            if let Some(index) = columns.iter().position(|field| field.eq_ignore_ascii_case("Region")) {
+            if let Some(index) = columns
+                .iter()
+                .position(|field| field.eq_ignore_ascii_case("Region"))
+            {
                 region_index = Some(index);
                 continue;
             }
@@ -611,7 +618,9 @@ fn run_rust_chunk(
         let columns: Vec<&str> = line.split('\t').collect();
         if region_index.is_none() {
             region_index = Some(detect_region_column(&columns).ok_or_else(|| {
-                invalid_data(format!("Could not locate Region column in Rust output row: {line}"))
+                invalid_data(format!(
+                    "Could not locate Region column in Rust output row: {line}"
+                ))
             })?);
         }
 
@@ -682,10 +691,14 @@ fn build_regions(tiles: &[TileKey]) -> io::Result<Vec<Region>> {
             let start = i32::try_from(tile.start).map_err(|_| {
                 invalid_data(format!("Tile start does not fit in i32: {}", tile.start))
             })?;
-            let end = i32::try_from(tile.end).map_err(|_| {
-                invalid_data(format!("Tile end does not fit in i32: {}", tile.end))
-            })?;
-            Ok(Region::new(tile.chrom.clone(), start, end, tile.chrom.clone()))
+            let end = i32::try_from(tile.end)
+                .map_err(|_| invalid_data(format!("Tile end does not fit in i32: {}", tile.end)))?;
+            Ok(Region::new(
+                tile.chrom.clone(),
+                start,
+                end,
+                tile.chrom.clone(),
+            ))
         })
         .collect()
 }

@@ -126,6 +126,29 @@ class GateSmokeTest(unittest.TestCase):
         self.assertEqual(payload["failures"][0]["preset"], "T1-01")
         self.assertEqual(payload["failures"][0]["tag"], "hg002")
 
+    def test_fresh_stage_root_initializes_manifest_before_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            manifest_path = root / "manifest.json"
+            snapshot_path = root / ".manifest.cache_entries.before.json"
+
+            with mock.patch.multiple(
+                "scripts.e2e_sweep_gate",
+                CANONICAL_MANIFEST=manifest_path,
+                MANIFEST_SNAPSHOT=snapshot_path,
+            ), mock.patch("scripts.e2e_sweep_gate.live_vardictjava_commit", return_value="deadbeef"):
+                created_manifest = e2e_sweep_gate.ensure_stage_manifest()
+                created_snapshot = e2e_sweep_gate.snapshot_cache_entries()
+
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(created_manifest)
+        self.assertTrue(created_snapshot)
+        self.assertEqual(manifest["vardictjava_commit"], "deadbeef")
+        self.assertEqual(manifest["cache_entries"], {})
+        self.assertEqual(snapshot, {"cache_entries": {}})
+
     def test_help_exits_zero(self) -> None:
         result = _run(["--help"])
         self.assertEqual(result.returncode, 0, result.stderr)

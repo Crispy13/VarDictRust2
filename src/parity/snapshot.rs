@@ -11,9 +11,10 @@ pub fn write_module_snapshot<T: Serialize>(
     data: &T,
     output_dir: &Path,
 ) -> io::Result<()> {
+    let module_label = module_name.to_ascii_lowercase();
     let filename = format!(
         "{}_{}_{}-{}.jsonl",
-        module_name, region.chr, region.start, region.end
+        module_label, region.chr, region.start, region.end
     );
     let path = output_dir.join(&filename);
     std::fs::create_dir_all(output_dir)?;
@@ -21,7 +22,7 @@ pub fn write_module_snapshot<T: Serialize>(
     let mut writer = BufWriter::new(file);
 
     let meta = serde_json::json!({
-        "module": module_name,
+        "module": module_label,
         "region": format!("{}:{}-{}", region.chr, region.start, region.end),
         "version": "1"
     });
