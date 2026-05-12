@@ -6,7 +6,7 @@ description: >
   reporting divergences. Always use after Port Engineer completes a module.
 name: Parity Verifier
 tools: [vscode/memory, vscode/resolveMemoryFileUri, execute, read, search, edit]
-model: GPT-5.5 (copilot)
+model: GPT-5.4 (copilot)
 user-invocable: false
 disable-model-invocation: false
 ---
@@ -48,6 +48,7 @@ Dispatched as the Final Gate after all modules pass their per-module cycle. Read
 - Phase 1 for evidence collection (direct evidence brief allowed)
 - Phases 2 and 3 for the diagnosis/handoff dispatch (reviewed diagnosis plan file required)
 - Phase 5 for verification reruns (reviewed repair plan file required)
+For any wrapper-driven `scripts/e2e_sweep_gate.sh` or `scripts/e2e_sweep_gate.py` run in this workflow, the routed artifact must record the chosen `--test-threads` count. If that count is missing, stop and return to Orchestrator instead of guessing.
 Do not implement the fix here; report the combined diagnosis and repair-handoff outputs needed for Orchestrator to write the reviewed repair plan file.
 
 ## Report Templates

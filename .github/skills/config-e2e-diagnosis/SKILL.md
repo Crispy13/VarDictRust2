@@ -39,6 +39,11 @@ CI=true \
 cargo test --profile debug-release --test parity_e2e_sweep -- --include-ignored --exact hg002_sweep::parity_e2e_sweep_hg002 --test-threads=1
 ```
 
+This prerequisite command uses `--exact`, so `--test-threads=1` is incidental to the
+single-test smoke check rather than a general sweep policy. For wrapper-driven chr1
+sweep reruns, start from the `scripts/e2e_sweep_gate.py` default and override only when
+host RAM or diagnosis needs justify it.
+
 ### Single-Cell Invocation (Binary B)
 Run a single cell by its exact name; use this when a failure points to one (config, region) pair.
 
@@ -58,6 +63,9 @@ Cells live in `parity_config_e2e_cells` (libtest-mimic harness, `--test parity_c
 - **Phase 4: Repair dispatch** — After Phase 2/3 complete, Orchestrator must run `plan-duck` again on the combined outputs and hand Port Engineer the reviewed repair plan file before `mismatch-repair` starts. The canonical E2E path does not require a separate `shard-diagnosis` checkpoint before this dispatch.
 - **Phase 5: Verification reruns** — These are mechanical reruns. Reuse the existing reports and the reviewed repair plan file. Do not insert another `plan-duck` checkpoint unless the scope changes.
 
+### Thread Count Contract
+For any wrapper-driven `scripts/e2e_sweep_gate.sh` or `scripts/e2e_sweep_gate.py` run in this workflow, Orchestrator must confirm the chosen `--test-threads` count with the user and record it in the evidence brief or reviewed plan file. If a routed artifact omits that count, stop and return to Orchestrator instead of choosing a default inside this skill.
+
 ## Pipeline Module Order (diagnosis sequence)
 1. sam_file_parser
 2. cigar_parser
@@ -72,7 +80,8 @@ Cells live in `parity_config_e2e_cells` (libtest-mimic harness, `--test parity_c
 Identify which (preset, region) pairs produce mismatches at E2E level.
 
 ### Procedure
-1. Run the chr1 sweep gate serially across the current 44 presets in `tests/common/mod.rs` `CONFIG_PRESETS` (mirrored in `scripts/config_presets.tsv`):
+1. Read the routed artifact and extract the confirmed `--test-threads` count for this host/run. If the artifact does not name the count for the wrapper-driven sweep gate run, stop and return to Orchestrator.
+2. Run the chr1 sweep gate serially across the current 44 presets in `tests/common/mod.rs` `CONFIG_PRESETS` (mirrored in `scripts/config_presets.tsv`):
    ```bash
    set -euo pipefail
    tail -n +2 scripts/config_presets.tsv | cut -f1 | while read -r preset; do
@@ -82,11 +91,12 @@ Identify which (preset, region) pairs produce mismatches at E2E level.
        --chrom 1 \
        --sweep-bed-root tmp/sweep_beds_chr1only \
        --fixture-source tmp/sweep_fixtures/output \
+       --test-threads <confirmed-count> \
        --force
    done
    ```
-2. Budget roughly 6-11 minutes per preset, or about 4-8 hours serial for all 44 presets.
-3. If you already know which preset to chase, rerun just that preset:
+3. Budget roughly 6-11 minutes per preset, or about 4-8 hours serial for all 44 presets.
+4. If you already know which preset to chase, rerun just that preset:
    ```bash
    preset=T1-01
    bash scripts/e2e_sweep_gate.sh \
@@ -95,15 +105,16 @@ Identify which (preset, region) pairs produce mismatches at E2E level.
      --chrom 1 \
      --sweep-bed-root tmp/sweep_beds_chr1only \
      --fixture-source tmp/sweep_fixtures/output \
+      --test-threads <confirmed-count> \
      --force
    ```
-4. If ALL PASS → config E2E gate passes. Report PASS.
-5. If any FAIL → record the failing `(preset, region_str)` pair from `tmp/parity-iteration/<preset>/parity-failure-report.json`.
-6. Optional fast smoke: run the `parity_config_e2e_push_*` family when you want a 10-region sanity check, but do not treat it as the Phase 1 gate:
+5. If ALL PASS → config E2E gate passes. Report PASS.
+6. If any FAIL → record the failing `(preset, region_str)` pair from `tmp/parity-iteration/<preset>/parity-failure-report.json`.
+7. Optional fast smoke: run the `parity_config_e2e_push_*` family when you want a 10-region sanity check, but do not treat it as the Phase 1 gate:
    ```bash
    cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push_ -- --test-threads=10
    ```
-7. **Coverage promotion:** Re-run the `parity_config_e2e_cell_*` family (Binary B, 4,400 cell-level trials) as a broader-region complement to the chr1 sweep result, and use `tiered-config-test` for nightly/sweep expansion across the existing 44-config matrix.
+8. **Coverage promotion:** Re-run the `parity_config_e2e_cell_*` family (Binary B, 4,400 cell-level trials) as a broader-region complement to the chr1 sweep result, and use `tiered-config-test` for nightly/sweep expansion across the existing 44-config matrix.
 
 ### Outputs
 - List of failing (preset_name, region_str) pairs
@@ -247,11 +258,12 @@ Confirm the fix resolves the original failure without introducing regressions.
 
 ### Procedure
 1. Reuse the reviewed repair plan file and run the Phase 3 test named there inside `mismatch-repair` Phase 3 — must PASS. Do not insert another `plan-duck` checkpoint before this rerun unless the repair scope changed.
-2. Run the full module sweep test — must PASS (no regression):
+2. Reuse the confirmed `--test-threads` count already recorded in the reviewed repair plan file for any wrapper-driven sweep rerun. If the plan file omits it, stop and return to Orchestrator.
+3. Run the full module sweep test — must PASS (no regression):
    ```bash
    cargo test --profile debug-release --test parity_sweep_suite {module}_sweep:: -- --include-ignored --nocapture --test-threads=1
    ```
-3. Re-run the chr1 sweep gate for the formerly failing preset — must PASS:
+4. Re-run the chr1 sweep gate for the formerly failing preset — must PASS:
    ```bash
    preset=T1-01
    bash scripts/e2e_sweep_gate.sh \
@@ -260,6 +272,7 @@ Confirm the fix resolves the original failure without introducing regressions.
      --chrom 1 \
      --sweep-bed-root tmp/sweep_beds_chr1only \
      --fixture-source tmp/sweep_fixtures/output \
+      --test-threads <confirmed-count> \
      --force
    ```
 4. If additional (config, region) pairs still fail, loop back to Phase 2 for the next failure.

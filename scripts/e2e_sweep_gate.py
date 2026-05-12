@@ -153,9 +153,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         help=(
-            "Thread count passed to cargo test. Default: 4. Each parity sweep chunk peaks "
-            "around 4.6 GB RAM and 1.5 cores of internal work, so 4 keeps the host within "
-            "~18 GB and avoids paging. Set higher only on machines with plenty of free RAM."
+            "Thread count passed to cargo test for wrapper-driven sweep runs. Default: 4. "
+            "Each parity sweep chunk peaks around 4.6 GB RAM and 1.5 cores of internal "
+            "work, so 4 keeps the host within ~18 GB and avoids paging. This is the wrapper "
+            "default, not a repo-wide rule: some CI or manual repro paths intentionally pin "
+            "other values. Set higher only on machines with plenty of free RAM."
         ),
     )
     return parser

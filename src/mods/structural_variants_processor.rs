@@ -853,6 +853,24 @@ fn extend_reference_if_needed(
     }
 }
 
+/// Ported from: StructuralVariantsProcessor.findDUPdisc()
+/// Java: StructuralVariantsProcessor.java#L1368-L1375,L1511-L1518
+fn prefetch_dup_breakpoint_reference_if_missing(
+    predicted: i32,
+    reference: &mut Reference,
+    reference_resource: &ReferenceResource,
+    region: &Region,
+) {
+    if !reference.reference_sequences.contains_key(&predicted) {
+        let modified_region = Region::new_modified_region(region, predicted - 150, predicted + 150);
+        let old_ref = std::mem::take(reference);
+        match reference_resource.get_reference_with_extension(&modified_region, 300, old_ref) {
+            Ok(new_ref) => *reference = new_ref,
+            Err(e) => eprintln!("Warning: get_reference failed: {}", e),
+        }
+    }
+}
+
 // ─── findDEL ────────────────────────────────────────────────────────
 
 /// Ported from: StructuralVariantsProcessor.findDEL()
@@ -3054,6 +3072,12 @@ pub fn find_dup_disc(
 
             // Java: StructuralVariantsProcessor.java#L1419-L1425 — isLoaded + partialPipeline
             if !ReferenceResource::is_loaded(&region.chr, ms, me, reference) {
+                prefetch_dup_breakpoint_reference_if_missing(
+                    bp,
+                    reference,
+                    reference_resource,
+                    region,
+                );
                 run_partial_pipeline(
                     &partial_pipeline_context,
                     ms,
@@ -3237,9 +3261,14 @@ pub fn find_dup_disc(
             let mut bp = start - (max_read_length / cnt) / 2;
             let mut pe = mlen + bp - 1;
             let mut tpe = pe;
-
             // Java: StructuralVariantsProcessor.java#L1523-L1530 — isLoaded + partialPipeline
             if !ReferenceResource::is_loaded(&region.chr, ms, me, reference) {
+                prefetch_dup_breakpoint_reference_if_missing(
+                    pe,
+                    reference,
+                    reference_resource,
+                    region,
+                );
                 run_partial_pipeline(
                     &partial_pipeline_context,
                     ms,
