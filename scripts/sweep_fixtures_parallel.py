@@ -116,8 +116,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=positive_int,
         default=10,
         help=(
-            "Maximum parallel shard workers, or preset workers when --presets is used "
-            "(default: 10)."
+            "Maximum parallel workers. In standard mode this uses one process per "
+            "discovered shard; with --presets it uses one thread per selected preset "
+            "within each shard. Selections with fewer runnable units will use fewer "
+            "workers (default: 10)."
         ),
     )
     parser.add_argument(
@@ -596,6 +598,25 @@ def discover_shards(
                 Shard(tag=tag, chrom=bed_file.stem, bed_path=bed_file.resolve(), kind="pair")
             )
     return shards
+
+
+def shard_parallelism_summary(requested_workers: int, shard_count: int) -> tuple[str, str | None]:
+    effective_workers = min(requested_workers, shard_count)
+    summary = (
+        "Parallelism:   shard process pool; "
+        f"discovered shards={shard_count}; effective workers={effective_workers}/{requested_workers}"
+    )
+    if effective_workers == requested_workers:
+        return summary, None
+
+    shard_label = "shard" if shard_count == 1 else "shards"
+    process_label = "process" if effective_workers == 1 else "processes"
+    warning = (
+        f"requested {requested_workers} workers, but the current selection produced "
+        f"{shard_count} {shard_label}, so only {effective_workers} worker {process_label} can run. "
+        "Add more chromosomes or tags to increase concurrency."
+    )
+    return summary, warning
 
 
 def ensure_dependencies(root: Path) -> None:
@@ -1472,6 +1493,31 @@ def main() -> int:
             run_log,
         )
         emit(f"Workers:       {args.workers}", run_log)
+        emit(f"Shard count:   {len(shards)}", run_log)
+        if selected_presets is not None:
+            effective_preset_workers = min(args.workers, len(selected_presets))
+            emit(
+                "Parallelism:   preset thread pool per shard; "
+                f"selected presets={len(selected_presets)}; "
+                f"effective workers per shard={effective_preset_workers}/{args.workers}",
+                run_log,
+            )
+            if effective_preset_workers < args.workers:
+                emit(
+                    "WARNING: "
+                    f"requested {args.workers} workers, but only {len(selected_presets)} preset(s) "
+                    "were selected, so per-shard preset concurrency is capped by preset count.",
+                    run_log,
+                    stream=sys.stderr,
+                )
+        else:
+            parallelism_summary, parallelism_warning = shard_parallelism_summary(
+                args.workers,
+                len(shards),
+            )
+            emit(parallelism_summary, run_log)
+            if parallelism_warning is not None:
+                emit(f"WARNING: {parallelism_warning}", run_log, stream=sys.stderr)
         emit(f"Force:         {1 if args.force else 0}", run_log)
         emit(f"Mode:          {'output_only' if run_output_only else 'full'}", run_log)
         emit(f"Config:        {config_name or 'default'}", run_log)

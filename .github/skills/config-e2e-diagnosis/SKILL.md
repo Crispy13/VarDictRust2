@@ -1,11 +1,12 @@
 ---
 name: config-e2e-diagnosis
 description: >
-   Diagnose config-specific chr1 sweep E2E parity mismatches by collecting
-   evidence, isolating failures to individual pipeline modules, and handing a
-   reviewed plan file to the repair workflow. Use when: a chr1 sweep preset
-   fails, E2E mismatch with non-default config, final gate after all modules
-   pass per-module cycle, config regression found at E2E level.
+   Diagnose config-specific chr1 sweep E2E parity mismatches by consuming
+   gate-produced red artifacts first, isolating failures to individual
+   pipeline modules, and handing a reviewed plan file to the repair workflow.
+   Use when: a chr1 sweep preset fails, E2E mismatch with non-default config,
+   final gate after all modules pass per-module cycle, config regression found
+   at E2E level.
 ---
 
 # Config E2E Diagnosis
@@ -58,13 +59,24 @@ Cells live in `parity_config_e2e_cells` (libtest-mimic harness, `--test parity_c
 
 ## Dispatch Boundaries
 
-- **Phase 1: Evidence collection** — Orchestrator may dispatch this phase directly. No `plan-duck` checkpoint is required before the first run.
+- **Phase 1: Evidence intake / fallback rerun** — Orchestrator may dispatch this phase directly with a routed red artifact. No `plan-duck` checkpoint is required before the first pass.
 - **Phase 2 / Phase 3: Diagnosis dispatch and repair handoff** — Before this combined dispatch runs after a failure, Orchestrator must run the global `plan-duck` skill and hand this skill the reviewed diagnosis plan file. The completed Phase 2/3 outputs are the artifact set that `plan-duck` turns into the reviewed repair plan file.
 - **Phase 4: Repair dispatch** — After Phase 2/3 complete, Orchestrator must run `plan-duck` again on the combined outputs and hand Port Engineer the reviewed repair plan file before `mismatch-repair` starts. The canonical E2E path does not require a separate `shard-diagnosis` checkpoint before this dispatch.
 - **Phase 5: Verification reruns** — These are mechanical reruns. Reuse the existing reports and the reviewed repair plan file. Do not insert another `plan-duck` checkpoint unless the scope changes.
 
 ### Thread Count Contract
 For any wrapper-driven `scripts/e2e_sweep_gate.sh` or `scripts/e2e_sweep_gate.py` run in this workflow, Orchestrator must confirm the chosen `--test-threads` count with the user and record it in the evidence brief or reviewed plan file. If a routed artifact omits that count, stop and return to Orchestrator instead of choosing a default inside this skill.
+
+### Diagnosis-Ready Red Artifact Contract
+The default Phase 1 evidence source is the routed gate artifact at the report-dir root, typically `tmp/parity-iteration/<run-id>/parity-failure-report.json`. Do not synthesize `tmp/parity-iteration/<preset>/...` paths.
+
+Treat the artifact as diagnosis-ready only when all of the following are true:
+- `schema_version` is `2`
+- `diagnosis_artifact.consumer_skill` is `config-e2e-diagnosis`
+- `diagnosis_artifact.readiness.status` is `ready`
+- each failure entry carries both `preset` and `region_str`
+
+If any of those checks fail, the fallback is a Phase 1 rerun. The gate encodes that fallback explicitly through `diagnosis_artifact.default_action = rerun-phase1-sweep` and `diagnosis_artifact.readiness.fallback_rerun_conditions`.
 
 ## Pipeline Module Order (diagnosis sequence)
 1. sam_file_parser
@@ -77,11 +89,12 @@ For any wrapper-driven `scripts/e2e_sweep_gate.sh` or `scripts/e2e_sweep_gate.py
 ## Phase 1: Evidence Collection
 
 ### Goal
-Identify which (preset, region) pairs produce mismatches at E2E level.
+Identify which (preset, region) pairs produce mismatches at E2E level, starting from the existing red artifact when it is already diagnosis-ready.
 
 ### Procedure
-1. Read the routed artifact and extract the confirmed `--test-threads` count for this host/run. If the artifact does not name the count for the wrapper-driven sweep gate run, stop and return to Orchestrator.
-2. Run the chr1 sweep gate serially across the current 44 presets in `tests/common/mod.rs` `CONFIG_PRESETS` (mirrored in `scripts/config_presets.tsv`):
+1. Read the routed artifact and extract the confirmed `--test-threads` count for this host/run plus the routed `parity-failure-report.json` path. If the routed material does not name the count for the wrapper-driven sweep gate run, stop and return to Orchestrator.
+2. If the routed `parity-failure-report.json` exists and satisfies the diagnosis-ready contract above, use it as the default Phase 1 evidence source. Record the failing `(preset, region_str)` pairs from `failures[].preset` and `failures[].region_str`, and carry forward `reproducer_cmd`, `report_path`, `sweep_bed_root`, and `fixture_source` for narrow follow-up. Do not rerun the broad sweep in this case.
+3. Only if the routed artifact is missing, unreadable, schema-incompatible, or marked `diagnosis_artifact.readiness.status != ready`, rerun the gate. Start with the narrowest rerun that the routed evidence supports; if you do not already know the failing preset, run the chr1 sweep gate serially across the current 44 presets in `tests/common/mod.rs` `CONFIG_PRESETS` (mirrored in `scripts/config_presets.tsv`):
    ```bash
    set -euo pipefail
    tail -n +2 scripts/config_presets.tsv | cut -f1 | while read -r preset; do
@@ -95,8 +108,8 @@ Identify which (preset, region) pairs produce mismatches at E2E level.
        --force
    done
    ```
-3. Budget roughly 6-11 minutes per preset, or about 4-8 hours serial for all 44 presets.
-4. If you already know which preset to chase, rerun just that preset:
+4. Budget roughly 6-11 minutes per preset, or about 4-8 hours serial for all 44 presets.
+5. If you already know which preset to chase, rerun just that preset:
    ```bash
    preset=T1-01
    bash scripts/e2e_sweep_gate.sh \
@@ -108,17 +121,17 @@ Identify which (preset, region) pairs produce mismatches at E2E level.
       --test-threads <confirmed-count> \
      --force
    ```
-5. If ALL PASS → config E2E gate passes. Report PASS.
-6. If any FAIL → record the failing `(preset, region_str)` pair from `tmp/parity-iteration/<preset>/parity-failure-report.json`.
-7. Optional fast smoke: run the `parity_config_e2e_push_*` family when you want a 10-region sanity check, but do not treat it as the Phase 1 gate:
+6. If ALL PASS → config E2E gate passes. Report PASS.
+7. If any FAIL → record the failing `(preset, region_str)` pair from the rerun's `parity-failure-report.json` at the report-dir root and reuse that freshly written artifact as the default evidence source for the remaining Phase 1 work.
+8. Optional fast smoke: run the `parity_config_e2e_push_*` family when you want a 10-region sanity check, but do not treat it as the Phase 1 gate:
    ```bash
    cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push_ -- --test-threads=10
    ```
-8. **Coverage promotion:** Re-run the `parity_config_e2e_cell_*` family (Binary B, 4,400 cell-level trials) as a broader-region complement to the chr1 sweep result, and use `tiered-config-test` for nightly/sweep expansion across the existing 44-config matrix.
+9. **Coverage promotion:** Re-run the `parity_config_e2e_cell_*` family (Binary B, 4,400 cell-level trials) as a broader-region complement to the chr1 sweep result, and use `tiered-config-test` for nightly/sweep expansion across the existing 44-config matrix.
 
 ### Outputs
 - List of failing (preset_name, region_str) pairs
-- Per-preset failure report showing first divergence per failure
+- The routed or rerun `parity-failure-report.json` path used as Phase 1 evidence, plus the first recorded divergence per failure
 
 ## Phase 2: Diagnosis Dispatch
 

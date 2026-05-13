@@ -96,7 +96,7 @@ class GateSmokeTest(unittest.TestCase):
         self.assertEqual(stdout_buffer.getvalue().splitlines(), ["alpha", "gamma"])
         self.assertEqual(stderr_buffer.getvalue().splitlines(), ["beta"])
 
-    def test_run_tests_and_report_stops_after_first_failed_pair(self) -> None:
+    def test_run_tests_and_report_writes_diagnosis_ready_failure_artifact(self) -> None:
         matrix = [("T1-01", "hg002", "1"), ("T1-02", "na12878_exome", "1")]
         first_result = subprocess.CompletedProcess(
             ["cargo"],
@@ -108,6 +108,7 @@ class GateSmokeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
             args = mock.Mock(
                 sweep_bed_root=PROJECT_ROOT / "tmp" / "sweep_beds",
+                fixture_source=PROJECT_ROOT / "tmp" / "sweep_fixtures" / "output",
                 cargo_extra_arg=[],
                 test_threads=1,
                 report_dir=Path(report_dir),
@@ -123,8 +124,49 @@ class GateSmokeTest(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertEqual(run_subprocess.call_count, 1)
+        self.assertEqual(payload["artifact_type"], "config-e2e-sweep-report")
+        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["result"], "failed")
         self.assertEqual(payload["failures"][0]["preset"], "T1-01")
         self.assertEqual(payload["failures"][0]["tag"], "hg002")
+        self.assertEqual(payload["failures"][0]["chrom"], "1")
+        self.assertEqual(payload["failures"][0]["region_str"], "1:100-200")
+        self.assertEqual(payload["diagnosis_artifact"]["consumer_skill"], "config-e2e-diagnosis")
+        self.assertEqual(payload["diagnosis_artifact"]["default_action"], "consume-existing-artifact")
+        self.assertTrue(payload["diagnosis_artifact"]["readiness"]["ready"])
+        self.assertEqual(payload["diagnosis_artifact"]["readiness"]["status"], "ready")
+        self.assertEqual(payload["diagnosis_artifact"]["test_threads"], 1)
+
+    def test_run_tests_and_report_marks_failure_artifact_not_ready_without_region_str(self) -> None:
+        matrix = [("T1-01", "hg002", "1")]
+        first_result = subprocess.CompletedProcess(
+            ["cargo"],
+            1,
+            "running 0 tests\n",
+            "selector drift\n",
+        )
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
+            args = mock.Mock(
+                sweep_bed_root=PROJECT_ROOT / "tmp" / "sweep_beds",
+                fixture_source=PROJECT_ROOT / "tmp" / "sweep_fixtures" / "output",
+                cargo_extra_arg=[],
+                test_threads=3,
+                report_dir=Path(report_dir),
+            )
+            with mock.patch("scripts.e2e_sweep_gate.live_vardictjava_commit", return_value="deadbeef"):
+                with mock.patch(
+                    "scripts.e2e_sweep_gate.run_streaming_subprocess",
+                    return_value=first_result,
+                ):
+                    rc = e2e_sweep_gate.run_tests_and_report(args, matrix)
+
+            payload = json.loads((Path(report_dir) / "parity-failure-report.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(rc, 1)
+        self.assertIsNone(payload["failures"][0]["region_str"])
+        self.assertFalse(payload["diagnosis_artifact"]["readiness"]["ready"])
+        self.assertEqual(payload["diagnosis_artifact"]["readiness"]["status"], "rerun-required")
+        self.assertEqual(payload["diagnosis_artifact"]["default_action"], "rerun-phase1-sweep")
 
     def test_fresh_stage_root_initializes_manifest_before_snapshot(self) -> None:
         with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:

@@ -26,7 +26,7 @@ workflow destination with a confidence level.
 | Destination | Trigger | Description |
 |-------------|---------|-------------|
 | `per-module-gate-cycle` | Incomplete modules in tracker | 7-Step Cycle: Risk → Implement → Validate → Audit → Expand → Review |
-| `e2e-config-diagnosis` | All modules ✅ + E2E gate ⬜ | Final Gate: evidence collection → reviewed diagnosis plan file → diagnosis + repair handoff → reviewed repair plan file → repair → verify |
+| `e2e-config-diagnosis` | All modules ✅ + E2E gate ⬜ | Final Gate: artifact-backed evidence intake from the existing red report → fallback rerun only if the diagnosis-ready contract fails → reviewed diagnosis plan file → diagnosis + repair handoff → reviewed repair plan file → repair → verify |
 | `targeted-fix` | User says "fix mismatch" / "fix parity" / names a specific bug | Dispatch shard-diagnosis → mismatch-repair → verify |
 | `parity-check` | User says "run parity" / "test module" / names a module to test | Dispatch module-parity-test for specified module |
 | `audit` | User says "audit" / "logic review" / names a module to audit | Dispatch logic-parity-audit for specified module |

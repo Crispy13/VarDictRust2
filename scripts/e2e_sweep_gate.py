@@ -3,7 +3,9 @@
 Stages existing fixtures from --fixture-source into tmp/sweep_fixtures/output/,
 initializes manifest.json for fresh staging roots, populates cache_entries via
 scripts.lib.merge_manifest, and runs scoped parity_e2e_sweep cargo tests.
-Produces parity-failure-report.json on red.
+Writes a schema-version 2 config E2E sweep report to parity-failure-report.json
+on both pass and fail, including diagnosis_artifact readiness/default_action
+metadata for config-e2e-diagnosis handoff.
 
 Stdlib only.
 """
@@ -57,6 +59,7 @@ PRESETS_TSV = PROJECT_ROOT / "scripts" / "config_presets.tsv"
 DEFAULT_TAGS = ("hg002", "na12878_exome", "na12878_lowcov")
 MERGE_PRESERVE_WORK = CANONICAL_FIXTURE_ROOT / ".manifest.cache_entries.gate_working.json"
 RUNNING_TESTS_RE = re.compile(r"running (\d+) tests?")
+FAILURE_REGION_RE = re.compile(r"Mismatch in [^:]+: (([^:\s]+):\d+-\d+)")
 PROGRESS_LOG_HANDLE: TextIO | None = None
 
 
@@ -883,13 +886,90 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
     )
 
 
-def parse_failure_chroms(output: str, expected_chroms: list[str]) -> list[str]:
-    chroms = []
-    for match in re.finditer(r"Mismatch in [^:]+: ([^:\s]+):\d+-\d+", output):
-        chrom = match.group(1)
-        if chrom in expected_chroms and chrom not in chroms:
-            chroms.append(chrom)
-    return chroms or list(expected_chroms)
+def parse_failure_regions(output: str, expected_chroms: list[str]) -> list[dict[str, str | None]]:
+    regions: list[dict[str, str | None]] = []
+    seen_regions: set[str] = set()
+    for match in FAILURE_REGION_RE.finditer(output):
+        region_str = match.group(1)
+        chrom = match.group(2)
+        if chrom not in expected_chroms or region_str in seen_regions:
+            continue
+        seen_regions.add(region_str)
+        regions.append({"chrom": chrom, "region_str": region_str})
+    if regions:
+        return regions
+    return [{"chrom": chrom, "region_str": None} for chrom in expected_chroms]
+
+
+def ordered_unique(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(items))
+
+
+def matrix_summary(matrix: list[tuple[str, str, str]]) -> dict:
+    return {
+        "cell_count": len(matrix),
+        "pair_count": len(grouped_pairs(matrix)),
+        "presets": ordered_unique([preset for preset, _tag, _chrom in matrix]),
+        "tags": ordered_unique([tag for _preset, tag, _chrom in matrix]),
+        "chroms": ordered_unique([chrom for _preset, _tag, chrom in matrix]),
+    }
+
+
+def diagnosis_fallback_rerun_conditions() -> list[str]:
+    return [
+        "Failure artifact is missing or unreadable at the routed report_path.",
+        "schema_version does not match this gate's diagnosis contract.",
+        "diagnosis_artifact.readiness.status is not 'ready'.",
+    ]
+
+
+def diagnosis_artifact_payload(
+    args: argparse.Namespace,
+    report_path: Path,
+    failures: list[dict],
+    *,
+    stopped_after: str | None,
+    result: str,
+) -> dict:
+    report_dir = Path(args.report_dir).resolve()
+    sweep_bed_root = getattr(args, "sweep_bed_root", None)
+    fixture_source = getattr(args, "fixture_source", None)
+    test_threads = getattr(args, "test_threads", None)
+
+    if result == "passed":
+        ready = False
+        status = "not-needed"
+        default_action = "none"
+        reason = "Sweep passed; no config-e2e diagnosis handoff is required."
+    else:
+        ready = bool(failures) and all(failure.get("region_str") for failure in failures)
+        if ready:
+            status = "ready"
+            default_action = "consume-existing-artifact"
+            reason = "Failure artifact includes explicit region_str evidence for every recorded failure."
+        else:
+            status = "rerun-required"
+            default_action = "rerun-phase1-sweep"
+            reason = "Failure artifact is missing one or more region_str entries required for narrow diagnosis."
+
+    return {
+        "kind": "config-e2e-phase1-report",
+        "consumer_skill": "config-e2e-diagnosis",
+        "result": result,
+        "default_action": default_action,
+        "readiness": {
+            "ready": ready,
+            "status": status,
+            "reason": reason,
+            "fallback_rerun_conditions": diagnosis_fallback_rerun_conditions() if result == "failed" else [],
+        },
+        "report_path": str(report_path.resolve()),
+        "report_dir": str(report_dir),
+        "stopped_after": stopped_after,
+        "test_threads": test_threads,
+        "sweep_bed_root": str(Path(sweep_bed_root).resolve()) if sweep_bed_root is not None else None,
+        "fixture_source": str(Path(fixture_source).resolve()) if fixture_source is not None else None,
+    }
 
 
 def failure_report_path(args: argparse.Namespace) -> Path:
@@ -911,7 +991,15 @@ def write_failure_report(
 ) -> int:
     report_path = failure_report_path(args)
     payload = failure_report_base(matrix, commit)
+    payload["result"] = "failed"
     payload["failures"] = failures
+    payload["diagnosis_artifact"] = diagnosis_artifact_payload(
+        args,
+        report_path,
+        failures,
+        stopped_after=stopped_after,
+        result="failed",
+    )
     write_json_atomic(report_path, payload)
 
     detail_parts = [f"failures={len(failures)}", f"report={report_path}"]
@@ -928,9 +1016,11 @@ def write_failure_report(
 
 def failure_report_base(matrix: list[tuple[str, str, str]], commit: str) -> dict:
     return {
-        "schema_version": 1,
+        "artifact_type": "config-e2e-sweep-report",
+        "schema_version": 2,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "vardictjava_commit": commit,
+        "matrix_summary": matrix_summary(matrix),
         "matrix": [
             {"preset": preset, "tag": tag, "chrom": chrom}
             for preset, tag, chrom in matrix
@@ -976,12 +1066,13 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
         stderr_tail = stderr_source.splitlines()[-50:]
         running_match = RUNNING_TESTS_RE.search(result.stdout)
         if running_match and int(running_match.group(1)) == 0:
-            for chrom in parse_failure_chroms(combined_output, chroms_by_pair[(preset, tag)]):
+            for failure_region in parse_failure_regions(combined_output, chroms_by_pair[(preset, tag)]):
                 failures.append(
                     {
                         "preset": preset,
                         "tag": tag,
-                        "chrom": chrom,
+                        "chrom": failure_region["chrom"],
+                        "region_str": failure_region["region_str"],
                         "cargo_test_name": test_name,
                         "reproducer_cmd": reproducer,
                         "stderr_tail": stderr_tail,
@@ -1019,12 +1110,13 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
             continue
 
         cap_reached = "MAX_FAILURES cap" in combined_output
-        for chrom in parse_failure_chroms(combined_output, chroms_by_pair[(preset, tag)]):
+        for failure_region in parse_failure_regions(combined_output, chroms_by_pair[(preset, tag)]):
             failures.append(
                 {
                     "preset": preset,
                     "tag": tag,
-                    "chrom": chrom,
+                    "chrom": failure_region["chrom"],
+                    "region_str": failure_region["region_str"],
                     "cargo_test_name": test_name,
                     "reproducer_cmd": reproducer,
                     "stderr_tail": stderr_tail,
@@ -1065,7 +1157,15 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
     args.report_dir.mkdir(parents=True, exist_ok=True)
     write_json_atomic(last_pass_path(args), pass_payload)
     green_report = failure_report_base(matrix, report_commit)
+    green_report["result"] = "passed"
     green_report["failures"] = []
+    green_report["diagnosis_artifact"] = diagnosis_artifact_payload(
+        args,
+        report_path,
+        [],
+        stopped_after=None,
+        result="passed",
+    )
     write_json_atomic(report_path, green_report)
     emit_status(
         "done",

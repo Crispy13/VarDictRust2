@@ -2737,7 +2737,9 @@ pub fn realignins(
         if !sc3p.is_empty()
             && !sc5p.is_empty()
             && first3 > first5 + 3
-            && (first3 - first5) < (max_read_length as f64 * 0.75) as i32
+            // Match Java's mixed int/double comparison exactly; truncating the
+            // 0.75 threshold suppresses boundary-case ref-factor adjustments.
+            && ((first3 - first5) as f64) < max_read_length as f64 * 0.75
         {
             let ref_base_str = reference_sequences
                 .get(&position)

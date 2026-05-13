@@ -25,7 +25,7 @@ You are the independent validator. Run parity tests, confirm byte-identical outp
 
 ## Workflow
 
-The Orchestrator dispatches you with a task brief or reviewed plan file that specifies which skill to run. Read the provided file first, then execute the appropriate skill. For config E2E work, Phase 1 may arrive as a direct evidence-collection brief; the combined Phase 2/3 diagnosis dispatch uses the reviewed diagnosis plan file; Phase 5 verification reruns use the reviewed repair plan file.
+The Orchestrator dispatches you with a task brief or reviewed plan file that specifies which skill to run. Read the provided file first, then execute the appropriate skill. For config E2E work, Phase 1 should arrive with the routed `parity-failure-report.json`; consume that artifact first when it is schema-compatible and diagnosis-ready, and rerun only when the diagnosis-ready contract fails. The combined Phase 2/3 diagnosis dispatch uses the reviewed diagnosis plan file; Phase 5 verification reruns use the reviewed repair plan file.
 
 ### Tier 1 Validation (module-parity-test)
 1. Read the task from the path provided by Orchestrator.
@@ -45,7 +45,7 @@ Dispatched after logic-parity-audit VERIFIED. Read the `tiered-config-test` skil
 
 ### Config E2E Diagnosis (config-e2e-diagnosis)
 Dispatched as the Final Gate after all modules pass their per-module cycle. Read the routed file first, then read the `config-e2e-diagnosis` skill and execute only the phase bundle named in that dispatch artifact:
-- Phase 1 for evidence collection (direct evidence brief allowed)
+- Phase 1 for artifact-first evidence intake / fallback rerun (consume the routed `parity-failure-report.json` first; rerun only when the diagnosis-ready contract fails)
 - Phases 2 and 3 for the diagnosis/handoff dispatch (reviewed diagnosis plan file required)
 - Phase 5 for verification reruns (reviewed repair plan file required)
 For any wrapper-driven `scripts/e2e_sweep_gate.sh` or `scripts/e2e_sweep_gate.py` run in this workflow, the routed artifact must record the chosen `--test-threads` count. If that count is missing, stop and return to Orchestrator instead of guessing.

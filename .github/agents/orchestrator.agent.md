@@ -45,9 +45,9 @@ _Entered when routing resolves to `per-module-gate-cycle`. Steps 2-7 are unchang
 
 After ALL modules complete Steps 0-7 and are committed, run the cross-module E2E config gate:
 
-1. **Evidence Collection** — Dispatch **Parity Verifier** with `config-e2e-diagnosis` Phase 1. The verifier writes the E2E evidence report to session memory.
+1. **Evidence Collection** — Dispatch **Parity Verifier** with `config-e2e-diagnosis` Phase 1 and the routed red artifact path. Phase 1 must inspect the existing `parity-failure-report.json` first and use it as the default evidence source when it is schema-compatible and diagnosis-ready; only when the artifact is missing, incompatible, or incomplete may the verifier rerun the sweep. The verifier writes the E2E evidence report to session memory.
 2. If PASS → E2E gate passes. Update active plan.
-3. **Diagnosis Dispatch** — If FAIL, run the global `plan-duck` skill on the Phase 1 evidence report and write the reviewed diagnosis plan file to `/memories/session/e2e-config-diagnosis-plan.md`. Dispatch **Parity Verifier** with that plan file to execute `config-e2e-diagnosis` Phases 2 and 3 as one diagnosis/handoff pass.
+3. **Diagnosis Dispatch** — If FAIL, run the global `plan-duck` skill on the artifact-backed Phase 1 evidence report and write the reviewed diagnosis plan file to `/memories/session/e2e-config-diagnosis-plan.md`. Dispatch **Parity Verifier** with that plan file to execute `config-e2e-diagnosis` Phases 2 and 3 as one diagnosis/handoff pass.
 4. **Repair Dispatch** — If the completed Phase 2/3 pass isolates a root-cause module and defines the failing-test handoff, run the global `plan-duck` skill on the combined Phase 2/3 outputs and write the reviewed repair plan file to `/memories/session/e2e-config-repair-plan.md`. Dispatch **Port Engineer** with that plan file to execute `mismatch-repair`. If the Phase 2/3 report an infrastructure defect instead, stop the E2E fix loop and route that infrastructure work explicitly.
 5. **Verify** — Re-dispatch **Parity Verifier** with `config-e2e-diagnosis` Phase 5 using the existing reports and the reviewed repair plan file for the mechanical rerun. Do not insert another `plan-duck` checkpoint before this rerun.
 6. Loop Steps 3-5 until all config E2E tests pass or escalate after 3 fix cycles.
