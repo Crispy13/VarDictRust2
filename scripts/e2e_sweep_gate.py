@@ -5,7 +5,12 @@ initializes manifest.json for fresh staging roots, populates cache_entries via
 scripts.lib.merge_manifest, and runs scoped parity_e2e_sweep cargo tests.
 Writes a schema-version 2 config E2E sweep report to parity-failure-report.json
 on both pass and fail, including diagnosis_artifact readiness/default_action
-metadata for config-e2e-diagnosis handoff.
+metadata for config-e2e-diagnosis handoff plus report-level scope/completeness
+and warning-summary fields.
+
+When a single-chrom matrix is run with --allow-extra-beds against a broader BED
+root, the gate copies the selected BEDs into report-dir/scoped_beds and runs the
+Rust harness against that scoped root so cache validation matches staged fixtures.
 
 Stdlib only.
 """
@@ -59,8 +64,22 @@ PRESETS_TSV = PROJECT_ROOT / "scripts" / "config_presets.tsv"
 DEFAULT_TAGS = ("hg002", "na12878_exome", "na12878_lowcov")
 MERGE_PRESERVE_WORK = CANONICAL_FIXTURE_ROOT / ".manifest.cache_entries.gate_working.json"
 RUNNING_TESTS_RE = re.compile(r"running (\d+) tests?")
-FAILURE_REGION_RE = re.compile(r"Mismatch in [^:]+: (([^:\s]+):\d+-\d+)")
+FAILURE_REGION_PATTERNS = (
+    re.compile(r"Mismatch in [^:]+: (([^:\s]+):\d+-\d+)"),
+    re.compile(r"config=[^\s]+\s+tile=(([^:\s]+):\d+-\d+)"),
+)
 PROGRESS_LOG_HANDLE: TextIO | None = None
+WARNING_SEVERITY_BY_KEY = {
+    "missing_chunks": "not-ready",
+    "missing_vardict_commit": "not-ready",
+    "missing_generator_flags": "not-ready",
+    "mismatch_generator_flags": "not-ready",
+    "missing_preset": "not-ready",
+    "mismatch_preset": "not-ready",
+    "missing_bed_sha256": "not-ready",
+    "mismatch_bed_sha256": "not-ready",
+}
+WARNING_SEVERITY_ORDER = ("blocking", "not-ready", "diagnostic-only", "unknown")
 
 
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -205,12 +224,23 @@ def print_matrix(matrix: list[tuple[str, str, str]]) -> None:
         print(f"  {preset} / {tag} / chr{chrom}")
 
 
-def sweep_test_selector(tag: str) -> str:
-    return f"{tag}_sweep::parity_e2e_sweep_{tag}"
+def sweep_test_selector(tag: str, chrom: str | None = None) -> str:
+    selector = f"{tag}_sweep::parity_e2e_sweep_{tag}"
+    if chrom is None:
+        return selector
+    chrom_label = chrom.removeprefix("chr")
+    return f"{selector}_chr{chrom_label}_"
 
 
-def sweep_test_command(args: argparse.Namespace, selector: str) -> list[str]:
-    return [
+def sweep_test_selection(tag: str, chroms: list[str]) -> tuple[str, bool]:
+    unique_chroms = list(dict.fromkeys(chroms))
+    if len(unique_chroms) == 1:
+        return sweep_test_selector(tag, unique_chroms[0]), False
+    return sweep_test_selector(tag), True
+
+
+def sweep_test_command(args: argparse.Namespace, selector: str, *, exact: bool = True) -> list[str]:
+    cmd = [
         "cargo",
         "test",
         "--profile",
@@ -219,11 +249,13 @@ def sweep_test_command(args: argparse.Namespace, selector: str) -> list[str]:
         "parity_e2e_sweep",
         "--",
         "--include-ignored",
-        "--exact",
-        selector,
-        f"--test-threads={args.test_threads}",
-        *args.cargo_extra_arg,
     ]
+    if exact:
+        cmd.extend(["--exact", selector])
+    else:
+        cmd.append(selector)
+    cmd.extend([f"--test-threads={args.test_threads}", *args.cargo_extra_arg])
+    return cmd
 
 
 def sweep_test_reproducer(
@@ -231,11 +263,13 @@ def sweep_test_reproducer(
     preset: str,
     sweep_bed_root: Path,
     selector: str,
+    *,
+    exact: bool = True,
 ) -> str:
     return (
         f"VARDICT_E2E_SWEEP_CONFIG={preset} "
         f"VARDICT_E2E_SWEEP_BED_ROOT={sweep_bed_root} "
-        f"CI=true {' '.join(sweep_test_command(args, selector))}"
+        f"CI=true {' '.join(sweep_test_command(args, selector, exact=exact))}"
     )
 
 
@@ -264,9 +298,9 @@ def print_planned_actions(args: argparse.Namespace, matrix: list[tuple[str, str,
     for preset, tags in grouped_tags_by_preset(matrix).items():
         print(f"  merge manifest cache_entries for {preset} tags={','.join(tags)}")
     print("  run provenance checks against staged chunks metadata")
-    for preset, tag in grouped_pairs(matrix):
-        selector = sweep_test_selector(tag)
-        print(f"  {sweep_test_reproducer(args, preset, args.sweep_bed_root, selector)}")
+    for preset, tag, chroms in grouped_cells_by_pair(matrix):
+        selector, exact = sweep_test_selection(tag, chroms)
+        print(f"  {sweep_test_reproducer(args, preset, args.sweep_bed_root, selector, exact=exact)}")
 
 
 def format_elapsed(started_at: float | None) -> str:
@@ -389,6 +423,73 @@ def track_warning(
         warning_samples.append(warning_message)
 
 
+def classify_warning_severity(warning_key: str) -> str:
+    return WARNING_SEVERITY_BY_KEY.get(warning_key, "unknown")
+
+
+def warning_summary_payload(
+    phase_warnings: dict[str, dict[str, object]] | None,
+) -> dict:
+    phase_warnings = phase_warnings or {}
+    severity_totals = {severity: 0 for severity in WARNING_SEVERITY_ORDER}
+    key_totals: dict[str, int] = {}
+    phase_summary: dict[str, dict[str, object]] = {}
+    warning_keys_by_severity = {severity: [] for severity in WARNING_SEVERITY_ORDER}
+
+    total_warnings = 0
+    for phase, payload in phase_warnings.items():
+        counts = dict(payload.get("counts", {}))
+        samples = list(payload.get("samples", []))
+        phase_total = sum(counts.values())
+        total_warnings += phase_total
+        phase_summary[phase] = {
+            "total": phase_total,
+            "by_key": dict(sorted(counts.items())),
+            "samples": samples,
+        }
+        for key, count in counts.items():
+            key_totals[key] = key_totals.get(key, 0) + count
+            severity = classify_warning_severity(key)
+            severity_totals[severity] += count
+
+    for key in sorted(key_totals):
+        warning_keys_by_severity[classify_warning_severity(key)].append(key)
+
+    blocking_keys = warning_keys_by_severity["blocking"]
+    not_ready_keys = warning_keys_by_severity["not-ready"] + warning_keys_by_severity["unknown"]
+    diagnostic_only_keys = warning_keys_by_severity["diagnostic-only"]
+    if blocking_keys:
+        readiness_status = "blocking"
+        readiness_reason = (
+            "Blocking warning classes are present: "
+            + ", ".join(blocking_keys)
+        )
+    elif not_ready_keys:
+        readiness_status = "not-ready"
+        readiness_reason = (
+            "Artifact warnings require a fresh full-scope replay before canonical use: "
+            + ", ".join(not_ready_keys)
+        )
+    else:
+        readiness_status = "ready"
+        readiness_reason = "Only diagnostic-only warnings are present." if diagnostic_only_keys else "No warnings recorded."
+
+    return {
+        "total": total_warnings,
+        "by_key": dict(sorted(key_totals.items())),
+        "by_severity": {severity: severity_totals[severity] for severity in WARNING_SEVERITY_ORDER},
+        "phase_summary": phase_summary,
+        "readiness_impact": {
+            "status": readiness_status,
+            "reason": readiness_reason,
+            "blocking_warning_keys": blocking_keys,
+            "not_ready_warning_keys": warning_keys_by_severity["not-ready"],
+            "diagnostic_only_warning_keys": diagnostic_only_keys,
+            "unknown_warning_keys": warning_keys_by_severity["unknown"],
+        },
+    }
+
+
 def run_streaming_subprocess(
     cmd: list[str],
     *,
@@ -480,6 +581,30 @@ def grouped_chroms_by_tag(matrix: list[tuple[str, str, str]]) -> dict[str, list[
         if chrom not in grouped[tag]:
             grouped[tag].append(chrom)
     return grouped
+
+
+def use_scoped_bed_root(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> bool:
+    return bool(args.allow_extra_beds) and all(len(chroms) == 1 for chroms in grouped_chroms_by_tag(matrix).values())
+
+
+def configure_runtime_sweep_bed_root(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> Path:
+    if not use_scoped_bed_root(args, matrix):
+        args.runtime_sweep_bed_root = args.sweep_bed_root
+        return args.sweep_bed_root
+
+    scoped_root = args.report_dir / "scoped_beds"
+    for tag, chroms in grouped_chroms_by_tag(matrix).items():
+        tag_root = scoped_root / tag
+        tag_root.mkdir(parents=True, exist_ok=True)
+        for chrom in chroms:
+            source = args.sweep_bed_root / tag / f"{chrom}.bed"
+            shutil.copy2(source, tag_root / f"{chrom}.bed")
+    args.runtime_sweep_bed_root = scoped_root.resolve()
+    return args.runtime_sweep_bed_root
+
+
+def runtime_sweep_bed_root(args: argparse.Namespace) -> Path:
+    return Path(vars(args).get("runtime_sweep_bed_root", args.sweep_bed_root)).resolve()
 
 
 def grouped_pairs(matrix: list[tuple[str, str, str]]) -> list[tuple[str, str]]:
@@ -689,9 +814,10 @@ def should_replace_link(target: Path, existing: Path, source: Path, args: argpar
     return reply in {"y", "yes"}
 
 
-def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> None:
+def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> dict[str, object]:
     fixture_source = ensure_fixture_source(args)
     validate_bed_scope(args, matrix)
+    active_sweep_bed_root = configure_runtime_sweep_bed_root(args, matrix)
 
     missing_sources: list[str] = []
     for preset, tag, chrom in matrix:
@@ -714,6 +840,13 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> N
     stage_warning_counts: dict[str, int] = {}
     stage_warning_samples: list[str] = []
     emit_status("stage", started_at=stage_started_at, completed=0, total=total_pairs, event="start")
+    if active_sweep_bed_root != args.sweep_bed_root:
+        emit_status(
+            "stage",
+            started_at=stage_started_at,
+            event="scoped-bed-root",
+            detail=f"root={active_sweep_bed_root}",
+        )
 
     for pair_index, (preset, tag, chroms) in enumerate(pair_batches, start=1):
         for chrom in chroms:
@@ -761,20 +894,24 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> N
         )
 
     for preset, tags in grouped_tags_by_preset(matrix).items():
+        fixture_chroms = ordered_unique(
+            [chrom for matrix_preset, _tag, chrom in matrix if matrix_preset == preset]
+        )
         preserve_path = prepare_merge_preserve_file()
         logical_flags = (
             f"--output-only --config {preset} --tags {','.join(tags)} "
-            f"--sweep-bed-root {args.sweep_bed_root}"
+            f"--sweep-bed-root {active_sweep_bed_root}"
         )
         merge_cache_entries(
             config_name=preset,
             tags_csv=",".join(tags),
             logical_flags=logical_flags,
             project_root=PROJECT_ROOT,
-            sweep_bed_root=args.sweep_bed_root,
+            sweep_bed_root=active_sweep_bed_root,
             preserve_path=preserve_path,
             manifest_only=True,
             fixture_output_root=CANONICAL_OUTPUT_ROOT,
+            fixture_chroms=fixture_chroms,
         )
         emit_status(
             "stage",
@@ -796,11 +933,13 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> N
             f"warnings={sum(stage_warning_counts.values())}"
         ),
     )
+    return {"counts": stage_warning_counts, "samples": stage_warning_samples}
 
 
-def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> None:
+def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> dict[str, object]:
     live_commit = live_vardictjava_commit()
     grouped_tags = grouped_tags_by_preset(matrix)
+    active_sweep_bed_root = runtime_sweep_bed_root(args)
     provenance_started_at = time.monotonic()
     pair_batches = grouped_cells_by_pair(matrix)
     total_pairs = len(pair_batches)
@@ -840,12 +979,12 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
 
             expected_flags = (
                 f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} "
-                f"--sweep-bed-root {args.sweep_bed_root}"
+                f"--sweep-bed-root {active_sweep_bed_root}"
             )
             optional_checks = {
                 "generator_flags": expected_flags,
                 "preset": preset,
-                "bed_sha256": bed_sha256(args.sweep_bed_root, tag),
+                "bed_sha256": bed_sha256(active_sweep_bed_root, tag),
             }
             for key, expected_value in optional_checks.items():
                 actual_value = payload.get(key)
@@ -884,18 +1023,24 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
         event="complete",
         detail=f"cells={total_cells}/{total_cells} warnings={sum(warning_counts.values())}",
     )
+    return {"counts": warning_counts, "samples": warning_samples}
 
 
 def parse_failure_regions(output: str, expected_chroms: list[str]) -> list[dict[str, str | None]]:
     regions: list[dict[str, str | None]] = []
     seen_regions: set[str] = set()
-    for match in FAILURE_REGION_RE.finditer(output):
-        region_str = match.group(1)
-        chrom = match.group(2)
-        if chrom not in expected_chroms or region_str in seen_regions:
-            continue
-        seen_regions.add(region_str)
-        regions.append({"chrom": chrom, "region_str": region_str})
+    for line in output.splitlines():
+        for pattern in FAILURE_REGION_PATTERNS:
+            match = pattern.search(line)
+            if match is None:
+                continue
+            region_str = match.group(1)
+            chrom = match.group(2)
+            if chrom not in expected_chroms or region_str in seen_regions:
+                break
+            seen_regions.add(region_str)
+            regions.append({"chrom": chrom, "region_str": region_str})
+            break
     if regions:
         return regions
     return [{"chrom": chrom, "region_str": None} for chrom in expected_chroms]
@@ -915,11 +1060,25 @@ def matrix_summary(matrix: list[tuple[str, str, str]]) -> dict:
     }
 
 
+def original_matrix_scope(matrix: list[tuple[str, str, str]]) -> dict:
+    summary = matrix_summary(matrix)
+    return {
+        "presets": summary["presets"],
+        "tags": summary["tags"],
+        "chroms": summary["chroms"],
+        "matrix": [
+            {"preset": preset, "tag": tag, "chrom": chrom}
+            for preset, tag, chrom in matrix
+        ],
+    }
+
+
 def diagnosis_fallback_rerun_conditions() -> list[str]:
     return [
         "Failure artifact is missing or unreadable at the routed report_path.",
         "schema_version does not match this gate's diagnosis contract.",
         "diagnosis_artifact.readiness.status is not 'ready'.",
+        "Artifact lacks planned/tested matrix counts, halted_early, original_matrix_scope, or warning_summary required for canonical full-scope replay.",
     ]
 
 
@@ -930,6 +1089,7 @@ def diagnosis_artifact_payload(
     *,
     stopped_after: str | None,
     result: str,
+    warning_summary: dict,
 ) -> dict:
     report_dir = Path(args.report_dir).resolve()
     sweep_bed_root = getattr(args, "sweep_bed_root", None)
@@ -942,15 +1102,25 @@ def diagnosis_artifact_payload(
         default_action = "none"
         reason = "Sweep passed; no config-e2e diagnosis handoff is required."
     else:
-        ready = bool(failures) and all(failure.get("region_str") for failure in failures)
-        if ready:
+        warning_status = warning_summary["readiness_impact"]["status"]
+        has_region_evidence = bool(failures) and all(failure.get("region_str") for failure in failures)
+        ready = has_region_evidence and warning_status == "ready"
+        if not has_region_evidence:
+            status = "rerun-required"
+            default_action = "rerun-phase1-sweep"
+            reason = "Failure artifact is missing parseable region_str evidence for one or more recorded failures."
+        elif warning_status != "ready":
+            status = "rerun-required"
+            default_action = "rerun-phase1-sweep"
+            reason = warning_summary["readiness_impact"]["reason"]
+        elif ready:
             status = "ready"
             default_action = "consume-existing-artifact"
             reason = "Failure artifact includes explicit region_str evidence for every recorded failure."
         else:
             status = "rerun-required"
             default_action = "rerun-phase1-sweep"
-            reason = "Failure artifact is missing one or more region_str entries required for narrow diagnosis."
+            reason = "Failure artifact is not canonical full-scope evidence."
 
     return {
         "kind": "config-e2e-phase1-report",
@@ -967,8 +1137,9 @@ def diagnosis_artifact_payload(
         "report_dir": str(report_dir),
         "stopped_after": stopped_after,
         "test_threads": test_threads,
-        "sweep_bed_root": str(Path(sweep_bed_root).resolve()) if sweep_bed_root is not None else None,
+        "sweep_bed_root": str(runtime_sweep_bed_root(args)) if sweep_bed_root is not None else None,
         "fixture_source": str(Path(fixture_source).resolve()) if fixture_source is not None else None,
+        "warning_summary_status": warning_summary["readiness_impact"]["status"],
     }
 
 
@@ -987,18 +1158,26 @@ def write_failure_report(
     failures: list[dict],
     *,
     started_at: float,
+    tested_cell_count: int,
+    tested_pair_count: int,
+    warning_summary: dict,
     stopped_after: str | None = None,
 ) -> int:
     report_path = failure_report_path(args)
     payload = failure_report_base(matrix, commit)
     payload["result"] = "failed"
     payload["failures"] = failures
+    payload["tested_cell_count"] = tested_cell_count
+    payload["tested_pair_count"] = tested_pair_count
+    payload["halted_early"] = tested_pair_count < payload["planned_pair_count"]
+    payload["warning_summary"] = warning_summary
     payload["diagnosis_artifact"] = diagnosis_artifact_payload(
         args,
         report_path,
         failures,
         stopped_after=stopped_after,
         result="failed",
+        warning_summary=warning_summary,
     )
     write_json_atomic(report_path, payload)
 
@@ -1015,12 +1194,16 @@ def write_failure_report(
 
 
 def failure_report_base(matrix: list[tuple[str, str, str]], commit: str) -> dict:
+    summary = matrix_summary(matrix)
     return {
         "artifact_type": "config-e2e-sweep-report",
         "schema_version": 2,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "vardictjava_commit": commit,
-        "matrix_summary": matrix_summary(matrix),
+        "matrix_summary": summary,
+        "planned_cell_count": summary["cell_count"],
+        "planned_pair_count": summary["pair_count"],
+        "original_matrix_scope": original_matrix_scope(matrix),
         "matrix": [
             {"preset": preset, "tag": tag, "chrom": chrom}
             for preset, tag, chrom in matrix
@@ -1028,10 +1211,15 @@ def failure_report_base(matrix: list[tuple[str, str, str]], commit: str) -> dict
     }
 
 
-def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> int:
+def run_tests_and_report(
+    args: argparse.Namespace,
+    matrix: list[tuple[str, str, str]],
+    warning_summary: dict | None = None,
+) -> int:
     report_commit = live_vardictjava_commit()
     failures: list[dict] = []
-    sweep_bed_root = args.sweep_bed_root.resolve()
+    warning_summary = warning_summary or warning_summary_payload({})
+    sweep_bed_root = runtime_sweep_bed_root(args)
     tests_started_at = time.monotonic()
     chroms_by_pair: dict[tuple[str, str], list[str]] = {}
     for preset, tag, chrom in matrix:
@@ -1041,16 +1229,18 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
 
     pairs = grouped_pairs(matrix)
     total_pairs = len(pairs)
+    tested_cell_count = 0
     emit_status("tests", started_at=tests_started_at, completed=0, total=total_pairs, event="start")
 
     for pair_index, (preset, tag) in enumerate(pairs, start=1):
-        test_name = sweep_test_selector(tag)
-        reproducer = sweep_test_reproducer(args, preset, sweep_bed_root, test_name)
+        pair_chroms = chroms_by_pair[(preset, tag)]
+        test_name, exact_selector = sweep_test_selection(tag, pair_chroms)
+        reproducer = sweep_test_reproducer(args, preset, sweep_bed_root, test_name, exact=exact_selector)
         env = dict(os.environ)
         env["VARDICT_E2E_SWEEP_CONFIG"] = preset
         env["VARDICT_E2E_SWEEP_BED_ROOT"] = str(sweep_bed_root)
         env["CI"] = "true"
-        cmd = sweep_test_command(args, test_name)
+        cmd = sweep_test_command(args, test_name, exact=exact_selector)
         emit_status(
             "tests",
             started_at=tests_started_at,
@@ -1066,7 +1256,8 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
         stderr_tail = stderr_source.splitlines()[-50:]
         running_match = RUNNING_TESTS_RE.search(result.stdout)
         if running_match and int(running_match.group(1)) == 0:
-            for failure_region in parse_failure_regions(combined_output, chroms_by_pair[(preset, tag)]):
+            tested_cell_count += len(pair_chroms)
+            for failure_region in parse_failure_regions(combined_output, pair_chroms):
                 failures.append(
                     {
                         "preset": preset,
@@ -1095,10 +1286,14 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
                 report_commit,
                 failures,
                 started_at=tests_started_at,
+                tested_cell_count=tested_cell_count,
+                tested_pair_count=pair_index,
+                warning_summary=warning_summary,
                 stopped_after=f"{preset}/{tag}",
             )
 
         if result.returncode == 0:
+            tested_cell_count += len(pair_chroms)
             emit_status(
                 "tests",
                 started_at=tests_started_at,
@@ -1110,7 +1305,8 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
             continue
 
         cap_reached = "MAX_FAILURES cap" in combined_output
-        for failure_region in parse_failure_regions(combined_output, chroms_by_pair[(preset, tag)]):
+        tested_cell_count += len(pair_chroms)
+        for failure_region in parse_failure_regions(combined_output, pair_chroms):
             failures.append(
                 {
                     "preset": preset,
@@ -1141,6 +1337,9 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
             report_commit,
             failures,
             started_at=tests_started_at,
+            tested_cell_count=tested_cell_count,
+            tested_pair_count=pair_index,
+            warning_summary=warning_summary,
             stopped_after=f"{preset}/{tag}",
         )
 
@@ -1159,12 +1358,17 @@ def run_tests_and_report(args: argparse.Namespace, matrix: list[tuple[str, str, 
     green_report = failure_report_base(matrix, report_commit)
     green_report["result"] = "passed"
     green_report["failures"] = []
+    green_report["tested_cell_count"] = green_report["planned_cell_count"]
+    green_report["tested_pair_count"] = green_report["planned_pair_count"]
+    green_report["halted_early"] = False
+    green_report["warning_summary"] = warning_summary
     green_report["diagnosis_artifact"] = diagnosis_artifact_payload(
         args,
         report_path,
         [],
         stopped_after=None,
         result="passed",
+        warning_summary=warning_summary,
     )
     write_json_atomic(report_path, green_report)
     emit_status(
@@ -1251,9 +1455,18 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
             try:
-                run_stage(args, matrix)
-                run_provenance_check(args, matrix)
-                return run_tests_and_report(args, matrix)
+                stage_warnings = run_stage(args, matrix)
+                provenance_warnings = run_provenance_check(args, matrix)
+                return run_tests_and_report(
+                    args,
+                    matrix,
+                    warning_summary_payload(
+                        {
+                            "stage": stage_warnings,
+                            "provenance": provenance_warnings,
+                        }
+                    ),
+                )
             except SystemExit as exc:
                 emit_status(
                     "done",

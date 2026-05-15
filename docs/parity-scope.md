@@ -141,6 +141,22 @@ Full parity claim requires all rows × all covered chromosomes × all 44 presets
 green in at least one `sweep.yml` nightly run. Partial coverage (e.g., smoke tier
 only) does **not** support the full claim.
 
+### Canonical E2E Evidence
+
+The config E2E workflow distinguishes between diagnostic first-failure artifacts and a
+completed full-matrix parity claim:
+
+- A fail-fast red artifact is diagnostic evidence only. It may drive mismatch isolation,
+  but it is not a completed parity checkpoint.
+- A completed full-scope artifact must record the same declared matrix it set out to run,
+  with `tested_cell_count == planned_cell_count`, `tested_pair_count == planned_pair_count`,
+  `halted_early == false`, and `warning_summary.readiness_impact.status == ready`.
+- Repair handoff from a red artifact requires an exact live freshness replay of the
+  failing preset, tag, region or tile, fixture source, sweep BED root, and test-thread
+  context before the workflow may proceed.
+- When workflow documents and live artifacts disagree, prefer the freshest acknowledged
+  artifact set. Stale mission summaries do not override newer executable evidence.
+
 ---
 
 ## Scope changes

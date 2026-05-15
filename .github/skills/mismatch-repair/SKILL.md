@@ -150,7 +150,7 @@ All tests must pass, including the new regression test.
 
 ### Step 2b: Config-e2e failing-test re-run
 
-Use this step when `mismatch-repair` is reached through `config-e2e-diagnosis` Phase 4 and the reviewed repair plan file names a chr1 sweep or cell-binary failure, not a per-module shard. See `config-e2e-diagnosis` Phase 3 for the fixture-generation procedure; this step is the canonical post-fix execution point for that failing test.
+Use this step when `mismatch-repair` is reached through `config-e2e-diagnosis` Phase 4 and the reviewed repair plan file names a config-E2E sweep or cell-binary failure, not a per-module shard. See `config-e2e-diagnosis` Phase 3 for the fixture-generation procedure; this step is the canonical post-fix execution point for that failing test.
 
 - **Test name pattern:** `parity_{module}_config_{config_slug}_{region_safe}` (for example, `parity_cigar_parser_config_t1_01_1_2324084_2324612`).
 - **Fixture path:** `testdata/fixtures/{module}/{module}_{config_slug}_{region_safe}.jsonl.zst`.

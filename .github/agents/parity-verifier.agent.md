@@ -25,7 +25,7 @@ You are the independent validator. Run parity tests, confirm byte-identical outp
 
 ## Workflow
 
-The Orchestrator dispatches you with a task brief or reviewed plan file that specifies which skill to run. Read the provided file first, then execute the appropriate skill. For config E2E work, Phase 1 should arrive with the routed `parity-failure-report.json`; consume that artifact first when it is schema-compatible and diagnosis-ready, and rerun only when the diagnosis-ready contract fails. The combined Phase 2/3 diagnosis dispatch uses the reviewed diagnosis plan file; Phase 5 verification reruns use the reviewed repair plan file.
+The Orchestrator dispatches you with a task brief or reviewed plan file that specifies which skill to run. Read the provided file first, then execute the appropriate skill. For config E2E work, Phase 1 should arrive with the routed `parity-failure-report.json`; consume that artifact first when it is schema-compatible, diagnosis-ready, and full-scope complete, and rerun only when that contract fails. Any rerun must preserve the same full declared scope unless the user explicitly approved a diagnostic narrowing. The combined Phase 2/3 diagnosis dispatch uses the reviewed diagnosis plan file; Phase 5 verification reruns use the reviewed repair plan file.
 
 ### Tier 1 Validation (module-parity-test)
 1. Read the task from the path provided by Orchestrator.
@@ -45,10 +45,10 @@ Dispatched after logic-parity-audit VERIFIED. Read the `tiered-config-test` skil
 
 ### Config E2E Diagnosis (config-e2e-diagnosis)
 Dispatched as the Final Gate after all modules pass their per-module cycle. Read the routed file first, then read the `config-e2e-diagnosis` skill and execute only the phase bundle named in that dispatch artifact:
-- Phase 1 for artifact-first evidence intake / fallback rerun (consume the routed `parity-failure-report.json` first; rerun only when the diagnosis-ready contract fails)
+- Phase 1 for artifact-first evidence intake / full-scope refresh (consume the routed `parity-failure-report.json` first; rerun only when the diagnosis-ready and full-scope metadata contract fails)
 - Phases 2 and 3 for the diagnosis/handoff dispatch (reviewed diagnosis plan file required)
 - Phase 5 for verification reruns (reviewed repair plan file required)
-For any wrapper-driven `scripts/e2e_sweep_gate.sh` or `scripts/e2e_sweep_gate.py` run in this workflow, the routed artifact must record the chosen `--test-threads` count. If that count is missing, stop and return to Orchestrator instead of guessing.
+For any wrapper-driven `scripts/e2e_sweep_gate.sh` or `scripts/e2e_sweep_gate.py` run in this workflow, the routed artifact must record the chosen `--test-threads` count plus the full-scope metadata needed for canonical routing. If the thread count, `original_matrix_scope`, completeness fields, or `warning_summary` are missing, stop and return to Orchestrator instead of guessing. Before Phase 2/3 may hand off to repair, confirm the exact live replay tuple still reproduces. If it does not, stop and return to full-scope evidence refresh.
 Do not implement the fix here; report the combined diagnosis and repair-handoff outputs needed for Orchestrator to write the reviewed repair plan file.
 
 ## Report Templates

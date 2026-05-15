@@ -26,12 +26,12 @@ workflow destination with a confidence level.
 | Destination | Trigger | Description |
 |-------------|---------|-------------|
 | `per-module-gate-cycle` | Incomplete modules in tracker | 7-Step Cycle: Risk → Implement → Validate → Audit → Expand → Review |
-| `e2e-config-diagnosis` | All modules ✅ + E2E gate ⬜ | Final Gate: artifact-backed evidence intake from the existing red report → fallback rerun only if the diagnosis-ready contract fails → reviewed diagnosis plan file → diagnosis + repair handoff → reviewed repair plan file → repair → verify |
+| `e2e-config-diagnosis` | All modules ✅ + E2E gate ⬜ | Final Gate: artifact-backed evidence intake from the existing full-scope red report → rerun the same full declared scope only if the diagnosis-ready/full-scope contract fails → reviewed diagnosis plan file → diagnosis + repair handoff → reviewed repair plan file → repair → rerun the same full scope |
 | `targeted-fix` | User says "fix mismatch" / "fix parity" / names a specific bug | Dispatch shard-diagnosis → mismatch-repair → verify |
 | `parity-check` | User says "run parity" / "test module" / names a module to test | Dispatch module-parity-test for specified module |
 | `audit` | User says "audit" / "logic review" / names a module to audit | Dispatch logic-parity-audit for specified module |
 
-The `e2e-config-diagnosis` route uses `plan-duck` only before the combined Phase 2/3 diagnosis-handoff dispatch and before the repair dispatch. It is not inserted before mechanical verification reruns.
+The `e2e-config-diagnosis` route is the canonical full-scope final gate. User-approved diagnostic reruns may happen inside that workflow, but they do not replace the canonical full-scope route. The route uses `plan-duck` only before the combined Phase 2/3 diagnosis-handoff dispatch and before the repair dispatch. It is not inserted before mechanical verification reruns.
 
 ## Decision Logic (Priority Order)
 

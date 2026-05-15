@@ -48,7 +48,7 @@ Detects structural variants (DEL, INV, DUP) from soft-clipped read consensus seq
 
 ## Known Parity Traps
 
-1. **Collection ordering**: `VariationMap.entries` = `IndexMap` (Java `LinkedHashMap`), `Sclip.soft` = `IndexMap`. `fill_and_sort_tmp_sv` uses stable sort on count only — no tiebreaker.
+1. **Collection ordering**: `VariationMap.entries` = `IndexMap` (Java `LinkedHashMap`), `Sclip.soft` = `IndexMap`. `fill_and_sort_tmp_sv` preserves count-descending priority and uses ascending position as the deterministic equal-count tie-break for Rust `HashMap` soft-clip inputs. `find_del` no-softp fallback scans snapshot and sort `soft_clips_3_end` / `soft_clips_5_end` keys before the Java first-match break, avoiding process-random Rust `HashMap` traversal at candidate-selection boundaries.
 2. **markSV vs markDUPSV coordinates**: markSV uses inner (end/mstart), markDUPSV uses outer (start/mend). Critical difference.
 3. **Seed uniqueness**: `seeds.len() == 1` — ambiguous seeds skipped entirely.
 4. **findMatchRev complements only**: Complement-only on sequence. Reverse done separately for dir==1.
@@ -64,6 +64,7 @@ Detects structural variants (DEL, INV, DUP) from soft-clipped read consensus seq
 ## Divergences
 
 1. **Partial-pipeline debug snapshots**: Rust now applies the Java-equivalent map side effects for SV boundary re-entry, but does not currently emit a separate partial-pipeline CIGAR debug snapshot. Main-region `sv_processor` and final TSV parity are the acceptance surface.
+2. **Deterministic Rust `HashMap` ordering guards**: Java soft-clip maps are `HashMap`-backed but deterministic for the observed fixture/runtime. Rust applies explicit ascending-position ordering at output-affecting SV candidate surfaces where Java breaks on the first viable candidate; this is an intentional parity guard, not a downstream output adapter.
 
 ## Cross-Module Dependencies
 

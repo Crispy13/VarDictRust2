@@ -100,8 +100,7 @@ fn parity_realigner_region_1_2324084_2324612() {
         .unwrap_or_else(|e| panic!("Failed to load reference for {region_str}: {e}"));
     let reference = Arc::new(reference);
 
-    let cp_golden =
-        super::common::load_golden_data_with_config("cigar_parser", Some(config_name), region_str);
+    let cp_golden = super::common::load_golden_data("cigar_parser", region_str);
     let variation_data: VariationData = serde_json::from_str(&cp_golden).unwrap_or_else(|e| {
         panic!("Failed to deserialize cigar_parser golden for {region_str}: {e}")
     });

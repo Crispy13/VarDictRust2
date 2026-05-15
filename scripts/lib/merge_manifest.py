@@ -201,6 +201,7 @@ def _validate_manifest_only_fixtures(
     project_root: Path,
     sweep_bed_root: Path,
     fixture_output_root: Path | str | None,
+    fixture_chroms: list[str] | None = None,
 ) -> None:
     if fixture_output_root is None:
         fixture_output_root = _fixture_root(project_root) / "output"
@@ -209,6 +210,13 @@ def _validate_manifest_only_fixtures(
         if not fixture_output_root.is_absolute():
             fixture_output_root = project_root / fixture_output_root
     fixture_output_root = fixture_output_root.resolve()
+    scoped_chroms = None
+    if fixture_chroms is not None:
+        scoped_chroms = []
+        for chrom in fixture_chroms:
+            chrom = chrom.strip()
+            if chrom and chrom not in scoped_chroms:
+                scoped_chroms.append(chrom)
 
     missing = []
     for tag in tags:
@@ -216,8 +224,20 @@ def _validate_manifest_only_fixtures(
         # A tag with zero BEDs keeps A1's SystemExit path; no chroms can be enumerated.
         if not bed_paths:
             raise SystemExit(f"ERROR: no BED files found for {tag} under {sweep_bed_root}")
-        for bed_path in bed_paths:
-            expected = _expected_fixture_path(fixture_output_root, config_name, tag, bed_path.stem)
+        if scoped_chroms is None:
+            chroms = [bed_path.stem for bed_path in bed_paths]
+        else:
+            bed_root = project_root / sweep_bed_root / tag
+            available_chroms = {bed_path.stem for bed_path in bed_paths}
+            missing_beds = [bed_root / f"{chrom}.bed" for chrom in scoped_chroms if chrom not in available_chroms]
+            if missing_beds:
+                message = "Missing BED files for --manifest-only scoped chroms:\n" + "\n".join(
+                    str(path) for path in missing_beds
+                )
+                raise FileNotFoundError(message)
+            chroms = scoped_chroms
+        for chrom in chroms:
+            expected = _expected_fixture_path(fixture_output_root, config_name, tag, chrom)
             if not expected.exists():
                 missing.append(expected)
 
@@ -238,6 +258,7 @@ def merge_cache_entries(
     preserve_path: Path | str | None = None,
     manifest_only: bool = False,
     fixture_output_root: Path | str | None = None,
+    fixture_chroms: list[str] | None = None,
 ) -> None:
     """Merge per-tag cache metadata for one germline config into manifest.json."""
     project_root = Path(project_root)
@@ -255,6 +276,7 @@ def merge_cache_entries(
             project_root=project_root,
             sweep_bed_root=sweep_bed_root,
             fixture_output_root=fixture_output_root,
+            fixture_chroms=fixture_chroms,
         )
 
     manifest, preserved_entries = _load_manifest(manifest_path, preserve_path)
@@ -439,6 +461,11 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="fixture_output_root",
         help="Directory containing existing fixture outputs for --manifest-only.",
     )
+    cache_entries.add_argument(
+        "--fixture-chroms",
+        dest="fixture_chroms_csv",
+        help="Comma-separated chrom stems to validate under --fixture-output-root for scoped staging.",
+    )
 
     cache_entries_somatic = subparsers.add_parser(
         "cache-entries-somatic",
@@ -496,6 +523,10 @@ def main(argv=None) -> None:
         preserve_path = args.preserve_path or os.environ.get("PRESERVE_PATH")
         manifest_only = args.manifest_only or _env_flag_is_truthy(os.environ.get("MANIFEST_ONLY"))
         fixture_output_root = args.fixture_output_root or os.environ.get("FIXTURE_OUTPUT_ROOT")
+        fixture_chroms_csv = args.fixture_chroms_csv or os.environ.get("FIXTURE_CHROMS")
+        fixture_chroms = None
+        if fixture_chroms_csv:
+            fixture_chroms = [chrom for chrom in fixture_chroms_csv.split(",") if chrom]
 
         if config_name is None:
             parser.error("--config is required when CONFIG_NAME is unset")
@@ -514,6 +545,7 @@ def main(argv=None) -> None:
             preserve_path=preserve_path,
             manifest_only=manifest_only,
             fixture_output_root=fixture_output_root,
+            fixture_chroms=fixture_chroms,
         )
         return
 

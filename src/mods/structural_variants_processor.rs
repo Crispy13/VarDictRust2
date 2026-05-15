@@ -659,7 +659,10 @@ pub fn mark_dup_sv(
 /// Java: StructuralVariantsProcessor.java#L975-L991
 ///
 /// Filter soft-clip entries to current segment and sort by count descending.
-/// Java sort is stable on count only, no position tiebreaker.
+/// Java sort is stable on count only, but the source map iteration order is
+/// position-sensitive in practice for parity fixtures. Preserve count priority
+/// and break ties by ascending position so equal-support candidates are chosen
+/// deterministically.
 pub fn fill_and_sort_tmp_sv(
     entries: &HashMap<i32, Sclip>,
     curseg: &CurrentSegment,
@@ -682,8 +685,9 @@ pub fn fill_and_sort_tmp_sv(
     }
 
     // Java: StructuralVariantsProcessor.java#L986-L987
-    // Sort by count descending (stable sort, no tiebreaker — matches Java behavior)
-    tmp.sort_by(|a, b| b.count.cmp(&a.count));
+    // Keep equal-count candidates in ascending position order so the winning
+    // soft-clip is deterministic across Rust HashMap iteration.
+    tmp.sort_by(|a, b| b.count.cmp(&a.count).then(a.position.cmp(&b.position)));
 
     tmp
 }
@@ -1115,7 +1119,8 @@ pub fn find_del(
             );
 
             // Java: StructuralVariantsProcessor.java#L244 — iterate softClips3End
-            let sc3_keys: Vec<i32> = soft_clips_3_end.keys().cloned().collect();
+            let mut sc3_keys: Vec<i32> = soft_clips_3_end.keys().cloned().collect();
+            sc3_keys.sort();
             let mut found = false;
             for &i in &sc3_keys {
                 if found {
@@ -1387,7 +1392,8 @@ pub fn find_del(
                 region,
             );
 
-            let sc5_keys: Vec<i32> = soft_clips_5_end.keys().cloned().collect();
+            let mut sc5_keys: Vec<i32> = soft_clips_5_end.keys().cloned().collect();
+            sc5_keys.sort();
             let mut found = false;
             for &i in &sc5_keys {
                 if found {
@@ -3904,6 +3910,27 @@ mod tests {
         // Sorted by count descending
         assert_eq!(result[0].count, 8);
         assert_eq!(result[1].count, 5);
+    }
+
+    #[test]
+    fn test_fill_and_sort_tmp_sv_tiebreaks_by_position() {
+        let curseg = CurrentSegment::new("chr1", 100, 200);
+        let mut entries = HashMap::new();
+
+        let mut later = Sclip::default();
+        later.base.vars_count = 7;
+        entries.insert(180, later);
+
+        let mut earlier = Sclip::default();
+        earlier.base.vars_count = 7;
+        entries.insert(120, earlier);
+
+        let result = fill_and_sort_tmp_sv(&entries, &curseg);
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].count, 7);
+        assert_eq!(result[0].position, 120);
+        assert_eq!(result[1].position, 180);
     }
 
     #[test]

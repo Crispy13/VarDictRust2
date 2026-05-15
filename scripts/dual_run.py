@@ -505,6 +505,31 @@ def build_module_env(modules: list, output_dir: Path, side: str) -> dict:
     return env
 
 
+def snapshot_globs(mod_name: str, region_chrom_start_end: tuple[str, str, str] | None) -> list[str]:
+    labels = list(dict.fromkeys([mod_name.lower(), mod_name.upper()]))
+    if not region_chrom_start_end:
+        return ["{}*.jsonl".format(label) for label in labels]
+
+    chrom, start, end = region_chrom_start_end
+    coordinate_labels = [
+        "{}_{}-{}".format(chrom, start, end),
+        "{}_{}_{}".format(chrom, start, end),
+    ]
+    return ["{}_{}.jsonl".format(label, coordinate) for label in labels for coordinate in coordinate_labels]
+
+
+def find_snapshot_files(directory: Path, mod_name: str, region_chrom_start_end: tuple[str, str, str] | None) -> list[Path]:
+    files = []
+    seen = set()
+    for pattern in snapshot_globs(mod_name, region_chrom_start_end):
+        for path in sorted(directory.glob(pattern)):
+            if path in seen:
+                continue
+            seen.add(path)
+            files.append(path)
+    return files
+
+
 def diff_module_outputs(output_dir: Path, modules: list, region: str) -> list:
     results = []
 
@@ -520,19 +545,8 @@ def diff_module_outputs(output_dir: Path, modules: list, region: str) -> list:
 
         java_dir = output_dir / "module_snapshots" / "java" / mod_name
         rust_dir = output_dir / "module_snapshots" / "rust" / mod_name
-        if region_chrom_start_end:
-            chrom, start, end = region_chrom_start_end
-            # Rust emits UPPERCASE module names with dash-separated end coordinates
-            # (src/parity/snapshot.rs). Java emits lowercase module names with
-            # underscore-separated coordinates (JsonlWriter.java sanitizes "-" -> "_").
-            rust_pattern = "{}_{}_{}-{}.jsonl".format(mod_name.upper(), chrom, start, end)
-            java_pattern = "{}_{}_{}_{}.jsonl".format(mod_name.lower(), chrom, start, end)
-        else:
-            rust_pattern = "{}*.jsonl".format(mod_name.upper())
-            java_pattern = "{}*.jsonl".format(mod_name.lower())
-
-        java_files = sorted(java_dir.glob(java_pattern))
-        rust_files = sorted(rust_dir.glob(rust_pattern))
+        java_files = find_snapshot_files(java_dir, mod_name, region_chrom_start_end)
+        rust_files = find_snapshot_files(rust_dir, mod_name, region_chrom_start_end)
 
         if not java_files and not rust_files:
             results.append(
