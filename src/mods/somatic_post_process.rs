@@ -30,7 +30,8 @@ pub fn somatic_post_process(
 ) {
     let region = scope_from_bam1.region.clone();
     let splice = (*scope_from_bam1.splice).clone();
-    let conf = GlobalReadOnlyScope::instance().conf;
+    let scope_instance = GlobalReadOnlyScope::instance();
+    let conf = &scope_instance.conf;
     let out = scope_from_bam1.out.clone();
     let mut variations_from_bam1 = scope_from_bam1.data.aligned_variants;
     let mut variations_from_bam2 = scope_from_bam2.data.aligned_variants;

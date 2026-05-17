@@ -204,7 +204,7 @@ pub trait ParallelMode: AbstractMode + Sync {
             .build()
             .expect("failed to build simple-mode rayon pool");
         let (outer_tx, outer_rx) = bounded::<Receiver<Vec<u8>>>(threads.max(10));
-        let printer = GlobalReadOnlyScope::instance().variant_printer;
+        let printer = GlobalReadOnlyScope::instance().variant_printer.clone();
 
         let consumer = std::thread::spawn(move || {
             while let Ok(inner_rx) = outer_rx.recv() {
@@ -236,7 +236,7 @@ pub trait ParallelMode: AbstractMode + Sync {
     }
 
     fn not_parallel(&self) {
-        let printer = GlobalReadOnlyScope::instance().variant_printer;
+        let printer = GlobalReadOnlyScope::instance().variant_printer.clone();
         for region in self.regions() {
             let mut buffer = Vec::new();
             self.process_region_to_buffer(region, &mut buffer);
@@ -405,7 +405,8 @@ impl SomaticMode {
     pub fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>) {
         let buffer = Arc::new(Mutex::new(String::new()));
         let printer = VariantPrinter::Buffer(buffer.clone());
-        let bam_names = GlobalReadOnlyScope::instance()
+        let instance = GlobalReadOnlyScope::instance();
+        let bam_names = instance
             .conf
             .bam
             .as_ref()
@@ -543,8 +544,9 @@ impl AmpliconMode {
     }
 
     pub fn not_parallel(&self) {
-        let printer = GlobalReadOnlyScope::instance().variant_printer;
-        let bam1 = GlobalReadOnlyScope::instance()
+        let instance = GlobalReadOnlyScope::instance();
+        let printer = instance.variant_printer.clone();
+        let bam1 = instance
             .conf
             .bam
             .as_ref()

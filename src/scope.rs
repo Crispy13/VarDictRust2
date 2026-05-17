@@ -144,12 +144,12 @@ pub struct GlobalReadOnlyScope {
     pub adaptor_reverse: HashMap<String, i32>,
 }
 
-static GLOBAL_READ_ONLY_SCOPE: Lazy<RwLock<Option<GlobalReadOnlyScope>>> =
+static GLOBAL_READ_ONLY_SCOPE: Lazy<RwLock<Option<Arc<GlobalReadOnlyScope>>>> =
     Lazy::new(|| RwLock::new(None));
 static GLOBAL_MODE: Lazy<RwLock<Option<SharedMode>>> = Lazy::new(|| RwLock::new(None));
 
 thread_local! {
-    static LOCAL_GROS: RefCell<Option<GlobalReadOnlyScope>> = RefCell::new(None);
+    static LOCAL_GROS: RefCell<Option<Arc<GlobalReadOnlyScope>>> = RefCell::new(None);
     static LOCAL_MODE: RefCell<Option<SharedMode>> = RefCell::new(None);
 }
 
@@ -163,11 +163,11 @@ const _: fn() = {
     check
 };
 
-fn read_local_scope() -> Option<GlobalReadOnlyScope> {
+fn read_local_scope() -> Option<Arc<GlobalReadOnlyScope>> {
     LOCAL_GROS.with(|scope| scope.borrow().clone())
 }
 
-fn write_local_scope(scope: Option<GlobalReadOnlyScope>) {
+fn write_local_scope(scope: Option<Arc<GlobalReadOnlyScope>>) {
     LOCAL_GROS.with(|local_scope| *local_scope.borrow_mut() = scope);
 }
 
@@ -179,14 +179,14 @@ fn write_local_mode(mode: Option<SharedMode>) {
     LOCAL_MODE.with(|local_mode| *local_mode.borrow_mut() = mode);
 }
 
-fn read_global_scope() -> Option<GlobalReadOnlyScope> {
+fn read_global_scope() -> Option<Arc<GlobalReadOnlyScope>> {
     match GLOBAL_READ_ONLY_SCOPE.read() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
     }
 }
 
-fn write_global_scope(scope: Option<GlobalReadOnlyScope>) {
+fn write_global_scope(scope: Option<Arc<GlobalReadOnlyScope>>) {
     match GLOBAL_READ_ONLY_SCOPE.write() {
         Ok(mut guard) => *guard = scope,
         Err(poisoned) => *poisoned.into_inner() = scope,
@@ -235,17 +235,17 @@ impl GlobalReadOnlyScope {
         }
     }
 
-    pub fn try_instance() -> Option<GlobalReadOnlyScope> {
+    pub fn try_instance() -> Option<Arc<GlobalReadOnlyScope>> {
         read_local_scope().or_else(read_global_scope)
     }
 
-    pub fn try_thread_local_instance() -> Option<GlobalReadOnlyScope> {
+    pub fn try_thread_local_instance() -> Option<Arc<GlobalReadOnlyScope>> {
         read_local_scope()
     }
 
     /// Ported from: GlobalReadOnlyScope.instance()
     /// Java source: GlobalReadOnlyScope.java:L15-L17
-    pub fn instance() -> GlobalReadOnlyScope {
+    pub fn instance() -> Arc<GlobalReadOnlyScope> {
         Self::try_instance().expect("GlobalReadOnlyScope was not initialized.")
     }
 
@@ -265,7 +265,7 @@ impl GlobalReadOnlyScope {
             panic!("GlobalReadOnlyScope was already initialized. Must be initialized only once.");
         }
 
-        write_global_scope(Some(Self::new(
+        write_global_scope(Some(Arc::new(Self::new(
             conf,
             chr_lengths,
             sample,
@@ -273,7 +273,7 @@ impl GlobalReadOnlyScope {
             amplicon_based_calling,
             adaptor_forward,
             adaptor_reverse,
-        )));
+        ))));
     }
 
     /// Installs a thread-local scope override for the current thread only.
@@ -293,7 +293,7 @@ impl GlobalReadOnlyScope {
             );
         }
 
-        write_local_scope(Some(Self::new(
+        write_local_scope(Some(Arc::new(Self::new(
             conf,
             chr_lengths,
             sample,
@@ -301,7 +301,7 @@ impl GlobalReadOnlyScope {
             amplicon_based_calling,
             adaptor_forward,
             adaptor_reverse,
-        )));
+        ))));
     }
 
     /// Ported from: GlobalReadOnlyScope.getMode()
@@ -336,8 +336,10 @@ impl GlobalReadOnlyScope {
     pub fn set_variant_printer(printer: VariantPrinter) {
         let updated_local_scope = LOCAL_GROS.with(|local_scope| {
             let mut local_scope = local_scope.borrow_mut();
-            if let Some(scope) = local_scope.as_mut() {
-                scope.variant_printer = printer.clone();
+            if let Some(scope) = local_scope.as_ref() {
+                let mut updated = (**scope).clone();
+                updated.variant_printer = printer.clone();
+                *local_scope = Some(Arc::new(updated));
                 true
             } else {
                 false
@@ -353,14 +355,18 @@ impl GlobalReadOnlyScope {
                 let scope = guard
                     .as_mut()
                     .expect("GlobalReadOnlyScope must be initialized before setting printer");
-                scope.variant_printer = printer;
+                let mut updated = (**scope).clone();
+                updated.variant_printer = printer;
+                *scope = Arc::new(updated);
             }
             Err(poisoned) => {
                 let mut guard = poisoned.into_inner();
                 let scope = guard
                     .as_mut()
                     .expect("GlobalReadOnlyScope must be initialized before setting printer");
-                scope.variant_printer = printer;
+                let mut updated = (**scope).clone();
+                updated.variant_printer = printer;
+                *scope = Arc::new(updated);
             }
         }
     }
@@ -414,7 +420,7 @@ mod tests {
     }
 
     fn install_global_scope(sample: &str) {
-        write_global_scope(Some(GlobalReadOnlyScope::new(
+        write_global_scope(Some(Arc::new(GlobalReadOnlyScope::new(
             Configuration::default(),
             HashMap::new(),
             sample,
@@ -422,7 +428,7 @@ mod tests {
             None,
             HashMap::new(),
             HashMap::new(),
-        )));
+        ))));
         write_global_mode(None);
     }
 
@@ -605,7 +611,7 @@ mod tests {
         let child = std::thread::spawn(|| {
             let scope = GlobalReadOnlyScope::instance();
             let mode = GlobalReadOnlyScope::get_mode().expect("child should see global mode");
-            (scope.sample, mode)
+            (scope.sample.clone(), mode)
         });
 
         let (child_sample, child_mode) = child.join().expect("child thread should finish");

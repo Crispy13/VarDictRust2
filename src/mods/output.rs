@@ -81,7 +81,7 @@ impl SimpleOutputVariant {
     pub fn new(variant: Option<&Variant>, region: &Region, sv: &str, position: i32) -> Self {
         let instance = GlobalReadOnlyScope::instance();
         let mut output = Self {
-            sample: instance.sample,
+            sample: instance.sample.clone(),
             gene: region.gene.clone(),
             chr: region.chr.clone(),
             start_position: position,
@@ -335,7 +335,7 @@ impl SomaticOutputVariant {
     ) -> Self {
         let instance = GlobalReadOnlyScope::instance();
         let mut output = Self {
-            sample: instance.sample,
+            sample: instance.sample.clone(),
             gene: region.gene.clone(),
             chr: region.chr.clone(),
             region: format!("{}:{}-{}", region.chr, region.start, region.end),
@@ -683,7 +683,7 @@ impl AmpliconOutputVariant {
     ) -> Self {
         let instance = GlobalReadOnlyScope::instance();
         let mut output = Self {
-            sample: instance.sample,
+            sample: instance.sample.clone(),
             gene: region.gene.clone(),
             chr: region.chr.clone(),
             start_position: position,

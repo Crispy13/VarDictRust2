@@ -6,7 +6,8 @@ use std::panic;
 /// Ported from: SimplePostProcessModule.accept()
 /// Java source: SimplePostProcessModule.java:L33-L107
 pub fn simple_post_process(scope: Scope<AlignedVarsData>) {
-    let conf = GlobalReadOnlyScope::instance().conf;
+    let scope_instance = GlobalReadOnlyScope::instance();
+    let conf = &scope_instance.conf;
     let Scope {
         region,
         splice,

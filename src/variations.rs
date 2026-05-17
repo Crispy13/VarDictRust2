@@ -79,9 +79,9 @@ pub enum VarMaybeArg<'a> {
 fn current_scope() -> VariationUtilsScope {
     if let Some(scope) = GlobalReadOnlyScope::try_thread_local_instance() {
         return VariationUtilsScope {
-            conf: scope.conf,
-            adaptor_forward: scope.adaptor_forward,
-            adaptor_reverse: scope.adaptor_reverse,
+            conf: scope.conf.clone(),
+            adaptor_forward: scope.adaptor_forward.clone(),
+            adaptor_reverse: scope.adaptor_reverse.clone(),
         };
     }
 

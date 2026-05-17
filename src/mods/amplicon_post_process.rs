@@ -17,7 +17,8 @@ pub fn amplicon_post_process(
     splice: &HashSet<String>,
     variant_printer: &VariantPrinter,
 ) {
-    let conf = GlobalReadOnlyScope::instance().conf;
+    let scope_instance = GlobalReadOnlyScope::instance();
+    let conf = &scope_instance.conf;
     let mut positions: Vec<i32> = amplicons_on_positions.keys().copied().collect();
     positions.sort();
 
