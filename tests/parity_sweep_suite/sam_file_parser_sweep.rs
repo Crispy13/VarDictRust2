@@ -117,7 +117,8 @@ fn parity_sam_file_parser_sweep() {
     let (first_bam, first_ref) = super::common::bam_tag_lookup(&archives[0].0);
     let fai_path = format!("{first_ref}.fai");
     let chr_lengths = super::common::load_chr_lengths(&fai_path);
-    let _guard = super::common::init_test_scope_with_bam_global(first_bam, first_ref, chr_lengths.clone());
+    let _guard =
+        super::common::init_test_scope_with_bam_global(first_bam, first_ref, chr_lengths.clone());
 
     let (sender, receiver) = bounded::<Tile>(10_000);
     let pool = rayon::ThreadPoolBuilder::new()

@@ -243,10 +243,41 @@ impl GlobalReadOnlyScope {
         read_local_scope()
     }
 
+    pub fn with_thread_local_instance<R>(f: impl FnOnce(Option<&GlobalReadOnlyScope>) -> R) -> R {
+        LOCAL_GROS.with(|scope| {
+            let scope = scope.borrow();
+            f(scope.as_deref())
+        })
+    }
+
     /// Ported from: GlobalReadOnlyScope.instance()
     /// Java source: GlobalReadOnlyScope.java:L15-L17
     pub fn instance() -> Arc<GlobalReadOnlyScope> {
         Self::try_instance().expect("GlobalReadOnlyScope was not initialized.")
+    }
+
+    /// Borrow the active scope without cloning large read-only maps.
+    pub fn with_instance<R>(f: impl FnOnce(&GlobalReadOnlyScope) -> R) -> R {
+        if LOCAL_GROS.with(|scope| scope.borrow().is_some()) {
+            return LOCAL_GROS.with(|scope| {
+                let scope = scope.borrow();
+                f(scope
+                    .as_ref()
+                    .expect("GlobalReadOnlyScope was not initialized."))
+            });
+        }
+
+        match GLOBAL_READ_ONLY_SCOPE.read() {
+            Ok(guard) => f(guard
+                .as_ref()
+                .expect("GlobalReadOnlyScope was not initialized.")),
+            Err(poisoned) => {
+                let guard = poisoned.into_inner();
+                f(guard
+                    .as_ref()
+                    .expect("GlobalReadOnlyScope was not initialized."))
+            }
+        }
     }
 
     /// Ported from: GlobalReadOnlyScope.init(...)
@@ -555,7 +586,10 @@ mod tests {
         let local_printer = VariantPrinter::Buffer(output);
         GlobalReadOnlyScope::set_variant_printer(local_printer.clone());
 
-        assert_eq!(GlobalReadOnlyScope::instance().variant_printer, local_printer);
+        assert_eq!(
+            GlobalReadOnlyScope::instance().variant_printer,
+            local_printer
+        );
     }
 
     #[test]
@@ -593,7 +627,10 @@ mod tests {
         assert!(Arc::ptr_eq(&active_mode, &global_mode));
 
         GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Err);
-        assert_eq!(GlobalReadOnlyScope::instance().variant_printer, VariantPrinter::Err);
+        assert_eq!(
+            GlobalReadOnlyScope::instance().variant_printer,
+            VariantPrinter::Err
+        );
     }
 
     #[test]
@@ -617,7 +654,8 @@ mod tests {
         let (child_sample, child_mode) = child.join().expect("child thread should finish");
 
         assert_eq!(GlobalReadOnlyScope::instance().sample, "local");
-        let parent_mode = GlobalReadOnlyScope::get_mode().expect("parent should still see local mode");
+        let parent_mode =
+            GlobalReadOnlyScope::get_mode().expect("parent should still see local mode");
         assert!(Arc::ptr_eq(&parent_mode, &local_mode));
         assert_eq!(child_sample, "global");
         assert!(Arc::ptr_eq(&child_mode, &global_mode));

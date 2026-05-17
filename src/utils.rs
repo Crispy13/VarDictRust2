@@ -628,7 +628,12 @@ mod tests {
         }
 
         fn arb_negative_f64() -> impl Strategy<Value = f64> {
-            prop_oneof![Just(f64::MIN), Just(-f64::MIN_POSITIVE), Just(-5e-324_f64), (-1e15_f64..-f64::MIN_POSITIVE)]
+            prop_oneof![
+                Just(f64::MIN),
+                Just(-f64::MIN_POSITIVE),
+                Just(-5e-324_f64),
+                (-1e15_f64..-f64::MIN_POSITIVE)
+            ]
         }
 
         fn arb_pattern() -> impl Strategy<Value = &'static str> {

@@ -201,13 +201,31 @@ impl RecordPreprocessor {
     /// Public iterator API — returns next filtered SAMRecord across all BAM files.
     /// Returns `None` when all BAMs are exhausted.
     pub fn next_record(&mut self) -> Option<bam::Record> {
-        let record = self.next_on_current_reader();
-        if record.is_some() {
-            return record;
+        if self.advance_on_current_reader() {
+            return Some(self.current_record.clone());
         }
         // Current BAM exhausted — try next BAM
         self.next_reader();
-        self.next_on_current_reader()
+        if self.advance_on_current_reader() {
+            Some(self.current_record.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Calls `f` for each filtered record without cloning the reusable BAM record buffer.
+    pub fn for_each_record(&mut self, mut f: impl FnMut(&bam::Record)) {
+        loop {
+            if self.advance_on_current_reader() {
+                f(&self.current_record);
+                continue;
+            }
+            self.next_reader();
+            if !self.advance_on_current_reader() {
+                break;
+            }
+            f(&self.current_record);
+        }
     }
 
     // Ported from: RecordPreprocessor.java:L84-L97
@@ -269,8 +287,10 @@ impl RecordPreprocessor {
     // Ported from: RecordPreprocessor.java:L103-L115
 
     /// Read records from current reader until one passes the filter cascade, or EOF.
-    fn next_on_current_reader(&mut self) -> Option<bam::Record> {
-        self.current_reader.as_ref()?;
+    fn advance_on_current_reader(&mut self) -> bool {
+        if self.current_reader.is_none() {
+            return false;
+        }
 
         // Reuse the record buffer for efficiency
         loop {
@@ -279,7 +299,7 @@ impl RecordPreprocessor {
             match reader.read(&mut self.current_record) {
                 Some(Ok(())) => {}
                 Some(Err(_)) => continue, // skip malformed records (LENIENT behavior)
-                None => return None,      // EOF
+                None => return false,     // EOF
             }
 
             // Layer 1: SamView.read() flag filter
@@ -290,8 +310,7 @@ impl RecordPreprocessor {
 
             // Layer 2: preprocessRecord() filter cascade
             if self.preprocess_record() {
-                // Clone the record to return — the buffer will be reused
-                return Some(self.current_record.clone());
+                return true;
             }
         }
     }
@@ -301,12 +320,18 @@ impl RecordPreprocessor {
     /// Core read filter cascade. References `self.current_record`.
     /// Returns `true` if the record should be processed by CigarParser.
     fn preprocess_record(&mut self) -> bool {
-        let instance = GlobalReadOnlyScope::instance();
-        let conf = &instance.conf;
+        let (downsampling, mapping_quality_filter, samfilter_is_nonzero, remove_duplicated_reads) =
+            GlobalReadOnlyScope::with_instance(|scope| {
+                (
+                    scope.conf.downsampling,
+                    scope.conf.mapping_quality,
+                    scope.conf.samfilter != "0",
+                    scope.conf.remove_duplicated_reads,
+                )
+            });
 
         // Step 1 — Downsampling (Java: L132-L134)
-        if conf.is_downsampling() {
-            let threshold = conf.downsampling.unwrap();
+        if let Some(threshold) = downsampling {
             if rand::random::<f64>() <= threshold {
                 return false;
             }
@@ -319,15 +344,17 @@ impl RecordPreprocessor {
         let mapping_quality = self.current_record.mapq();
 
         // Step 3 — Mapping quality filter (Java: L139-L141)
-        if conf.has_mapping_quality() && (mapping_quality as i32) < conf.mapping_quality.unwrap() {
-            return false;
+        if let Some(min_mapping_quality) = mapping_quality_filter {
+            if (mapping_quality as i32) < min_mapping_quality {
+                return false;
+            }
         }
 
         // Step 4 — Secondary alignment filter (Java: L144-L146)
         // Java: record.isSecondaryAlignment() = (flags & 0x100) != 0
         // Java: !instance().conf.samfilter.equals("0") — STRING equality, not numeric
         let is_secondary = (self.current_record.flags() & 0x100) != 0;
-        if is_secondary && conf.samfilter != "0" {
+        if is_secondary && samfilter_is_nonzero {
             return false;
         }
 
@@ -350,7 +377,7 @@ impl RecordPreprocessor {
         };
 
         // Step 8 — Duplicate detection (Java: L156-L181)
-        if conf.remove_duplicated_reads {
+        if remove_duplicated_reads {
             // 1-based alignment start (Java: getAlignmentStart() is 1-based)
             let alignment_start = self.current_record.pos() as i32 + 1;
             // 1-based mate alignment start (Java: getMateAlignmentStart() is 1-based)

@@ -97,7 +97,10 @@ pub fn run_pair(tag: &str) {
         if !java_path.is_file() {
             handle_missing_cache(
                 tag,
-                &format!("Missing Java TSV cache for {tag}/{chrom} at {}", java_path.display()),
+                &format!(
+                    "Missing Java TSV cache for {tag}/{chrom} at {}",
+                    java_path.display()
+                ),
             );
             return;
         }
@@ -107,8 +110,9 @@ pub fn run_pair(tag: &str) {
     let mut failures = Vec::new();
 
     for chrom in chroms {
-        let tiles = load_tiles_for_chrom(&bed_root.path, tag, &chrom)
-            .unwrap_or_else(|error| panic!("Failed to load sweep BED tiles for {tag}/{chrom}: {error}"));
+        let tiles = load_tiles_for_chrom(&bed_root.path, tag, &chrom).unwrap_or_else(|error| {
+            panic!("Failed to load sweep BED tiles for {tag}/{chrom}: {error}")
+        });
 
         for (ordinal, window) in tiles.chunks(super::r2_common::CHUNK_SIZE).enumerate() {
             if let Some((index, total)) = shard {
@@ -117,9 +121,10 @@ pub fn run_pair(tag: &str) {
                 }
             }
 
-            let java = load_java_tsv_chunk_somatic(tag, &chrom, &config, window).unwrap_or_else(|error| {
-                panic!("Failed to load cached Java TSV chunk for {tag}/{chrom}: {error}")
-            });
+            let java =
+                load_java_tsv_chunk_somatic(tag, &chrom, &config, window).unwrap_or_else(|error| {
+                    panic!("Failed to load cached Java TSV chunk for {tag}/{chrom}: {error}")
+                });
             let rust = run_rust_chunk_somatic(
                 &tumor_path,
                 &normal_path,
@@ -143,8 +148,8 @@ pub fn run_pair(tag: &str) {
 }
 
 fn check_somatic_manifest(config: &str, tag: &str) -> Result<BedRootSelection, String> {
-    let manifest_path = Path::new("tmp/sweep_fixtures/manifest.json");
-    let manifest = fs::read_to_string(manifest_path)
+    let manifest_path = super::r2_common::sweep_fixture_root().join("manifest.json");
+    let manifest = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("Failed to read {}: {error}", manifest_path.display()))?;
     let manifest_json: Value = serde_json::from_str(&manifest)
         .map_err(|error| format!("Failed to parse {}: {error}", manifest_path.display()))?;
@@ -184,7 +189,11 @@ fn check_somatic_manifest(config: &str, tag: &str) -> Result<BedRootSelection, S
             .map(Value::String)
             .map_err(|error| error.to_string())?,
     )?;
-    super::r2_common::compare_manifest_field(cache_entry, "bam_stat", &compute_bam_stat(tag).map_err(|error| error.to_string())?)?;
+    super::r2_common::compare_manifest_field(
+        cache_entry,
+        "bam_stat",
+        &compute_bam_stat(tag).map_err(|error| error.to_string())?,
+    )?;
     super::r2_common::compare_manifest_field(
         cache_entry,
         "reference_sha256",
@@ -224,7 +233,9 @@ fn config_path_segment(config: &str) -> PathBuf {
 }
 
 fn discover_chroms(tag: &str, config: &str) -> io::Result<Vec<String>> {
-    let root = Path::new("tmp/sweep_fixtures/output").join(config_path_segment(config));
+    let root = super::r2_common::sweep_fixture_root()
+        .join("output")
+        .join(config_path_segment(config));
     let mut chroms = Vec::new();
 
     for entry in fs::read_dir(&root)? {
@@ -237,14 +248,21 @@ fn discover_chroms(tag: &str, config: &str) -> io::Result<Vec<String>> {
         let chrom = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
-            .ok_or_else(|| super::r2_common::invalid_data(format!("Invalid chrom dir name: {}", path.display())))?;
+            .ok_or_else(|| {
+                super::r2_common::invalid_data(format!(
+                    "Invalid chrom dir name: {}",
+                    path.display()
+                ))
+            })?;
         let tsv_path = path.join(format!("{tag}_{chrom}.tsv.zst"));
         if tsv_path.is_file() {
             chroms.push(chrom);
         }
     }
 
-    chroms.sort_by(|left, right| super::r2_common::chrom_sort_key(left).cmp(&super::r2_common::chrom_sort_key(right)));
+    chroms.sort_by(|left, right| {
+        super::r2_common::chrom_sort_key(left).cmp(&super::r2_common::chrom_sort_key(right))
+    });
     Ok(chroms)
 }
 
@@ -270,10 +288,16 @@ fn load_tiles_for_chrom(
             )));
         }
         let start = fields[1].parse::<u32>().map_err(|error| {
-            super::r2_common::invalid_data(format!("Invalid BED start in {}: {error}", bed_path.display()))
+            super::r2_common::invalid_data(format!(
+                "Invalid BED start in {}: {error}",
+                bed_path.display()
+            ))
         })?;
         let end = fields[2].parse::<u32>().map_err(|error| {
-            super::r2_common::invalid_data(format!("Invalid BED end in {}: {error}", bed_path.display()))
+            super::r2_common::invalid_data(format!(
+                "Invalid BED end in {}: {error}",
+                bed_path.display()
+            ))
         })?;
 
         tiles.push(super::r2_common::TileKey {
@@ -287,7 +311,8 @@ fn load_tiles_for_chrom(
 }
 
 fn java_tsv_path(tag: &str, chrom: &str, config: &str) -> PathBuf {
-    Path::new("tmp/sweep_fixtures/output")
+    super::r2_common::sweep_fixture_root()
+        .join("output")
         .join(config_path_segment(config))
         .join(chrom)
         .join(format!("{tag}_{chrom}.tsv.zst"))
@@ -315,7 +340,9 @@ fn load_java_tsv_chunk_somatic(
         if region_index.is_none() {
             if let Some(index) = detect_region_column_somatic(&columns) {
                 region_index = Some(index);
-                if columns[index].eq_ignore_ascii_case("Region") || columns[index].eq_ignore_ascii_case("Seg") {
+                if columns[index].eq_ignore_ascii_case("Region")
+                    || columns[index].eq_ignore_ascii_case("Seg")
+                {
                     continue;
                 }
             } else {
@@ -439,12 +466,23 @@ fn build_regions(tiles: &[super::r2_common::TileKey]) -> io::Result<Vec<Region>>
         .iter()
         .map(|tile| {
             let start = i32::try_from(tile.start).map_err(|_| {
-                super::r2_common::invalid_data(format!("Tile start does not fit in i32: {}", tile.start))
+                super::r2_common::invalid_data(format!(
+                    "Tile start does not fit in i32: {}",
+                    tile.start
+                ))
             })?;
             let end = i32::try_from(tile.end).map_err(|_| {
-                super::r2_common::invalid_data(format!("Tile end does not fit in i32: {}", tile.end))
+                super::r2_common::invalid_data(format!(
+                    "Tile end does not fit in i32: {}",
+                    tile.end
+                ))
             })?;
-            Ok(Region::new(tile.chrom.clone(), start, end, tile.chrom.clone()))
+            Ok(Region::new(
+                tile.chrom.clone(),
+                start,
+                end,
+                tile.chrom.clone(),
+            ))
         })
         .collect()
 }
@@ -717,7 +755,11 @@ fn format_report(failures: &[TileMismatch]) -> String {
         super::r2_common::MAX_FAILURES,
     );
 
-    for (index, failure) in failures.iter().take(super::r2_common::MAX_FAILURES).enumerate() {
+    for (index, failure) in failures
+        .iter()
+        .take(super::r2_common::MAX_FAILURES)
+        .enumerate()
+    {
         report.push_str(&format!(
             "\n\n{}. config={} tile={}:{}-{}\nJava rows:\n{}\nRust rows:\n{}",
             index + 1,

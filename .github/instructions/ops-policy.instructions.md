@@ -28,5 +28,5 @@ applyTo: '**'
 - Audit: `.github/workflows/ignore-audit.yml` runs nightly at 03:30 UTC. Flags any passing ignored test not in the allowlist.
 - When a previously-failing ignored test starts passing, either remove `#[ignore]` or add to allowlist with justification.
 
-## Standby finish of terminal tasks
-- Run terminal task as background or wait for it to finish. Do not finish your task until terminal commands have completed, even if it will be running for very long time.
+## Terminal Usage
+- never emit exit at the end of a sync terminal command. It causes agents to wait forever even after the command completes.

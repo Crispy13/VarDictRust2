@@ -61,41 +61,49 @@ fn parity_parallel_determinism_t1_14_th8() {
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_default_th1() {
     assert_somatic_parallel_matches_serial("default", 1);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_default_th2() {
     assert_somatic_parallel_matches_serial("default", 2);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_default_th4() {
     assert_somatic_parallel_matches_serial("default", 4);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_default_th8() {
     assert_somatic_parallel_matches_serial("default", 8);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_t1_14_th1() {
     assert_somatic_parallel_matches_serial("T1-14", 1);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_t1_14_th2() {
     assert_somatic_parallel_matches_serial("T1-14", 2);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_t1_14_th4() {
     assert_somatic_parallel_matches_serial("T1-14", 4);
 }
 
 #[test]
+#[ignore = "Nightly determinism gate: somatic mode uses process-global scope so requires --test-threads=1 (cannot run concurrently with other tests). Run via: cargo test --profile debug-release --test parity_parallel_determinism somatic -- --include-ignored --test-threads=1. Requires testdata BAMs already in repo (testdata/integrationtestcases/); no extra workflow needed."]
 fn parity_parallel_determinism_somatic_t1_14_th8() {
     assert_somatic_parallel_matches_serial("T1-14", 8);
 }
@@ -224,14 +232,20 @@ fn run_somatic_mode(
     thread_count: usize,
 ) -> Vec<u8> {
     let tumor = path_as_str(&fixture.tumor_bam_path, "tumor BAM", &fixture.region_label);
-    let normal = path_as_str(&fixture.normal_bam_path, "normal BAM", &fixture.region_label);
+    let normal = path_as_str(
+        &fixture.normal_bam_path,
+        "normal BAM",
+        &fixture.region_label,
+    );
     let reference = path_as_str(&fixture.reference_path, "reference", &fixture.region_label);
     let chr_lengths = load_chr_lengths_for_reference(reference);
     let mut config = match config_name {
         "default" => Configuration::default(),
         other => common::config_preset(other),
     };
-    config.bam = Some(vardict_rs::config::BamNames::new(format!("{tumor}|{normal}")));
+    config.bam = Some(vardict_rs::config::BamNames::new(format!(
+        "{tumor}|{normal}"
+    )));
     config.fasta = reference.to_string();
     config.threads = i32::try_from(thread_count)
         .unwrap_or_else(|error| panic!("invalid thread count {thread_count}: {error}"));
@@ -264,16 +278,18 @@ fn run_somatic_mode(
 
 fn load_chr_lengths_for_reference(reference: &str) -> HashMap<String, i32> {
     let fai_path = format!("{reference}.fai");
-    let content = std::fs::read_to_string(&fai_path).unwrap_or_else(|error| {
-        panic!("Failed to read FAI file {fai_path}: {error}")
-    });
+    let content = std::fs::read_to_string(&fai_path)
+        .unwrap_or_else(|error| panic!("Failed to read FAI file {fai_path}: {error}"));
 
     content
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
-            assert!(fields.len() >= 2, "Malformed FAI line in {fai_path}: {line}");
+            assert!(
+                fields.len() >= 2,
+                "Malformed FAI line in {fai_path}: {line}"
+            );
 
             let len = fields[1].parse::<i32>().unwrap_or_else(|error| {
                 panic!(
@@ -343,9 +359,9 @@ fn path_as_str<'a>(path: &'a Path, kind: &str, region: &str) -> &'a str {
 }
 
 fn run_command_with_timeout(mut command: Command, timeout: Duration, description: &str) -> Output {
-    let mut child = command.spawn().unwrap_or_else(|error| {
-        panic!("Failed to start {description}: {error}")
-    });
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|error| panic!("Failed to start {description}: {error}"));
 
     let stdout_handle = child.stdout.take().map(spawn_output_reader);
     let stderr_handle = child.stderr.take().map(spawn_output_reader);

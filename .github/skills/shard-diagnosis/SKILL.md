@@ -116,6 +116,12 @@ Use this field-to-module map to narrow the likely Rust owner:
 | SplitReads, SpanPairs (34-35) | StructuralVariantsProcessor | `structural_variants_processor.rs` |
 | Filter (36) | OutputVariant | `output_variant.rs` |
 
+### Modules without dual-run JSONL coverage
+
+`sam_file_parser` and `cigar_modifier` are not dual-run comparable yet. Stage 6 F3 verified that Java honors `VARDICT_PARITY_SAM_FILE_PARSER` and `VARDICT_PARITY_CIGAR_MODIFIER` and writes JSONL, but the Java payload schemas do not mirror the Rust snapshot payloads.
+
+Implication: when a shard points to one of these modules, do not claim a `dual_run.py` module diff. Use the relevant per-module parity or sweep suite plus manual raw-intermediate capture: set `VARDICT_PARITY_SAM_FILE_PARSER=./tmp/manual-sam-file-parser-rust` or `VARDICT_PARITY_CIGAR_MODIFIER=./tmp/manual-cigar-modifier-rust` for the Rust harness, mirror the same `VARDICT_PARITY_{MODULE}=./tmp/...` variable on the Java side, and account for the schema mismatch explicitly in the diagnosis.
+
 ### 6. Produce structured diagnosis report
 
 Output the result in this format:

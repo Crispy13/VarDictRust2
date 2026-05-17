@@ -47,9 +47,15 @@ Rows below mirror the Java cache structure so Java↔Rust correspondence can be 
 | Variations | `src/variations.rs` | MEDIUM | [variations.md](variations.md) | complete |
 | Utils | `src/utils.rs`<br>`src/patterns.rs` | LOW | [utils.md](utils.md) | not started |
 
+## Test and Workflow Harness Index
+
+| Harness | Primary Files | Risk | Cache File | Status |
+|---------|---------------|------|------------|--------|
+| Full-BAM E2E Sweep Harness | `tests/parity_e2e_sweep.rs`<br>`tests/parity_e2e_sweep/common.rs`<br>`scripts/e2e_sweep_gate.py` | MEDIUM | [parity_e2e_sweep_harness.md](parity_e2e_sweep_harness.md) | partial |
+
 ## Coverage Summary
 
-- Rust cache docs in this index: 4 module docs (variations.md, scope_data.md, sam_file_parser.md, tsv_output_layer.md), placeholder index for remaining modules
+- Rust cache docs in this index: 8 module docs (cigar_parser.md, sam_file_parser.md, scope_data.md, structural_variants_processor.md, to_vars_builder.md, tsv_output_layer.md, variation_realigner.md, variations.md) plus 1 harness doc (parity_e2e_sweep_harness.md), placeholder index for remaining modules
 - Expected workflow: create per-module docs as Review Gate updates Rust cache coverage after approved reviews
 
 ## Per-Module File Template

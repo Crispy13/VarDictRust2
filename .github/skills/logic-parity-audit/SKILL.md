@@ -120,6 +120,8 @@ What each dimension means:
 
 Use the parity rules as the tie-breaker when you inspect type and collection decisions. In particular, treat LinkedHashMap to HashMap substitutions, raw format! for parity-critical numeric text, and silent null coercions as audit findings even if the current sample inputs passed.
 
+Use "rubberduck-review" skill to review your result.
+
 ### Phase 4: Apply Conservative Auto-Fixes
 
 This phase exists to remove obvious mechanical noise from the report, not to rewrite logic. Only auto-fix when the Java intent is clear from local context and the patch is small, mechanical, and low-risk.

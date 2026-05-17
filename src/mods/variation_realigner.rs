@@ -7,20 +7,24 @@
 //! Cluster A: Pure utility functions with no inter-cluster dependencies.
 //! All other clusters call into these.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use rust_htslib::bam::{self, Read as BamRead};
 
 use crate::config::{EXTENSION, MINSVCDIST, SEED_1, SVFLANK, SVMAXLEN};
 use crate::data::{
-    BaseInsertion, Cluster, CurrentSegment, Match, Match35, RealignedVariationData, Sclip,
-    SortPositionSclip, Variation, VariationData, VariationMap, VariationMapSV,
+    BaseInsertion, Cluster, CurrentSegment, InitialData, Match35, RealignedVariationData, Region,
+    Sclip, SortPositionSclip, Variation, VariationData, VariationMap, VariationMapSV,
 };
 use crate::patterns::{
     AMP_ATGC, ATGSs_AMP_ATGSs_END, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_ANY, BEGIN_PLUS_ATGC,
     CARET_ATGC_END, CARET_ATGNC, DUP_NUM_ATGC, HASH_ATGC, MINUS_NUMBER_AMP_ATGCs_END,
     MINUS_NUMBER_ATGNC_SV_ATGNC_END, UP_NUMBER_END,
 };
-use crate::reference::Reference;
-use crate::scope::{GlobalReadOnlyScope, Scope};
+use crate::reference::{Reference, ReferenceResource};
+use crate::scope::{GlobalReadOnlyScope, Scope, VariantPrinter};
 use crate::utils::{char_at, substr, substr_with_len};
 use crate::variations::{
     adj_cnt, adj_cnt_with_reference, correct_cnt, find_conseq, get_dir, get_variation,
@@ -28,6 +32,11 @@ use crate::variations::{
     is_has_and_not_equals_base, is_not_equals, join_ref, join_ref_f64, join_ref_for_3_lgins,
     join_ref_for_5_lgins, sub_dir,
 };
+
+thread_local! {
+    static NO_PASSING_READERS: RefCell<HashMap<String, bam::IndexedReader>> =
+        RefCell::new(HashMap::new());
+}
 
 // ─── Supporting types ────────────────────────────────────────────────
 
@@ -390,6 +399,32 @@ pub fn adj_ref_factor(ref_var: Option<&mut Variation>, factor_f: f64) {
     ref_var.vars_count_on_reverse -= (factor_f * ref_var.vars_count_on_reverse as f64) as i32;
 
     correct_cnt(ref_var);
+}
+
+// PARITY: VariationRealigner.realignlgins30()/realignlgins() mutate the reference
+// Variation fetched from nonInsertionVariants in place in Java
+// (VariationRealigner.java:L1555-L1572, L1752-L1763, L1888-L1934).
+// Rust clones that entry to satisfy borrowing, so the decremented clone must be
+// written back after adj_cnt_with_reference().
+fn write_back_cloned_reference_variation(
+    non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    reference_sequences: &HashMap<i32, u8>,
+    position: i32,
+    reference_var: Option<Variation>,
+) {
+    let Some(reference_var) = reference_var else {
+        return;
+    };
+    let Some(reference_base) = reference_sequences.get(&position) else {
+        return;
+    };
+    let reference_key = (*reference_base as char).to_string();
+    if let Some(entry) = non_insertion_variants
+        .get_mut(&position)
+        .and_then(|m| m.entries.get_mut(&reference_key))
+    {
+        *entry = reference_var;
+    }
 }
 
 /// Ported from: VariationRealigner.addVarFactor()
@@ -1133,8 +1168,6 @@ pub fn findbp(
 /// Opens BAM file(s) via SamView, queries the region chr:start-end,
 /// and checks if any reads fully span the gap.
 pub fn no_passing_reads(chr: &str, start: i32, end: i32, bams: &[String]) -> bool {
-    use rust_htslib::bam::{self, Read as BamRead};
-
     // Java: VariationRealigner.java#L2272
     let mut cnt = 0i32;
     let mut midcnt = 0i32;
@@ -1142,60 +1175,71 @@ pub fn no_passing_reads(chr: &str, start: i32, end: i32, bams: &[String]) -> boo
     let dlenqr = format!("{}D", dlen);
     let instance = GlobalReadOnlyScope::instance();
 
-    // Java: VariationRealigner.java#L2276 — for (String bam : bams)
-    for bam_path in bams {
-        // Java: try (SamView reader = new SamView(bam, "0", region, ...))
-        let reader_result = bam::IndexedReader::from_path(bam_path);
-        let mut reader = match reader_result {
-            Ok(r) => r,
-            Err(_) => continue, // Java catches exceptions and continues
-        };
-        reader.set_threads(1).ok();
+    NO_PASSING_READERS.with(|cached_readers| {
+        let mut cached_readers = cached_readers.borrow_mut();
 
-        // Java: queryOverlapping(chr, start, end) — 1-based inclusive
-        let region_str = format!("{}:{}-{}", chr, start, end);
-        if reader.fetch(region_str.as_str()).is_err() {
-            continue;
-        }
+        // Java: VariationRealigner.java#L2276 — for (String bam : bams)
+        for bam_path in bams {
+            // Java creates a SamView for each call. Reusing the same IndexedReader preserves
+            // fetch/read semantics while avoiding repeated index reloads for identical BAMs.
+            let reader = match cached_readers.entry(bam_path.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let reader_result = bam::IndexedReader::from_path(bam_path);
+                    let mut reader = match reader_result {
+                        Ok(r) => r,
+                        Err(_) => continue, // Java catches exceptions and continues
+                    };
+                    reader.set_threads(1).ok();
+                    entry.insert(reader)
+                }
+            };
 
-        let mut record = bam::Record::new();
-        // Java: while ((record = reader.read()) != null)
-        while reader.read(&mut record).is_some() {
-            // Java: VariationRealigner.java#L2281 — record.getCigarString().contains(dlenqr)
-            let cigar = record.cigar();
-            let cigar_str = format!("{}", cigar);
-            if cigar_str.contains(&dlenqr) {
+            // Java: queryOverlapping(chr, start, end) — 1-based inclusive
+            let region_str = format!("{}:{}-{}", chr, start, end);
+            if reader.fetch(region_str.as_str()).is_err() {
                 continue;
             }
 
-            // Java: VariationRealigner.java#L2284
-            let read_start = record.pos() as i32 + 1; // 0-based to 1-based
+            let mut record = bam::Record::new();
+            // Java: while ((record = reader.read()) != null)
+            while reader.read(&mut record).is_some() {
+                // Java: VariationRealigner.java#L2281 — record.getCigarString().contains(dlenqr)
+                let cigar = record.cigar();
+                let cigar_str = format!("{}", cigar);
+                if cigar_str.contains(&dlenqr) {
+                    continue;
+                }
 
-            // Java: getAlignedLength(record.getCigar()) — sum M+D
-            let read_length_aligned: i32 = cigar
-                .iter()
-                .filter(|op| {
-                    matches!(
-                        op,
-                        rust_htslib::bam::record::Cigar::Match(_)
-                            | rust_htslib::bam::record::Cigar::Del(_)
-                    )
-                })
-                .map(|op| op.len() as i32)
-                .sum();
+                // Java: VariationRealigner.java#L2284
+                let read_start = record.pos() as i32 + 1; // 0-based to 1-based
 
-            let read_end = read_start + read_length_aligned;
+                // Java: getAlignedLength(record.getCigar()) — sum M+D
+                let read_length_aligned: i32 = cigar
+                    .iter()
+                    .filter(|op| {
+                        matches!(
+                            op,
+                            rust_htslib::bam::record::Cigar::Match(_)
+                                | rust_htslib::bam::record::Cigar::Del(_)
+                        )
+                    })
+                    .map(|op| op.len() as i32)
+                    .sum();
 
-            // Java: VariationRealigner.java#L2288
-            if read_end > end + 2 && read_start < start - 2 {
-                cnt += 1;
-            }
-            // Java: VariationRealigner.java#L2291
-            if read_start < start - 2 && read_end > start && read_end < end {
-                midcnt += 1;
+                let read_end = read_start + read_length_aligned;
+
+                // Java: VariationRealigner.java#L2288
+                if read_end > end + 2 && read_start < start - 2 {
+                    cnt += 1;
+                }
+                // Java: VariationRealigner.java#L2291
+                if read_start < start - 2 && read_end > start && read_end < end {
+                    midcnt += 1;
+                }
             }
         }
-    }
+    });
 
     // Java: VariationRealigner.java#L2297
     if instance.conf.y {
@@ -2390,7 +2434,14 @@ pub fn realignins(
             {
                 continue;
             }
+            // Parity guard: Java's realignins wraps this body in try/catch
+            // (VariationRealigner.java#L676,#L937). With insertion_count == 0 the Java
+            // expression throws ArithmeticException and the outer catch continues. Rust
+            // must short-circuit BEFORE the division; we treat insertion_count == 0 as
+            // "skip this mismatch" which is observationally equivalent for parity output
+            // (post-mismatch-loop work does not depend on insertion_count).
             if variation_clone.vars_count >= insertion_count + insert.len() as i32
+                || insertion_count == 0
                 || variation_clone.vars_count / insertion_count >= 8
             {
                 continue;
@@ -2686,7 +2737,9 @@ pub fn realignins(
         if !sc3p.is_empty()
             && !sc5p.is_empty()
             && first3 > first5 + 3
-            && (first3 - first5) < (max_read_length as f64 * 0.75) as i32
+            // Match Java's mixed int/double comparison exactly; truncating the
+            // 0.75 threshold suppresses boundary-case ref-factor adjustments.
+            && ((first3 - first5) as f64) < max_read_length as f64 * 0.75
         {
             let ref_base_str = reference_sequences
                 .get(&position)
@@ -2847,10 +2900,115 @@ fn remove_sv(non_insertion_variants: &mut HashMap<i32, VariationMap>, pos: i32) 
     }
 }
 
-/// Stub: partialPipeline — re-entrant CigarParser call.
-/// Java: S17/pipeline — not yet ported. No-op for now.
-fn partial_pipeline_stub() {
-    // Java: getMode().partialPipeline(currentScope, executor) — S17 integration stub
+struct PartialPipelineContext<'a> {
+    bam: &'a str,
+    region: &'a Region,
+    reference_resource: &'a Arc<ReferenceResource>,
+    splice: &'a HashSet<String>,
+    out: &'a Arc<VariantPrinter>,
+}
+
+/// Ported from: AbstractMode.partialPipeline()
+/// Java: AbstractMode.java:L79-L85
+///
+/// Re-enters SAMFileParser + CigarParser(true) on an adjacent boundary region and writes the
+/// updated maps back into the live realigner state.
+fn run_partial_pipeline(
+    context: &PartialPipelineContext<'_>,
+    modified_start: i32,
+    modified_end: i32,
+    max_read_length: i32,
+    reference: &mut Reference,
+    non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    insertion_variants: &mut HashMap<i32, VariationMap>,
+    ref_coverage: &mut HashMap<i32, i32>,
+    soft_clips_3_end: &mut HashMap<i32, Sclip>,
+    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+) {
+    if modified_start > modified_end {
+        return;
+    }
+
+    let modified_region = Region::new_modified_region(context.region, modified_start, modified_end);
+    if !ReferenceResource::is_loaded(
+        &modified_region.chr,
+        modified_region.start,
+        modified_region.end,
+        reference,
+    ) {
+        let current_reference = std::mem::take(reference);
+        *reference = context
+            .reference_resource
+            .get_reference_with_extension(&modified_region, max_read_length, current_reference)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "Failed to fetch reference for {}: {}",
+                    modified_region.print_region(),
+                    error
+                )
+            });
+    }
+
+    let initial_data = InitialData::new(
+        std::mem::take(non_insertion_variants),
+        std::mem::take(insertion_variants),
+        std::mem::take(ref_coverage),
+        std::mem::take(soft_clips_3_end),
+        std::mem::take(soft_clips_5_end),
+    );
+    let scope = Scope {
+        bam: context.bam.to_string(),
+        region: modified_region,
+        region_ref: Arc::new(reference.clone()),
+        reference_resource: Arc::clone(context.reference_resource),
+        max_read_length,
+        splice: Arc::new(context.splice.clone()),
+        out: Arc::clone(context.out),
+        data: initial_data,
+    };
+    let parsed_scope = crate::mods::sam_file_parser::sam_file_parser_process(scope);
+    let Scope {
+        region,
+        region_ref,
+        max_read_length,
+        splice,
+        mut data,
+        ..
+    } = parsed_scope;
+    let header = data
+        .header_view()
+        .expect("current BAM header must exist before partial CIGAR parsing");
+    let chr_name =
+        crate::mods::sam_file_parser::get_chr_name(&region, &GlobalReadOnlyScope::instance().conf);
+    let InitialData {
+        non_insertion_variants: partial_non_insertion_variants,
+        insertion_variants: partial_insertion_variants,
+        ref_coverage: partial_ref_coverage,
+        soft_clips_5_end: partial_soft_clips_5_end,
+        soft_clips_3_end: partial_soft_clips_3_end,
+    } = std::mem::take(&mut data.initial_data);
+    let total_reads = data.total_reads;
+    let duplicate_reads = data.duplicate_reads;
+    let mut parser = crate::mods::cigar_parser::CigarParser::new(true);
+    parser.init_from_scope(
+        &region,
+        &region_ref,
+        &splice,
+        max_read_length,
+        partial_non_insertion_variants,
+        partial_insertion_variants,
+        partial_ref_coverage,
+        partial_soft_clips_3_end,
+        partial_soft_clips_5_end,
+        total_reads,
+        duplicate_reads,
+    );
+    let variation_data = parser.process_preprocessor(&mut data, &header, &chr_name);
+    *non_insertion_variants = variation_data.non_insertion_variants;
+    *insertion_variants = variation_data.insertion_variants;
+    *ref_coverage = variation_data.ref_coverage;
+    *soft_clips_3_end = variation_data.soft_clips_3_end;
+    *soft_clips_5_end = variation_data.soft_clips_5_end;
 }
 
 // ─── Cluster D implementation ───────────────────────────────────────
@@ -2860,23 +3018,24 @@ fn partial_pipeline_stub() {
 ///
 /// Discovers large deletions from unpaired soft clips.
 /// Two asymmetric passes: 5' (softClips5End) then 3' (softClips3End).
-pub fn realignlgdel(
+fn realignlgdel(
     instance_bams: &Option<Vec<String>>,
-    svfdel: &[Sclip],
-    svrdel: &[Sclip],
+    svfdel: &mut Vec<Sclip>,
+    svrdel: &mut Vec<Sclip>,
     non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    _insertion_variants: &mut HashMap<i32, VariationMap>, // needed by partialPipeline (S17 stub)
+    insertion_variants: &mut HashMap<i32, VariationMap>,
     ref_coverage: &mut HashMap<i32, i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    reference: &Reference,
-    reference_sequences: &HashMap<i32, u8>,
+    reference: &mut Reference,
     chr: &str,
     max_read_length: i32,
     region_start: i32,
     region_end: i32,
+    partial_pipeline_context: &PartialPipelineContext<'_>,
 ) {
     let instance = GlobalReadOnlyScope::instance();
+    let mut reference_sequences = &reference.reference_sequences;
     // Java: VariationRealigner.java#L975
     let longmm = 3i32;
 
@@ -2955,7 +3114,7 @@ pub fn realignlgdel(
             let sv_mark = super::structural_variants_processor::mark_sv(
                 bp,
                 p,
-                &mut [&mut svfdel.to_vec(), &mut svrdel.to_vec()],
+                &mut [&mut *svfdel, &mut *svrdel],
                 max_read_length,
             );
             svcov = sv_mark.0;
@@ -2978,13 +3137,29 @@ pub fn realignlgdel(
 
             // Java: VariationRealigner.java#L1051 — partialPipeline if bp < region.start
             if bp < region_start {
-                // Stub: partialPipeline
-                partial_pipeline_stub();
+                let tts = bp - max_read_length;
+                let mut tte = bp + max_read_length;
+                if bp + max_read_length >= region_start {
+                    tte = region_start - 1;
+                }
+                run_partial_pipeline(
+                    partial_pipeline_context,
+                    tts,
+                    tte,
+                    max_read_length,
+                    reference,
+                    non_insertion_variants,
+                    insertion_variants,
+                    ref_coverage,
+                    soft_clips_3_end,
+                    soft_clips_5_end,
+                );
+                reference_sequences = &reference.reference_sequences;
             }
         }
 
         // Java: VariationRealigner.java#L1067
-        let dellen = p - bp;
+        let mut dellen = p - bp;
         let mut en = 0i32;
         let mut gt = format!("-{}", dellen);
 
@@ -3007,12 +3182,12 @@ pub fn realignlgdel(
                 bp -= extra.len() as i32;
             }
         } else {
-            // Java: VariationRealigner.java#L1082-L1083
-            let adjusted_dellen = dellen - extra_upper.len() as i32;
-            if adjusted_dellen == 0 {
+            // Java mutates dellen before the short-del coverage update below.
+            dellen -= extra_upper.len() as i32;
+            if dellen == 0 {
                 gt = format!("-{}^{}", extra_upper.len(), extra_upper);
             } else {
-                gt = format!("-{}&{}", adjusted_dellen, extra_upper);
+                gt = format!("-{}&{}", dellen, extra_upper);
             }
         }
 
@@ -3235,16 +3410,16 @@ pub fn realignlgdel(
         );
 
         // Java: VariationRealigner.java#L1181-L1183 — SV splits update
-        let new_gt_vc = dels5
+        let tv_vc_after_splits = non_insertion_variants
             .get(&bp)
-            .and_then(|m| m.get(&gt))
-            .copied()
-            .unwrap_or(tv_vc);
+            .and_then(|m| m.entries.get(&gt))
+            .map(|v| v.vars_count)
+            .unwrap_or(0);
         if let Some(sv) = non_insertion_variants
             .get_mut(&bp)
             .and_then(|m| m.sv.as_mut())
         {
-            sv.splits += tv_vc - new_gt_vc;
+            sv.splits += tv_vc_after_splits - tv_vc;
         }
 
         // Java: VariationRealigner.java#L1185-L1187 — addVarFactor
@@ -3345,7 +3520,7 @@ pub fn realignlgdel(
             let sv_mark = super::structural_variants_processor::mark_sv(
                 p,
                 bp,
-                &mut [&mut svfdel.to_vec(), &mut svrdel.to_vec()],
+                &mut [&mut *svfdel, &mut *svrdel],
                 max_read_length,
             );
             svcov = sv_mark.0;
@@ -3368,8 +3543,24 @@ pub fn realignlgdel(
 
             // Java: VariationRealigner.java#L1271 — partialPipeline if bp > region.end
             if bp > region_end {
-                // Stub: partialPipeline
-                partial_pipeline_stub();
+                let mut tts = bp - max_read_length;
+                let tte = bp + max_read_length;
+                if bp - max_read_length <= region_end {
+                    tts = region_end + 1;
+                }
+                run_partial_pipeline(
+                    partial_pipeline_context,
+                    tts,
+                    tte,
+                    max_read_length,
+                    reference,
+                    non_insertion_variants,
+                    insertion_variants,
+                    ref_coverage,
+                    soft_clips_3_end,
+                    soft_clips_5_end,
+                );
+                reference_sequences = &reference.reference_sequences;
             }
         }
 
@@ -3520,16 +3711,16 @@ pub fn realignlgdel(
         );
 
         // Java: VariationRealigner.java#L1365-L1367 — SV splits update
-        let new_gt_vc = dels5
+        let tv_vc_after_splits = non_insertion_variants
             .get(&bp)
-            .and_then(|m| m.get(&gt))
-            .copied()
-            .unwrap_or(tv_vc);
+            .and_then(|m| m.entries.get(&gt))
+            .map(|v| v.vars_count)
+            .unwrap_or(0);
         if let Some(sv) = non_insertion_variants
             .get_mut(&bp)
             .and_then(|m| m.sv.as_mut())
         {
-            sv.splits += tv_vc - new_gt_vc;
+            sv.splits += tv_vc_after_splits - tv_vc;
         }
 
         if instance.conf.y {
@@ -3941,16 +4132,22 @@ pub fn realignlgins30(
                         adj_cnt(vref, sc5b);
                     }
                 }
+                write_back_cloned_reference_variation(
+                    non_insertion_variants,
+                    reference_sequences,
+                    bi,
+                    mvref_clone,
+                );
 
                 // Java: VariationRealigner.java#L1563-L1569
                 if let Some(bams_vec) = instance_bams.as_ref() {
+                    let mut mvref_for_check = get_variation_maybe(
+                        non_insertion_variants,
+                        bi,
+                        reference_sequences.get(&bi).copied(),
+                    )
+                    .cloned();
                     if !bams_vec.is_empty() && p3 - p5 >= 5 && p3 - p5 < max_read_length - 10 {
-                        let mut mvref_for_check = get_variation_maybe(
-                            non_insertion_variants,
-                            bi,
-                            reference_sequences.get(&bi).copied(),
-                        )
-                        .cloned();
                         if let Some(ref mut mvref) = mvref_for_check {
                             if mvref.vars_count != 0 && no_passing_reads(chr, p5, p3, bams_vec) {
                                 let vref_vc = insertion_variants
@@ -3966,6 +4163,12 @@ pub fn realignlgins30(
                             }
                         }
                     }
+                    write_back_cloned_reference_variation(
+                        non_insertion_variants,
+                        reference_sequences,
+                        bi,
+                        mvref_for_check,
+                    );
                 }
 
                 // Java: VariationRealigner.java#L1570-L1575 — recursive realignins
@@ -4009,6 +4212,12 @@ pub fn realignlgins30(
                         adj_cnt(vref, sc5b);
                     }
                 }
+                write_back_cloned_reference_variation(
+                    non_insertion_variants,
+                    reference_sequences,
+                    bi,
+                    mvref_clone,
+                );
 
                 // Java: VariationRealigner.java#L1580-L1584 — recursive realigndel
                 let vref_vc = non_insertion_variants
@@ -4060,25 +4269,24 @@ pub fn realignlgins30(
 ///
 /// Realign large insertions that are not present in alignment.
 /// Two asymmetric passes: 5' then 3'.
-pub fn realignlgins(
+fn realignlgins(
     instance_bams: &Option<Vec<String>>,
-    svfdup: &[Sclip],
-    svrdup: &[Sclip],
+    svfdup: &mut Vec<Sclip>,
+    svrdup: &mut Vec<Sclip>,
     non_insertion_variants: &mut HashMap<i32, VariationMap>,
     insertion_variants: &mut HashMap<i32, VariationMap>,
     ref_coverage: &mut HashMap<i32, i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    reference: &Reference,
-    reference_sequences: &HashMap<i32, u8>,
+    reference: &mut Reference,
     chr: &str,
     max_read_length: i32,
     region_start: i32,
     region_end: i32,
-    _splice: &[i32],
-    _bam: &str,
+    partial_pipeline_context: &PartialPipelineContext<'_>,
 ) {
     let instance = GlobalReadOnlyScope::instance();
+    let mut reference_sequences = &reference.reference_sequences;
 
     // ── 5' pass ──────────────────────────────────────────────────────
     // Java: VariationRealigner.java#L1610-L1620
@@ -4145,8 +4353,24 @@ pub fn realignlgins(
 
             // Java: VariationRealigner.java#L1665-L1679 — partialPipeline for bi > region.end
             if bi > region_end {
-                // Stub: partialPipeline
-                partial_pipeline_stub();
+                let mut tts = bi - max_read_length;
+                let tte = bi + max_read_length;
+                if bi - max_read_length <= region_end {
+                    tts = region_end + 1;
+                }
+                run_partial_pipeline(
+                    partial_pipeline_context,
+                    tts,
+                    tte,
+                    max_read_length,
+                    reference,
+                    non_insertion_variants,
+                    insertion_variants,
+                    ref_coverage,
+                    soft_clips_3_end,
+                    soft_clips_5_end,
+                );
+                reference_sequences = &reference.reference_sequences;
             }
 
             // Java: VariationRealigner.java#L1680-L1688
@@ -4164,7 +4388,7 @@ pub fn realignlgins(
             let tp2 = super::structural_variants_processor::mark_dup_sv(
                 p,
                 bi,
-                &mut [&mut svfdup.to_vec(), &mut svrdup.to_vec()],
+                &mut [&mut *svfdup, &mut *svrdup],
                 max_read_length,
             );
             let clusters = tp2.0;
@@ -4338,18 +4562,18 @@ pub fn realignlgins(
         }
 
         // Java: VariationRealigner.java#L1765-L1771 — rpflag-based adjustment
+        let mut mref_clone = get_variation_maybe(
+            non_insertion_variants,
+            bi,
+            reference_sequences.get(&bi).copied(),
+        )
+        .cloned();
         if let Some(bams_vec) = instance_bams.as_ref() {
             if rpflag
                 && !bams_vec.is_empty()
                 && ins.len() >= 5
                 && ins.len() < (max_read_length - 10) as usize
             {
-                let mut mref_clone = get_variation_maybe(
-                    non_insertion_variants,
-                    bi,
-                    reference_sequences.get(&bi).copied(),
-                )
-                .cloned();
                 if let Some(ref mut mref) = mref_clone {
                     if mref.vars_count != 0
                         && no_passing_reads(chr, bi, bi + ins.len() as i32, bams_vec)
@@ -4368,6 +4592,12 @@ pub fn realignlgins(
                 }
             }
         }
+        write_back_cloned_reference_variation(
+            non_insertion_variants,
+            reference_sequences,
+            bi,
+            mref_clone,
+        );
     }
 
     // ── 3' pass ──────────────────────────────────────────────────────
@@ -4383,22 +4613,22 @@ pub fn realignlgins(
 
     // Java: VariationRealigner.java#L1792
     for t in &tmp {
-        let mut p = t.position;
-
-        let (cnt, seq) = {
-            let sc3v = match soft_clips_3_end.get_mut(&p) {
+        let original_p = t.position;
+        let mut p = original_p;
+        let (cnt, seq, sc3v_snapshot) = {
+            let sc3v = match soft_clips_3_end.get_mut(&original_p) {
                 Some(s) => s,
                 None => continue,
             };
             let cnt = sc3v.base.vars_count;
             if cnt < instance.conf.minr {
-                break; // Java: VariationRealigner.java#L1799
+                break;
             }
             if sc3v.used {
-                continue; // Java: VariationRealigner.java#L1802
+                continue; // Java: VariationRealigner.java#L1790-L1792
             }
             let seq = find_conseq(sc3v, 0);
-            (cnt, seq)
+            (cnt, seq, sc3v.clone())
         };
 
         if seq.is_empty() {
@@ -4435,8 +4665,24 @@ pub fn realignlgins(
 
             // Java: VariationRealigner.java#L1836-L1850 — partialPipeline for bi < region.start
             if bi < region_start {
-                // Stub: partialPipeline
-                partial_pipeline_stub();
+                let tts = bi - max_read_length;
+                let mut tte = bi + max_read_length;
+                if bi + max_read_length >= region_start {
+                    tte = region_start - 1;
+                }
+                run_partial_pipeline(
+                    partial_pipeline_context,
+                    tts,
+                    tte,
+                    max_read_length,
+                    reference,
+                    non_insertion_variants,
+                    insertion_variants,
+                    ref_coverage,
+                    soft_clips_3_end,
+                    soft_clips_5_end,
+                );
+                reference_sequences = &reference.reference_sequences;
             }
 
             // Java: VariationRealigner.java#L1851-L1856 — shift5 walk
@@ -4474,7 +4720,7 @@ pub fn realignlgins(
             let tp2 = super::structural_variants_processor::mark_dup_sv(
                 bi,
                 p - 1,
-                &mut [&mut svfdup.to_vec(), &mut svrdup.to_vec()],
+                &mut [&mut *svfdup, &mut *svrdup],
                 max_read_length,
             );
             let clusters = tp2.0;
@@ -4531,13 +4777,9 @@ pub fn realignlgins(
                 reference_sequences.get(&bi).copied(),
             )
             .cloned();
-            let sc3v_clone = soft_clips_3_end.get(&p).map(|s| s.base.clone());
 
             // Java: VariationRealigner.java#L1903 — null lref if p - bi > meanPosition / cnt
-            let sc3_mean_pos = soft_clips_3_end
-                .get(&p)
-                .map(|s| s.base.mean_position)
-                .unwrap_or(0.0);
+            let sc3_mean_pos = sc3v_snapshot.base.mean_position;
             let nullify_lref = if lref_clone.is_some() {
                 (p - bi) as f64 > sc3_mean_pos / cnt as f64
             } else {
@@ -4547,9 +4789,13 @@ pub fn realignlgins(
                 lref_clone = None;
             }
 
-            if let Some(ref sc3b) = sc3v_clone {
-                adj_cnt_with_reference(iref, sc3b, lref_clone.as_mut());
-            }
+            adj_cnt_with_reference(iref, &sc3v_snapshot.base, lref_clone.as_mut());
+            write_back_cloned_reference_variation(
+                non_insertion_variants,
+                reference_sequences,
+                bi,
+                lref_clone,
+            );
         }
 
         // Java: VariationRealigner.java#L1907-L1913 — rpflag check
@@ -4573,24 +4819,23 @@ pub fn realignlgins(
         // Java: VariationRealigner.java#L1921-L1933 — Extend remaining bases from sc3v.seq
         // **Parity trap T15**: 3' starts at ii = len (NOT len + 1)
         {
-            let seq_data: Option<Vec<(i32, Vec<(String, Variation)>)>> = soft_clips_3_end
-                .get(&p)
-                .filter(|sc| !sc.seq.is_empty())
-                .map(|sc| &sc.seq)
-                .map(|seq_map| {
-                    let len_seq = seq_map.keys().last().map(|k| k + 1).unwrap_or(0);
-                    let mut result = Vec::new();
-                    for ii in len..len_seq {
-                        if let Some(inner_map) = seq_map.get(&ii) {
-                            let entries: Vec<(String, Variation)> = inner_map
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect();
-                            result.push((ii, entries));
+            let seq_data: Option<Vec<(i32, Vec<(String, Variation)>)>> =
+                (!sc3v_snapshot.seq.is_empty())
+                    .then_some(&sc3v_snapshot.seq)
+                    .map(|seq_map| {
+                        let len_seq = seq_map.keys().last().map(|k| k + 1).unwrap_or(0);
+                        let mut result = Vec::new();
+                        for ii in len..len_seq {
+                            if let Some(inner_map) = seq_map.get(&ii) {
+                                let entries: Vec<(String, Variation)> = inner_map
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect();
+                                result.push((ii, entries));
+                            }
                         }
-                    }
-                    result
-                });
+                        result
+                    });
 
             if let Some(seq_entries) = seq_data {
                 for (ii, entries) in &seq_entries {
@@ -4607,7 +4852,7 @@ pub fn realignlgins(
         }
 
         // Java: VariationRealigner.java#L1934 — sc3v.used = true (unconditional)
-        if let Some(sc3v) = soft_clips_3_end.get_mut(&p) {
+        if let Some(sc3v) = soft_clips_3_end.get_mut(&original_p) {
             sc3v.used = true;
         }
 
@@ -4689,6 +4934,12 @@ pub fn realignlgins(
                 }
             }
         }
+        write_back_cloned_reference_variation(
+            non_insertion_variants,
+            reference_sequences,
+            bi,
+            mref_clone,
+        );
     }
 }
 
@@ -4709,49 +4960,66 @@ pub fn realign_indels(
     ref_coverage: &mut HashMap<i32, i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    reference: &Reference,
-    reference_sequences: &HashMap<i32, u8>,
+    reference: &mut Reference,
     chr: &str,
     max_read_length: i32,
     region_start: i32,
     region_end: i32,
+    region: &Region,
+    reference_resource: &Arc<ReferenceResource>,
+    splice: &HashSet<String>,
+    out: &Arc<VariantPrinter>,
+    bam: &str,
 ) {
     let instance = GlobalReadOnlyScope::instance();
+    let partial_pipeline_context = PartialPipelineContext {
+        bam,
+        region,
+        reference_resource,
+        splice,
+        out,
+    };
 
     // Java: VariationRealigner.java#L394-L395
     if instance.conf.y {
         eprintln!("Start Realigndel");
     }
     // Java: VariationRealigner.java#L396
-    realigndel(
-        Some(&instance_bams.clone().unwrap_or_default()),
-        instance_bams,
-        position_to_deletions_count,
-        non_insertion_variants,
-        ref_coverage,
-        soft_clips_3_end,
-        soft_clips_5_end,
-        reference_sequences,
-        chr,
-        max_read_length,
-    );
+    {
+        let reference_sequences = &reference.reference_sequences;
+        realigndel(
+            Some(&instance_bams.clone().unwrap_or_default()),
+            instance_bams,
+            position_to_deletions_count,
+            non_insertion_variants,
+            ref_coverage,
+            soft_clips_3_end,
+            soft_clips_5_end,
+            reference_sequences,
+            chr,
+            max_read_length,
+        );
+    }
 
     // Java: VariationRealigner.java#L397-L398
     if instance.conf.y {
         eprintln!("Start Realignins");
     }
     // Java: VariationRealigner.java#L399
-    realignins(
-        position_to_insertion_count,
-        non_insertion_variants,
-        insertion_variants,
-        ref_coverage,
-        soft_clips_3_end,
-        soft_clips_5_end,
-        reference_sequences,
-        chr,
-        max_read_length,
-    );
+    {
+        let reference_sequences = &reference.reference_sequences;
+        realignins(
+            position_to_insertion_count,
+            non_insertion_variants,
+            insertion_variants,
+            ref_coverage,
+            soft_clips_3_end,
+            soft_clips_5_end,
+            reference_sequences,
+            chr,
+            max_read_length,
+        );
+    }
 
     // Java: VariationRealigner.java#L400-L401
     if instance.conf.y {
@@ -4760,19 +5028,19 @@ pub fn realign_indels(
     // Java: VariationRealigner.java#L402
     realignlgdel(
         instance_bams,
-        &sv_structures.svfdel.clone(),
-        &sv_structures.svrdel.clone(),
+        &mut sv_structures.svfdel,
+        &mut sv_structures.svrdel,
         non_insertion_variants,
         insertion_variants,
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
         reference,
-        reference_sequences,
         chr,
         max_read_length,
         region_start,
         region_end,
+        &partial_pipeline_context,
     );
 
     // Java: VariationRealigner.java#L403-L404
@@ -4780,20 +5048,23 @@ pub fn realign_indels(
         eprintln!("Start Realignlgins30");
     }
     // Java: VariationRealigner.java#L405
-    realignlgins30(
-        instance_bams,
-        non_insertion_variants,
-        insertion_variants,
-        ref_coverage,
-        soft_clips_3_end,
-        soft_clips_5_end,
-        reference,
-        reference_sequences,
-        chr,
-        max_read_length,
-        region_start,
-        region_end,
-    );
+    {
+        let reference_sequences = &reference.reference_sequences;
+        realignlgins30(
+            instance_bams,
+            non_insertion_variants,
+            insertion_variants,
+            ref_coverage,
+            soft_clips_3_end,
+            soft_clips_5_end,
+            reference,
+            reference_sequences,
+            chr,
+            max_read_length,
+            region_start,
+            region_end,
+        );
+    }
 
     // Java: VariationRealigner.java#L406-L407
     if instance.conf.y {
@@ -4802,21 +5073,19 @@ pub fn realign_indels(
     // Java: VariationRealigner.java#L408
     realignlgins(
         instance_bams,
-        &sv_structures.svfdup.clone(),
-        &sv_structures.svrdup.clone(),
+        &mut sv_structures.svfdup,
+        &mut sv_structures.svrdup,
         non_insertion_variants,
         insertion_variants,
         ref_coverage,
         soft_clips_3_end,
         soft_clips_5_end,
         reference,
-        reference_sequences,
         chr,
         max_read_length,
         region_start,
         region_end,
-        &[], // splice — unused in realignlgins body
-        "",  // bam — unused in realignlgins body
+        &partial_pipeline_context,
     );
 }
 
@@ -4839,13 +5108,14 @@ pub fn process(scope: Scope<VariationData>) -> Scope<RealignedVariationData> {
     let Scope {
         bam,
         region,
-        region_ref: reference,
+        region_ref,
         reference_resource,
         max_read_length,
         splice,
         out,
         data,
     } = scope;
+    let mut reference = (*region_ref).clone();
 
     let chr = crate::mods::sam_file_parser::get_chr_name(&region, &instance.conf);
     let instance_bams: Option<Vec<String>> = if bam.is_empty() {
@@ -4915,12 +5185,16 @@ pub fn process(scope: Scope<VariationData>) -> Scope<RealignedVariationData> {
             &mut ref_coverage,
             &mut soft_clips_3_end,
             &mut soft_clips_5_end,
-            &reference,
-            reference_sequences,
+            &mut reference,
             &chr,
             max_read_length,
             region.start,
             region.end,
+            &region,
+            &reference_resource,
+            splice.as_ref(),
+            &out,
+            bam.as_str(),
         );
     }
 
@@ -4945,7 +5219,7 @@ pub fn process(scope: Scope<VariationData>) -> Scope<RealignedVariationData> {
     Scope {
         bam,
         region,
-        region_ref: reference,
+        region_ref: Arc::new(reference),
         reference_resource,
         max_read_length,
         splice,

@@ -20,7 +20,8 @@ pub fn load_region_config() -> Vec<(String, PathBuf, PathBuf)> {
     let tsv = std::fs::read_to_string("testdata/parity_regions.tsv")
         .expect("testdata/parity_regions.tsv not found");
 
-    let regions: Vec<_> = tsv.lines()
+    let regions: Vec<_> = tsv
+        .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
@@ -58,8 +59,29 @@ pub fn load_region_config() -> Vec<(String, PathBuf, PathBuf)> {
 
 #[allow(dead_code)]
 pub fn golden_fixture_path(module: &str, region: &str) -> PathBuf {
-    let safe_region = region.replace(':', "_").replace('-', "_");
-    let filename = format!("{module}_{safe_region}.jsonl.zst");
+    golden_fixture_path_with_config(module, None, region)
+}
+
+/// Build a golden fixture path with an optional config slug segment.
+///
+/// When present, `config_slug` is normalized to lowercase ASCII and `-` becomes
+/// `_`, mirroring the existing `safe_region` filesystem treatment before the
+/// filename is rendered as `{module}_{safe_slug}_{safe_region}.jsonl.zst`.
+#[allow(dead_code)]
+pub fn golden_fixture_path_with_config(
+    module: &str,
+    config_slug: Option<&str>,
+    region: &str,
+) -> PathBuf {
+    let safe_region = safe_region_name(region);
+    let filename = match config_slug {
+        Some(slug) => {
+            let safe_slug = config_name_to_slug(slug);
+            format!("{module}_{safe_slug}_{safe_region}.jsonl.zst")
+        }
+        None => format!("{module}_{safe_region}.jsonl.zst"),
+    };
+
     PathBuf::from("testdata/fixtures")
         .join(module)
         .join(filename)
@@ -67,7 +89,16 @@ pub fn golden_fixture_path(module: &str, region: &str) -> PathBuf {
 
 #[allow(dead_code)]
 pub fn load_golden_data(module: &str, region: &str) -> String {
-    let path = golden_fixture_path(module, region);
+    load_golden_data_with_config(module, None, region)
+}
+
+#[allow(dead_code)]
+pub fn load_golden_data_with_config(
+    module: &str,
+    config_slug: Option<&str>,
+    region: &str,
+) -> String {
+    let path = golden_fixture_path_with_config(module, config_slug, region);
     let file = File::open(&path)
         .unwrap_or_else(|error| panic!("Failed to open {}: {error}", path.display()));
     let mut decoder = zstd::stream::read::Decoder::new(file)
@@ -163,9 +194,7 @@ pub fn resolve_impl() -> VardictImpl {
             "" | "rust" => VardictImpl::Rust,
             "java" => VardictImpl::Java,
             "both" => VardictImpl::Both,
-            _ => panic!(
-                "Unknown VARDICT_IMPL '{value}'. Expected one of: rust, java, both"
-            ),
+            _ => panic!("Unknown VARDICT_IMPL '{value}'. Expected one of: rust, java, both"),
         },
     }
 }
@@ -209,7 +238,12 @@ pub fn java_binary_path() -> PathBuf {
 }
 
 #[allow(dead_code)]
-pub fn run_java_region(region_str: &str, bam: &str, ref_path: &str, extra_flags: &[String]) -> String {
+pub fn run_java_region(
+    region_str: &str,
+    bam: &str,
+    ref_path: &str,
+    extra_flags: &[String],
+) -> String {
     const RUN_TIMEOUT: Duration = Duration::from_secs(120);
 
     let java_bin = java_binary_path();
@@ -306,9 +340,9 @@ fn is_executable_file(path: &Path) -> bool {
 }
 
 fn run_command_with_timeout(mut command: Command, timeout: Duration, description: &str) -> Output {
-    let mut child = command.spawn().unwrap_or_else(|error| {
-        panic!("Failed to start {description}: {error}")
-    });
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|error| panic!("Failed to start {description}: {error}"));
 
     let stdout_handle = child.stdout.take().map(spawn_output_reader);
     let stderr_handle = child.stderr.take().map(spawn_output_reader);
@@ -690,7 +724,7 @@ const _: fn(&str) -> String = config_name_to_slug;
 
 #[allow(dead_code)]
 pub fn run_cell(config_name: &str, region_idx: usize) -> Result<(), String> {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
 
     let regions = load_region_config();
     let (region_str, bam_path, ref_path) = regions
@@ -835,7 +869,10 @@ pub fn load_config_presets_with_applies_to() -> Vec<(String, String, String)> {
                 "expected at least 3 tab-separated fields in {}: {line}",
                 preset_path.display()
             );
-            let applies_to = fields.get(4).map(|s| s.to_string()).unwrap_or_else(|| "both".to_string());
+            let applies_to = fields
+                .get(4)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "both".to_string());
             assert!(
                 matches!(applies_to.as_str(), "germline" | "somatic" | "both"),
                 "invalid applies_to value {applies_to:?} in {}: {line}",
@@ -880,7 +917,11 @@ pub fn load_config_presets_with_tier() -> Vec<(String, String, u8)> {
                 preset_path.display()
             );
             let tier: u8 = fields[3].parse().unwrap_or_else(|_| {
-                panic!("Invalid tier value in {}: {}", preset_path.display(), fields[3])
+                panic!(
+                    "Invalid tier value in {}: {}",
+                    preset_path.display(),
+                    fields[3]
+                )
             });
             (fields[0].to_string(), fields[1].to_string(), tier)
         })
@@ -904,7 +945,10 @@ fn parse_java_flags(flags: &str) -> HashMap<String, String> {
         let flag = tokens[index];
         let mut value = "";
 
-        assert!(flag.starts_with('-'), "Invalid flag token in preset flags: {flag}");
+        assert!(
+            flag.starts_with('-'),
+            "Invalid flag token in preset flags: {flag}"
+        );
 
         if let Some(next) = tokens.get(index + 1) {
             if !next.starts_with('-') {

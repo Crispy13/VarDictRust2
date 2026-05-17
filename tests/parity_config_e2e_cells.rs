@@ -42,8 +42,12 @@ fn parse_shard_env() -> Option<Shard> {
         fail("empty N");
     }
 
-    let i = i_str.parse::<usize>().unwrap_or_else(|_| fail("non-numeric i"));
-    let n = n_str.parse::<usize>().unwrap_or_else(|_| fail("non-numeric N"));
+    let i = i_str
+        .parse::<usize>()
+        .unwrap_or_else(|_| fail("non-numeric i"));
+    let n = n_str
+        .parse::<usize>()
+        .unwrap_or_else(|_| fail("non-numeric N"));
     if n == 0 {
         fail("N == 0");
     }
