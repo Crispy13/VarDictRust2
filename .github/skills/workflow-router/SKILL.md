@@ -4,7 +4,8 @@ description: >
   Route the Parity Orchestrator to the correct workflow based on project state
   and user request. Use when: starting a new orchestrator cycle, user makes a
   request that doesn't match the current workflow, active plan state changes,
-  deciding between porting, E2E gate, targeted fix, parity check, or audit.
+  deciding between porting, E2E gate, targeted fix, parity check, or audit,
+  while preserving the mandatory post-change performance-classification policy.
 ---
 
 # Workflow Router
@@ -26,12 +27,12 @@ workflow destination with a confidence level.
 | Destination | Trigger | Description |
 |-------------|---------|-------------|
 | `per-module-gate-cycle` | Incomplete modules in tracker | 7-Step Cycle: Risk → Implement → Validate → Audit → Expand → Review |
-| `e2e-config-diagnosis` | All modules ✅ + E2E gate ⬜ | Final Gate: artifact-backed evidence intake from the existing full-scope red report → rerun the same full declared scope only if the diagnosis-ready/full-scope contract fails → reviewed diagnosis plan file → diagnosis + repair handoff → reviewed repair plan file → repair → rerun the same full scope → `PERF_PENDING` Review Gate/change-impact-review verdict |
+| `e2e-config-diagnosis` | All modules ✅ + E2E gate ⬜ | Final Gate: artifact-backed evidence intake from the existing full-scope red report → rerun the same full declared scope only if the diagnosis-ready/full-scope contract fails → reviewed diagnosis plan file → diagnosis + repair handoff → reviewed repair plan file → repair → rerun the same full scope → `PERF_PENDING` handoff to Review Gate/change-impact-review until a terminal non-pending performance verdict is recorded |
 | `targeted-fix` | User says "fix mismatch" / "fix parity" / names a specific bug | Dispatch shard-diagnosis → mismatch-repair → verify |
 | `parity-check` | User says "run parity" / "test module" / names a module to test | Dispatch module-parity-test for specified module |
 | `audit` | User says "audit" / "logic review" / names a module to audit | Dispatch logic-parity-audit for specified module |
 
-The `e2e-config-diagnosis` route is the canonical full-scope final gate. User-approved diagnostic reruns may happen inside that workflow, but they do not replace the canonical full-scope route. The route uses `plan-duck` only before the combined Phase 2/3 diagnosis-handoff dispatch and before the repair dispatch. It is not inserted before mechanical verification reruns. After a parity repair verifies, the route must treat the repair as `PERF_PENDING` until Review Gate/change-impact-review records `PERF_SAFE`, `PERF_RISK`, or `PERF_REGRESSION`.
+The `e2e-config-diagnosis` route is the canonical full-scope final gate. User-approved diagnostic reruns may happen inside that workflow, but they do not replace the canonical full-scope route. The route uses `plan-duck` only before the combined Phase 2/3 diagnosis-handoff dispatch and before the repair dispatch. It is not inserted before mechanical verification reruns. After a parity repair verifies, the route must treat the repair as `PERF_PENDING` until Review Gate/change-impact-review records a terminal non-pending verdict: `PERF_SAFE`, `PERF_RISK`, `PERF_REGRESSION`, or `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`. `PERF_PENDING` is not silently durable; it expires on the next code change to the same module/surface or the next full-gate cycle, whichever comes first.
 
 ## Decision Logic (Priority Order)
 

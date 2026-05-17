@@ -336,13 +336,18 @@ Confirm the fix resolves the original failure without introducing regressions.
    only the formerly failing preset, tag, chromosome, or region.
 5. If that same full-scope rerun passes after a parity repair, record the repair as
    `PERF_PENDING` and return to Orchestrator for Review Gate/change-impact-review before
-   treating the repair as approved. The final repair report must include one of
-   `PERF_SAFE`, `PERF_RISK`, or `PERF_REGRESSION`.
+   treating the repair as approved. The final repair report must include a terminal
+   non-pending verdict: `PERF_SAFE`, `PERF_RISK`, `PERF_REGRESSION`, or
+   `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`. If evidence is still insufficient,
+   keep the repair at `PERF_PENDING`, document the missing evidence, and record the
+   expiry trigger: next same-module/surface code change or next full-gate cycle.
 6. If additional failures remain in that same full scope, loop back to Phase 2 for the
    next failure.
 7. When the same full-scope gate passes and the post-repair performance verdict is not
-   `PERF_REGRESSION`, report CONFIG-E2E PASS. `PERF_RISK` is conditional and must carry
-   the Review Gate rationale, including bootstrap-baseline notation when applicable.
+   `PERF_REGRESSION`, report CONFIG-E2E PASS only after the Review Gate result is
+   terminal. `PERF_RISK` is conditional and must carry the Review Gate rationale,
+   including bootstrap-baseline notation when applicable. `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`
+   also requires explicit user acknowledgment and a tracked optimization follow-up.
 
 ### Outputs
 

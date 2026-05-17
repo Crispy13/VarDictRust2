@@ -3,7 +3,35 @@
 Deferred work items in the VarDict-rs port that must be resolved before full production parity. Each item includes the blocker, impact, and unblock path so future work can pick it up without re-discovery.
 
 ---
+## Mandatory performance check after any non-exempt code change
 
+**Status:** 🟢 Implemented at agent workflow level on 2026-05-18; CI/script enforcement intentionally deferred
+**Location:** [.github/skills/change-impact-review/SKILL.md](.github/skills/change-impact-review/SKILL.md), [.github/agents/review-gate.agent.md](.github/agents/review-gate.agent.md), [.github/agents/orchestrator.agent.md](.github/agents/orchestrator.agent.md), [.github/skills/workflow-router/SKILL.md](.github/skills/workflow-router/SKILL.md), [.github/skills/config-e2e-diagnosis/SKILL.md](.github/skills/config-e2e-diagnosis/SKILL.md)
+**Introduced:** 2026-05-18, after parity repairs exposed a roughly 10x runtime regression that passed correctness gates
+
+### Policy
+
+- Any non-exempt change must receive a performance classification through Review Gate + `change-impact-review` before approval.
+- Non-exempt includes `src/`, `scripts/`, `.github/agents/`, `.github/skills/`, `.github/instructions/`, `.github/workflows/`, test harness behavior, fixture generation, Cargo feature/profile/runtime-affecting changes, and other runtime/parity execution surfaces.
+- Narrow exemptions are limited to pure prose docs-only changes, comment-only changes that cannot affect compilation/runtime, isolated `tests/` / `#[cfg(test)]` changes that do not affect fixtures or harness behavior, and dependency-version-only `Cargo.toml` bumps that do not alter features/profiles/runtime paths.
+- Every exemption requires explicit written rationale.
+
+### Verdict Contract
+
+- `PERF_SAFE`: no material performance risk or regression; may proceed.
+- `PERF_RISK`: risk exists and is documented; may proceed only with written acceptance rationale.
+- `PERF_PENDING`: required baseline/benchmark/telemetry evidence is insufficient; cannot silently close and expires on the next same-module/surface code change or the next full-gate cycle.
+- `PERF_REGRESSION`: regression detected or highly likely; blocks.
+- `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`: parity-required fix regresses performance; may proceed only with explicit user acknowledgment and a tracked optimization follow-up.
+
+### Enforcement Decision
+
+Current enforcement path is agent-level only. Review Gate and `change-impact-review` are the mandatory activation path for non-exempt changes. CI/script enforcement is deferred in this pass because the repo does not yet have a stable changed-file classifier plus baseline policy that can fail safely without forcing heavyweight benchmarking on every edit.
+
+### Follow-Up
+
+1. Design a stable changed-file classifier and activation path before adding CI/script enforcement.
+2. Add automation only after baseline expectations are defined well enough to distinguish `PERF_PENDING`, `PERF_RISK`, and real regressions without brittle false blocks.
 
 ## 0.5 Complete CM-* call-mode test expansion
 

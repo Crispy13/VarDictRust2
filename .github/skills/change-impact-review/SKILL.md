@@ -1,28 +1,34 @@
 ---
 name: change-impact-review
-description: "Assess performance impact of code changes before approval. Use when: reviewing code changes, pre-merge performance gate, E2E parity repair performance review, benchmark before/after, runtime telemetry review, regression detection, hot path change, allocator change, collection swap, algorithm change, loop modification. Produces PERF_SAFE / PERF_RISK / PERF_REGRESSION verdict."
+description: "Assess and classify performance impact before approval after any non-exempt code, workflow, or runtime-affecting change. Use when: reviewing code changes, pre-merge performance gate, E2E parity repair performance review, benchmark before/after, runtime telemetry review, regression detection, hot path change, allocator change, collection swap, algorithm change, loop modification, workflow/runtime policy edits. Produces PERF_SAFE / PERF_RISK / PERF_REGRESSION / PERF_PENDING / PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED verdict."
 argument-hint: "Describe the change, e.g. 'SV processor find_match loop restructured' or 'review PR #42 for perf impact'"
 ---
 
 # Change Impact Review
 
-Pre-merge performance regression gate for VarDict-rs code changes.
-Classifies risk, runs benchmarks when needed, and produces a binding verdict.
+Mandatory pre-approval performance classification for VarDict-rs non-exempt code,
+workflow, script, and runtime-affecting changes. Classifies risk, scales evidence to
+that risk, runs benchmarks when needed, and produces a binding verdict.
 
 > **Origin**: Created after a parity fix in `StructuralVariantsProcessor` caused a ~20x runtime regression. The fix was correct (parity passed) but no performance check existed to catch the slowdown before it was applied.
 
-## When to Use
+## Mandatory Trigger and Exemptions
 
-- Before approving any code change to Rust source files
-- After the code reviewer completes correctness and style checks
-- When the parity orchestrator requests a performance verdict
-- See **Caller Context** below for how the verdict is treated depending on who invokes this skill
+Use this skill before approval after any non-exempt change that can affect runtime,
+parity execution cost, benchmark policy, or workflow behavior. Non-exempt surfaces
+include:
 
-## When NOT to Use
+- `src/`, `scripts/`, `.github/agents/`, `.github/skills/`, `.github/instructions/`, and `.github/workflows/`
+- Test harness behavior, fixture generation, and benchmark/performance policy changes
+- `Cargo.toml` feature/profile/dependency changes that can alter runtime behavior
+- Any other file that affects execution path, runtime cost, or parity workflow behavior
 
-- Documentation-only changes (`.md`, comments with no logic change)
-- Test-only changes (`#[cfg(test)]` modules, `tests/` directory)
-- CI/build configuration changes (`Cargo.toml` dependency bumps without feature changes)
+Narrow exemptions are allowed only with explicit written rationale:
+
+- Pure prose docs-only changes
+- Comment-only code changes that cannot affect compilation or runtime
+- Isolated `#[cfg(test)]` / `tests/` changes that do not affect fixtures, harness behavior, runtime paths, or performance policy
+- Dependency-version-only `Cargo.toml` bumps that do not alter features, profiles, or runtime code paths
 
 Exception: after an E2E parity repair, Orchestrator may still route this skill for a
 `PERF_PENDING` review even when the repair looks fixture/provenance-only. In that mode,
@@ -37,20 +43,25 @@ This skill is used by two agents in different modes. The mode affects how the ve
 ### Self-Assessment Mode (Port Engineer)
 When the `Port Engineer` loads this skill during Step 5 (Verify Compilation and Performance):
 - Classify risk using the decision tree
-- Benchmark only for MEDIUM or HIGH risk
+- Gather the evidence required for the risk class
 - Include the verdict in your implementation report as **advisory**
 - The Review Gate's independent verdict takes precedence
 
 ### Independent Gate Mode (Review Gate)
 When the `Review Gate` loads this skill during Section 3 (Performance Impact):
-- Benchmark is **mandatory** for MEDIUM or HIGH risk — do not skip
+- A performance verdict is **mandatory** for every non-exempt change — do not skip the section
+- Benchmark or telemetry evidence is **mandatory** whenever the selected risk class requires it
 - Your verdict is **binding** — it determines whether the change is approved
 - `PERF_REGRESSION` **blocks approval** and must be escalated via the orchestrator
+- `PERF_PENDING` is non-terminal and cannot be silently closed; it expires on the next code change to the same module/surface or at the next full-gate cycle, whichever comes first
+- `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED` may proceed only after explicit user acknowledgment and a tracked optimization follow-up
 - If the Port Engineer already included an advisory verdict, review it but produce your own independent classification
 
 ### E2E Post-Repair Mode (Review Gate / Orchestrator)
 After an E2E parity repair and successful verification rerun, the repair remains
-`PERF_PENDING` until this skill emits `PERF_SAFE`, `PERF_RISK`, or `PERF_REGRESSION`.
+`PERF_PENDING` until this skill emits a terminal non-pending verdict:
+`PERF_SAFE`, `PERF_RISK`, `PERF_REGRESSION`, or
+`PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`.
 Use the repair diff, the terminal artifact `runtime_summary`, and the referenced
 `cell-runtimes.jsonl` as evidence. Runtime telemetry is side-channel metadata; it never
 changes parity PASS/FAIL, but it can change the performance verdict.
@@ -59,19 +70,32 @@ Rules:
 - Fixture/provenance-only classification requires evidence of zero `.rs` source/test
   changes and zero `scripts/` changes in the repair diff. If any Rust or script file
   changed, use the normal risk decision tree.
-- If no prior canonical full-scope runtime baseline exists, classify unexplained timing
-  uncertainty as `PERF_RISK` with explicit `bootstrap-baseline` notation rather than a
-  measured regression.
+- If the selected risk class requires measurement and the baseline or required telemetry
+  is missing, stale, or insufficient, use `PERF_PENDING` instead of silently downgrading
+  the review. Low-risk/data-only repairs may still end at `PERF_RISK` with explicit
+  `bootstrap-baseline` notation when no benchmark is required.
 - The first successful canonical full-scope gate with runtime telemetry is the baseline
   candidate for later comparisons. Bounded diagnostic runs can inform judgment but cannot
   establish the canonical baseline.
 - `PERF_SAFE` requires no hot-path concern, no suspicious slow cells in the runtime
   summary, and either a usable baseline or a clear low-risk/data-only rationale.
-- `PERF_RISK` covers missing baseline, noisy telemetry, partial/missing runtime records,
-  or slow cells that are not yet proven regressions.
+- `PERF_RISK` covers documented residual risk, noisy telemetry, low-risk/bootstrap
+  baseline cases, or slow cells that are not yet proven regressions.
+- `PERF_PENDING` covers insufficient required evidence for the chosen risk class. It must
+  carry the missing-evidence reason and the expiry trigger.
 - `PERF_REGRESSION` is reserved for clear before/after regressions, obvious hot-path
   slowdowns, or telemetry that shows a repair made the gate materially slower with no
   parity-required justification.
+- `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED` is reserved for parity-required fixes whose
+  regression is real, documented, explicitly acknowledged by the user, and paired with a
+  tracked optimization follow-up.
+
+## Step 0: Determine Whether Review Is Required
+
+1. Check whether the change falls under the non-exempt surfaces listed above.
+2. If claiming an exemption, write the exact rationale in the review output.
+3. If the rationale is incomplete or the change touches runtime-adjacent surfaces,
+   treat it as non-exempt and continue.
 
 ## Step 1: Classify Risk
 
@@ -122,7 +146,7 @@ These modules execute per-read or per-base — small changes have large impact:
 
 ### LOW Risk
 
-No benchmark required. Proceed with standard code review.
+No benchmark required. A classification is still required.
 
 Record in verdict:
 ```
@@ -151,6 +175,7 @@ Evaluate results:
 - **≤5% regression**: PERF_SAFE (within noise floor)
 - **5–15% regression**: PERF_RISK (document and proceed with acknowledgment)
 - **>15% regression**: PERF_REGRESSION (block approval)
+- **Required benchmark missing/stale**: PERF_PENDING (record missing evidence + expiry)
 
 ### HIGH Risk
 
@@ -180,6 +205,11 @@ hyperfine --warmup 1 --runs 3 \
 
 Same thresholds apply (≤5% / 5–15% / >15%).
 
+If the regression is real and parity-required with no practical safe alternative in the
+current cycle, do not silently pass it as `PERF_RISK`. Escalate for explicit user
+acknowledgment; only then may the verdict become
+`PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`.
+
 ---
 
 ## Step 3: Produce Verdict
@@ -193,8 +223,10 @@ Include this block in the code review output:
 **Modules touched**: {list of hot-path modules, or "none (cold path)"}
 **Benchmark**: {bench name and result, or "not required (LOW risk)"}
 **Wall-clock**: {before → after, or "not required"}
-**Verdict**: {PERF_SAFE | PERF_RISK | PERF_REGRESSION}
+**Exemption rationale**: {"none" or explicit exemption text}
+**Verdict**: {PERF_SAFE | PERF_RISK | PERF_REGRESSION | PERF_PENDING | PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED}
 **Evidence**: {one-line summary, e.g. "pipeline_bench: +2.3% (within noise)"}
+**Expiry / follow-up**: {"none" | pending expiry trigger | optimization follow-up path}
 ```
 
 ### Verdict Definitions
@@ -202,8 +234,10 @@ Include this block in the code review output:
 | Verdict | Meaning | Action |
 |---------|---------|--------|
 | `PERF_SAFE` | No measurable regression (≤5%) or LOW risk change | Approve (performance aspect) |
-| `PERF_RISK` | Measurable regression 5–15%, or MEDIUM risk without benchmark | Approve with documented acknowledgment; user should be notified |
-| `PERF_REGRESSION` | Regression >15%, or HIGH risk without benchmark | **Block approval**. Escalate via `perf-optimization` skill |
+| `PERF_RISK` | Measurable/documented risk that may proceed only with written acceptance rationale | Conditional approval |
+| `PERF_PENDING` | Required baseline, benchmark, or telemetry evidence is insufficient | Do not close review; record expiry trigger and return for follow-up |
+| `PERF_REGRESSION` | Regression >15% or materially slower hot-path behavior without an approved exception | **Block approval**. Escalate via `perf-optimization` skill |
+| `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED` | Real regression required for parity, explicitly acknowledged by the user, with tracked optimization follow-up | Conditional approval only after acknowledgment + follow-up registration |
 
 ### Escalation
 
@@ -215,6 +249,18 @@ When verdict is `PERF_REGRESSION`:
    - **Redesign**: Ask implementer for an alternative approach
    - **Profile**: Invoke `perf-optimization` skill for root cause analysis
    - **User decision**: Present the trade-off (correctness vs performance) to the user
+
+When verdict is `PERF_PENDING`:
+
+1. Do NOT silently convert it to `PERF_SAFE` or `PERF_RISK`
+2. Record exactly what evidence is missing
+3. Record the expiry trigger: next same-module/surface code change or next full-gate cycle
+
+When verdict is `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`:
+
+1. Record the measured regression and why parity requires the fix now
+2. Capture explicit user acknowledgment
+3. Create or cite the tracked optimization follow-up before allowing approval
 
 ---
 
@@ -235,5 +281,5 @@ When verdict is `PERF_REGRESSION`:
 | Skip benchmarks for "trivial" hot-path changes | The SV processor incident was a "trivial" restructure | Always benchmark MEDIUM+ changes |
 | Benchmark only in debug mode | 10-50x slower, different hot paths | Always `--profile debug-release` |
 | Compare single runs | High variance | Use criterion (`--save-baseline`) or `hyperfine` (≥3 runs) |
-| Accept >15% regression "because parity requires it" | There is almost always an alternative implementation | Escalate and redesign |
+| Accept >15% regression "because parity requires it" without acknowledgment | Silent debt accumulates and the follow-up disappears | Use `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED` only with explicit acknowledgment and tracked follow-up |
 | Run benchmarks with other heavy processes | Noisy results | Quiesce or use `hyperfine` |
