@@ -113,6 +113,63 @@ class GateSmokeTest(unittest.TestCase):
         self.assertEqual(stdout_buffer.getvalue().splitlines(), ["alpha", "gamma"])
         self.assertEqual(stderr_buffer.getvalue().splitlines(), ["beta"])
 
+    def test_run_streaming_subprocess_mirrors_output_to_report_dir_logs(self) -> None:
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        command = [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "print('stdout-one'); "
+                "print('stderr-one', file=sys.stderr); "
+                "print('stdout-two')"
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
+            with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+                result = e2e_sweep_gate.run_streaming_subprocess(
+                    command,
+                    cwd=PROJECT_ROOT,
+                    env=dict(os.environ),
+                    report_dir=Path(report_dir),
+                    log_role="cargo T1-01/hg002",
+                    status_phase="tests",
+                )
+
+            log_paths = sorted((Path(report_dir) / "child-logs").glob("cargo-T1-01-hg002-*.log"))
+            stdout_log = [path for path in log_paths if path.name.endswith(".stdout.log")][0]
+            stderr_log = [path for path in log_paths if path.name.endswith(".stderr.log")][0]
+            stdout_log_lines = stdout_log.read_text(encoding="utf-8").splitlines()
+            stderr_log_lines = stderr_log.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.splitlines(), ["stdout-one", "stdout-two"])
+        self.assertEqual(result.stderr.splitlines(), ["stderr-one"])
+        self.assertEqual(len(log_paths), 2)
+        self.assertEqual(stdout_log_lines, ["stdout-one", "stdout-two"])
+        self.assertEqual(stderr_log_lines, ["stderr-one"])
+        self.assertIn("STATUS phase=tests event=child-output-log", stdout_buffer.getvalue())
+        self.assertEqual(stderr_buffer.getvalue().splitlines(), ["stderr-one"])
+
+    def test_idle_diagnostic_detail_includes_liveness_without_kill_action(self) -> None:
+        with mock.patch("scripts.e2e_sweep_gate.time.monotonic", return_value=125.0):
+            detail = e2e_sweep_gate.idle_diagnostic_detail(
+                child_pid=12345,
+                started_at=100.0,
+                last_byte_monotonic=110.0,
+                last_byte_wall=1_800_000_000.0,
+                liveness="alive=1,state=S-sleeping",
+            )
+
+        self.assertIn("child_pid=12345", detail)
+        self.assertIn("elapsed_seconds=25.0", detail)
+        self.assertIn("last_byte_at=2027-01-15T08:00:00Z", detail)
+        self.assertIn("idle_seconds=15.0", detail)
+        self.assertIn("liveness=alive=1,state=S-sleeping", detail)
+        self.assertIn("action=diagnostic-only", detail)
+
     def test_single_chrom_selection_uses_prefix_filter_without_exact(self) -> None:
         args = mock.Mock(cargo_extra_arg=[], test_threads=6)
         selector, exact = e2e_sweep_gate.sweep_test_selection("hg002", ["2"])
@@ -184,6 +241,132 @@ class GateSmokeTest(unittest.TestCase):
         self.assertTrue(payload["diagnosis_artifact"]["readiness"]["ready"])
         self.assertEqual(payload["diagnosis_artifact"]["readiness"]["status"], "ready")
         self.assertEqual(payload["diagnosis_artifact"]["test_threads"], 1)
+
+    def test_run_tests_and_report_sets_heartbeat_env_and_report_logs(self) -> None:
+        matrix = [("T1-01", "hg002", "1")]
+        passing_result = subprocess.CompletedProcess(["cargo"], 0, "running 1 test\n", "")
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
+            args = mock.Mock(
+                sweep_bed_root=PROJECT_ROOT / "tmp" / "sweep_beds",
+                fixture_source=PROJECT_ROOT / "tmp" / "sweep_fixtures" / "output",
+                cargo_extra_arg=[],
+                test_threads=2,
+                report_dir=Path(report_dir),
+                idle_diagnostic_seconds=30.0,
+            )
+            with mock.patch("scripts.e2e_sweep_gate.live_vardictjava_commit", return_value="deadbeef"):
+                with mock.patch(
+                    "scripts.e2e_sweep_gate.run_streaming_subprocess",
+                    return_value=passing_result,
+                ) as run_subprocess:
+                    rc = e2e_sweep_gate.run_tests_and_report(args, matrix)
+
+        self.assertEqual(rc, 0)
+        call_kwargs = run_subprocess.call_args.kwargs
+        heartbeat_value = call_kwargs["env"]["VARDICT_E2E_SWEEP_HEARTBEAT_LOG"]
+        self.assertTrue(heartbeat_value.startswith(str(Path(report_dir) / "heartbeats")))
+        self.assertEqual(call_kwargs["report_dir"], Path(report_dir))
+        self.assertEqual(call_kwargs["log_role"], "cargo-T1-01-hg002-pair001")
+        self.assertEqual(call_kwargs["idle_diagnostic_seconds"], 30.0)
+        self.assertEqual(call_kwargs["status_phase"], "tests")
+
+    def test_collect_runtime_records_parses_terminal_heartbeat(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
+            heartbeat_path = Path(report_dir) / "heartbeat.log"
+            heartbeat_path.write_text(
+                "\n".join(
+                    [
+                        "HEARTBEAT ts=1 phase=start config=T1-01 tag=hg002 chrom=1 chunk=0 trial=hg002_sweep::parity_e2e_sweep_hg002_chr1_chunk000 tiles=1 region_str=1:10-20",
+                        "HEARTBEAT ts=2 phase=end-ok config=T1-01 tag=hg002 chrom=1 chunk=0 trial=hg002_sweep::parity_e2e_sweep_hg002_chr1_chunk000 status=passed region_str=1:10-20 total_ms=1500 cache_ms=10 java_load_ms=20 rust_run_ms=1400 diff_ms=30",
+                        "not a heartbeat",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            records, summary = e2e_sweep_gate.collect_runtime_records(
+                heartbeat_path,
+                preset="T1-01",
+                tag="hg002",
+                test_threads=4,
+                cargo_test_name="hg002_sweep::parity_e2e_sweep_hg002_chr1_",
+                command="cargo test ...",
+                wrapper_pair_seconds=2.25,
+                libtest_seconds=1.75,
+            )
+
+        self.assertEqual(summary["malformed_heartbeat_lines"], 1)
+        self.assertEqual(summary["missing_heartbeat_logs"], 0)
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["schema_version"], 1)
+        self.assertEqual(record["preset"], "T1-01")
+        self.assertEqual(record["tag"], "hg002")
+        self.assertEqual(record["chrom"], "1")
+        self.assertEqual(record["chunk"], 0)
+        self.assertEqual(record["region_str"], "1:10-20")
+        self.assertEqual(record["status"], "passed")
+        self.assertEqual(record["telemetry_status"], "complete")
+        self.assertEqual(record["total_seconds"], 1.5)
+        self.assertEqual(record["phase_seconds"]["rust_run"], 1.4)
+        self.assertEqual(record["test_threads"], 4)
+        self.assertEqual(record["wrapper_pair_seconds"], 2.25)
+        self.assertEqual(record["libtest_seconds"], 1.75)
+
+    def test_run_tests_and_report_writes_runtime_jsonl_and_artifact_summary(self) -> None:
+        matrix = [("T1-01", "hg002", "1")]
+
+        def fake_run_streaming_subprocess(*_args, **kwargs):
+            heartbeat_path = Path(kwargs["env"]["VARDICT_E2E_SWEEP_HEARTBEAT_LOG"])
+            heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+            heartbeat_path.write_text(
+                "\n".join(
+                    [
+                        "HEARTBEAT ts=1 phase=start config=T1-01 tag=hg002 chrom=1 chunk=0 trial=hg002_sweep::parity_e2e_sweep_hg002_chr1_chunk000 tiles=1 region_str=1:10-20",
+                        "HEARTBEAT ts=2 phase=end-ok config=T1-01 tag=hg002 chrom=1 chunk=0 trial=hg002_sweep::parity_e2e_sweep_hg002_chr1_chunk000 status=passed region_str=1:10-20 total_ms=1200 cache_ms=10 java_load_ms=20 rust_run_ms=1100 diff_ms=30",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(
+                ["cargo"],
+                0,
+                "running 1 test\ntest result: ok. 1 passed; 0 failed; finished in 1.23s\n",
+                "",
+            )
+
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
+            args = mock.Mock(
+                sweep_bed_root=PROJECT_ROOT / "tmp" / "sweep_beds",
+                fixture_source=PROJECT_ROOT / "tmp" / "sweep_fixtures" / "output",
+                cargo_extra_arg=[],
+                test_threads=4,
+                report_dir=Path(report_dir),
+            )
+            with mock.patch("scripts.e2e_sweep_gate.live_vardictjava_commit", return_value="deadbeef"):
+                with mock.patch(
+                    "scripts.e2e_sweep_gate.run_streaming_subprocess",
+                    side_effect=fake_run_streaming_subprocess,
+                ):
+                    rc = e2e_sweep_gate.run_tests_and_report(args, matrix)
+
+            runtime_path = Path(report_dir) / "cell-runtimes.jsonl"
+            runtime_records = [json.loads(line) for line in runtime_path.read_text(encoding="utf-8").splitlines()]
+            payload = json.loads((Path(report_dir) / "parity-failure-report.json").read_text(encoding="utf-8"))
+            last_pass = json.loads((Path(report_dir) / "last-pass.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(runtime_records), 1)
+        self.assertEqual(runtime_records[0]["total_seconds"], 1.2)
+        self.assertEqual(runtime_records[0]["test_threads"], 4)
+        self.assertEqual(payload["runtime_summary"]["cell_runtimes_path"], str(runtime_path.resolve()))
+        self.assertEqual(payload["runtime_summary"]["tested_cell_count_with_telemetry"], 1)
+        self.assertEqual(payload["runtime_summary"]["missing_telemetry_count"], 0)
+        self.assertEqual(payload["runtime_summary"]["duration_seconds"]["max"], 1.2)
+        self.assertEqual(payload["diagnosis_artifact"]["readiness"]["status"], "not-needed")
+        self.assertEqual(last_pass["runtime_summary"]["runtime_record_count"], 1)
 
     def test_run_tests_and_report_accepts_config_tile_failure_format(self) -> None:
         matrix = [("T1-01", "hg002", "1")]

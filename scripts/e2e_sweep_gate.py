@@ -8,6 +8,15 @@ on both pass and fail, including diagnosis_artifact readiness/default_action
 metadata for config-e2e-diagnosis handoff plus report-level scope/completeness
 and warning-summary fields.
 
+Cargo child stdout/stderr can be mirrored to unique logs under --report-dir,
+and the wrapper sets VARDICT_E2E_SWEEP_HEARTBEAT_LOG so the Rust harness can
+append phase markers plus runtime telemetry to a side-channel file that never
+participates in TSV or JSONL parity comparisons. The wrapper aggregates those
+heartbeat records into report-dir/cell-runtimes.jsonl and adds an optional
+runtime_summary field to terminal artifacts. Optional idle diagnostics are
+disabled by default and report liveness context without killing the child
+process.
+
 When a single-chrom matrix is run with --allow-extra-beds against a broader BED
 root, the gate copies the selected BEDs into report-dir/scoped_beds and runs the
 Rust harness against that scoped root so cache validation matches staged fixtures.
@@ -64,6 +73,14 @@ PRESETS_TSV = PROJECT_ROOT / "scripts" / "config_presets.tsv"
 DEFAULT_TAGS = ("hg002", "na12878_exome", "na12878_lowcov")
 MERGE_PRESERVE_WORK = CANONICAL_FIXTURE_ROOT / ".manifest.cache_entries.gate_working.json"
 RUNNING_TESTS_RE = re.compile(r"running (\d+) tests?")
+LIBTEST_FINISHED_RE = re.compile(r"finished in ([0-9]+(?:\.[0-9]+)?)s")
+RUNTIME_TERMINAL_PHASES = {"end-ok", "end-error", "panic"}
+RUNTIME_PHASE_MS_FIELDS = {
+    "cache_ms": "cache",
+    "java_load_ms": "java_load",
+    "rust_run_ms": "rust_run",
+    "diff_ms": "diff",
+}
 FAILURE_REGION_PATTERNS = (
     re.compile(r"Mismatch in [^:]+: (([^:\s]+):\d+-\d+)"),
     re.compile(r"config=[^\s]+\s+tile=(([^:\s]+):\d+-\d+)"),
@@ -182,6 +199,15 @@ def build_parser() -> argparse.ArgumentParser:
             "other values. Set higher only on machines with plenty of free RAM."
         ),
     )
+    parser.add_argument(
+        "--idle-diagnostic-seconds",
+        type=float,
+        default=0.0,
+        help=(
+            "Disabled by default. When >0, emit diagnostic status if a cargo child "
+            "produces no stdout/stderr for this many seconds. This does not kill the child."
+        ),
+    )
     return parser
 
 
@@ -208,6 +234,8 @@ def normalize_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     args.report_dir = Path(args.report_dir).expanduser().resolve()
     if args.test_threads < 1:
         parser.error("--test-threads must be >= 1")
+    if args.idle_diagnostic_seconds < 0:
+        parser.error("--idle-diagnostic-seconds must be >= 0")
     return args
 
 
@@ -490,11 +518,315 @@ def warning_summary_payload(
     }
 
 
+def log_label(value: str) -> str:
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-._")
+    return (label or "child")[:120]
+
+
+def unique_log_stem(role: str, pid: int) -> str:
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"{log_label(role)}-{stamp}-{time.time_ns()}-pid{pid}"
+
+
+def heartbeat_log_path(report_dir: Path, role: str) -> Path:
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return report_dir / "heartbeats" / f"{log_label(role)}-{stamp}-{time.time_ns()}.log"
+
+
+def runtime_jsonl_path(report_dir: Path) -> Path:
+    return report_dir / "cell-runtimes.jsonl"
+
+
+def reset_runtime_jsonl(report_dir: Path) -> None:
+    path = runtime_jsonl_path(report_dir)
+    if path.exists():
+        path.unlink()
+
+
+def parse_libtest_seconds(output: str) -> float | None:
+    matches = LIBTEST_FINISHED_RE.findall(output)
+    if not matches:
+        return None
+    return float(matches[-1])
+
+
+def parse_heartbeat_line(line: str) -> tuple[dict[str, str] | None, str | None]:
+    if not line.startswith("HEARTBEAT "):
+        return None, "not-heartbeat"
+
+    fields: dict[str, str] = {}
+    for token in line.split()[1:]:
+        key, separator, value = token.partition("=")
+        if not separator or not key:
+            return None, f"malformed-token:{token}"
+        fields[key] = value
+    if "phase" not in fields:
+        return None, "missing-phase"
+    return fields, None
+
+
+def seconds_from_ms(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(int(value) / 1000.0, 3)
+    except ValueError:
+        return None
+
+
+def runtime_record_from_heartbeat(
+    *,
+    preset: str,
+    tag: str,
+    heartbeat_log: Path,
+    group: dict[str, object],
+    test_threads: int,
+    cargo_test_name: str,
+    command: str,
+    wrapper_pair_seconds: float,
+    libtest_seconds: float | None,
+) -> dict:
+    first = dict(group["first"])
+    terminal = group.get("terminal")
+    source = dict(terminal if isinstance(terminal, dict) else first)
+    telemetry_status = "complete" if isinstance(terminal, dict) else "partial"
+    phase_seconds = {
+        phase_name: seconds
+        for field_name, phase_name in RUNTIME_PHASE_MS_FIELDS.items()
+        if (seconds := seconds_from_ms(source.get(field_name))) is not None
+    }
+    total_seconds = seconds_from_ms(source.get("total_ms"))
+    status = source.get("status")
+    if status is None:
+        status = "partial" if telemetry_status == "partial" else "unknown"
+    chunk_raw = source.get("chunk", first.get("chunk", "0"))
+    try:
+        chunk = int(chunk_raw)
+    except ValueError:
+        chunk = None
+    chrom = source.get("chrom", first.get("chrom"))
+    record = {
+        "schema_version": 1,
+        "preset": source.get("config", preset),
+        "tag": source.get("tag", tag),
+        "chrom": chrom,
+        "chunk": chunk,
+        "chunk_id": f"{source.get('tag', tag)}/{chrom}/chunk{chunk_raw}",
+        "region_str": source.get("region_str", first.get("region_str")),
+        "status": status,
+        "telemetry_status": telemetry_status,
+        "total_seconds": total_seconds,
+        "phase_seconds": phase_seconds,
+        "test_threads": test_threads,
+        "cargo_test_name": cargo_test_name,
+        "command": command,
+        "heartbeat_log": str(heartbeat_log),
+        "wrapper_pair_seconds": round(wrapper_pair_seconds, 3),
+        "libtest_seconds": libtest_seconds,
+    }
+    return {key: value for key, value in record.items() if value is not None}
+
+
+def collect_runtime_records(
+    heartbeat_path: Path,
+    *,
+    preset: str,
+    tag: str,
+    test_threads: int,
+    cargo_test_name: str,
+    command: str,
+    wrapper_pair_seconds: float,
+    libtest_seconds: float | None,
+) -> tuple[list[dict], dict[str, int]]:
+    summary = {"malformed_heartbeat_lines": 0, "missing_heartbeat_logs": 0, "partial_records": 0}
+    if not heartbeat_path.is_file():
+        summary["missing_heartbeat_logs"] = 1
+        return [], summary
+
+    groups: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
+    with heartbeat_path.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            fields, error = parse_heartbeat_line(line)
+            if error is not None or fields is None:
+                summary["malformed_heartbeat_lines"] += 1
+                continue
+            if fields.get("phase") == "init":
+                continue
+            required = ("config", "tag", "chrom", "chunk", "trial")
+            if any(key not in fields for key in required):
+                summary["malformed_heartbeat_lines"] += 1
+                continue
+            key = tuple(fields[name] for name in required)
+            group = groups.setdefault(key, {"first": fields})
+            if fields.get("phase") in RUNTIME_TERMINAL_PHASES:
+                group["terminal"] = fields
+
+    records = [
+        runtime_record_from_heartbeat(
+            preset=preset,
+            tag=tag,
+            heartbeat_log=heartbeat_path,
+            group=group,
+            test_threads=test_threads,
+            cargo_test_name=cargo_test_name,
+            command=command,
+            wrapper_pair_seconds=wrapper_pair_seconds,
+            libtest_seconds=libtest_seconds,
+        )
+        for group in groups.values()
+    ]
+    summary["partial_records"] = sum(1 for record in records if record.get("telemetry_status") == "partial")
+    return records, summary
+
+
+def append_runtime_records(path: Path, records: list[dict]) -> None:
+    if not records:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def percentile(values: list[float], percentile_value: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = int(round((len(ordered) - 1) * percentile_value / 100.0))
+    return round(ordered[index], 3)
+
+
+def runtime_summary_payload(
+    args: argparse.Namespace,
+    runtime_state: dict[str, object],
+    *,
+    started_at: float,
+    tested_cell_count: int,
+    tested_pair_count: int,
+) -> dict:
+    records = list(runtime_state.get("records", []))
+    duration_values = [record["total_seconds"] for record in records if isinstance(record.get("total_seconds"), (int, float))]
+    telemetry_cells = {
+        (record.get("preset"), record.get("tag"), record.get("chrom"))
+        for record in records
+        if record.get("telemetry_status") == "complete"
+    }
+    has_runtime_gaps = any(
+        int(runtime_state.get(key, 0))
+        for key in ("partial_records", "missing_heartbeat_logs", "malformed_heartbeat_lines")
+    )
+    slowest = sorted(
+        (record for record in records if isinstance(record.get("total_seconds"), (int, float))),
+        key=lambda record: record["total_seconds"],
+        reverse=True,
+    )[:5]
+    return {
+        "schema_version": 1,
+        "cell_runtimes_path": str(runtime_jsonl_path(args.report_dir).resolve()),
+        "status": "missing" if not records else ("partial" if has_runtime_gaps else "complete"),
+        "tested_cell_count_with_telemetry": len(telemetry_cells),
+        "missing_telemetry_count": max(0, tested_cell_count - len(telemetry_cells)),
+        "runtime_record_count": len(records),
+        "tested_pair_count": tested_pair_count,
+        "malformed_heartbeat_lines": runtime_state.get("malformed_heartbeat_lines", 0),
+        "missing_heartbeat_logs": runtime_state.get("missing_heartbeat_logs", 0),
+        "partial_record_count": runtime_state.get("partial_records", 0),
+        "heartbeat_logs": list(runtime_state.get("heartbeat_logs", [])),
+        "total_wrapper_seconds": round(time.monotonic() - started_at, 3),
+        "duration_seconds": {
+            "observed_total": round(sum(duration_values), 3),
+            "p50": percentile(duration_values, 50),
+            "p95": percentile(duration_values, 95),
+            "max": round(max(duration_values), 3) if duration_values else None,
+        },
+        "slowest_cells": [
+            {
+                "preset": record.get("preset"),
+                "tag": record.get("tag"),
+                "chrom": record.get("chrom"),
+                "chunk": record.get("chunk"),
+                "region_str": record.get("region_str"),
+                "total_seconds": record.get("total_seconds"),
+                "status": record.get("status"),
+            }
+            for record in slowest
+        ],
+        "baseline": {
+            "status": "bootstrap-pending",
+            "rule": "The first successful canonical full-scope gate with runtime telemetry becomes the comparison baseline.",
+        },
+    }
+
+
+def update_runtime_state(runtime_state: dict[str, object], records: list[dict], parse_summary: dict[str, int], heartbeat_path: Path) -> None:
+    runtime_state.setdefault("records", []).extend(records)
+    runtime_state.setdefault("heartbeat_logs", []).append(str(heartbeat_path))
+    for key in ("malformed_heartbeat_lines", "missing_heartbeat_logs", "partial_records"):
+        runtime_state[key] = int(runtime_state.get(key, 0)) + int(parse_summary.get(key, 0))
+
+
+def timestamp_utc(epoch_seconds: float | None) -> str:
+    if epoch_seconds is None:
+        return "never"
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
+
+
+def process_liveness_summary(pid: int) -> str:
+    fields: list[str] = []
+    try:
+        os.kill(pid, 0)
+        fields.append("alive=1")
+    except OSError as error:
+        fields.append("alive=0")
+        fields.append(f"signal_check={log_label(error.__class__.__name__)}")
+
+    status_path = Path("/proc") / str(pid) / "status"
+    try:
+        status_fields: dict[str, str] = {}
+        with status_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                key, _, value = line.partition(":")
+                if key in {"State", "VmRSS", "Threads"}:
+                    status_fields[key] = log_label(value.strip().replace(" ", "_"))
+        for key in ("State", "VmRSS", "Threads"):
+            if key in status_fields:
+                fields.append(f"{key.lower()}={status_fields[key]}")
+    except OSError:
+        fields.append("proc_status=unavailable")
+
+    return ",".join(fields)
+
+
+def idle_diagnostic_detail(
+    *,
+    child_pid: int,
+    started_at: float,
+    last_byte_monotonic: float | None,
+    last_byte_wall: float | None,
+    liveness: str,
+) -> str:
+    now = time.monotonic()
+    elapsed = max(0.0, now - started_at)
+    idle_for = max(0.0, now - (last_byte_monotonic or started_at))
+    return (
+        f"child_pid={child_pid} elapsed_seconds={elapsed:.1f} "
+        f"last_byte_at={timestamp_utc(last_byte_wall)} idle_seconds={idle_for:.1f} "
+        f"liveness={liveness} action=diagnostic-only"
+    )
+
+
 def run_streaming_subprocess(
     cmd: list[str],
     *,
     cwd: Path,
     env: dict[str, str],
+    report_dir: Path | None = None,
+    log_role: str = "child",
+    idle_diagnostic_seconds: float = 0.0,
+    status_phase: str = "subprocess",
 ) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         cmd,
@@ -513,27 +845,81 @@ def run_streaming_subprocess(
     selector.register(process.stderr, selectors.EVENT_READ, data="stderr")
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
+    stdout_log: TextIO | None = None
+    stderr_log: TextIO | None = None
+    stdout_log_path: Path | None = None
+    stderr_log_path: Path | None = None
+    if report_dir is not None:
+        log_dir = report_dir / "child-logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stem = unique_log_stem(log_role, process.pid)
+        stdout_log_path = log_dir / f"{stem}.stdout.log"
+        stderr_log_path = log_dir / f"{stem}.stderr.log"
+        stdout_log = stdout_log_path.open("a", encoding="utf-8", buffering=1)
+        stderr_log = stderr_log_path.open("a", encoding="utf-8", buffering=1)
+        emit_status(
+            status_phase,
+            event="child-output-log",
+            detail=f"child_pid={process.pid} stdout_log={stdout_log_path} stderr_log={stderr_log_path}",
+        )
+
+    started_at = time.monotonic()
+    last_byte_monotonic: float | None = None
+    last_byte_wall: float | None = None
+    next_idle_diagnostic_at = started_at + idle_diagnostic_seconds if idle_diagnostic_seconds > 0 else None
 
     try:
         while selector.get_map():
-            for key, _mask in selector.select():
+            timeout = None
+            if next_idle_diagnostic_at is not None:
+                timeout = max(0.0, next_idle_diagnostic_at - time.monotonic())
+            events = selector.select(timeout=timeout)
+            if not events:
+                if idle_diagnostic_seconds > 0:
+                    emit_status(
+                        status_phase,
+                        event="idle-diagnostic",
+                        detail=idle_diagnostic_detail(
+                            child_pid=process.pid,
+                            started_at=started_at,
+                            last_byte_monotonic=last_byte_monotonic,
+                            last_byte_wall=last_byte_wall,
+                            liveness=process_liveness_summary(process.pid),
+                        ),
+                    )
+                    next_idle_diagnostic_at = time.monotonic() + idle_diagnostic_seconds
+                continue
+
+            for key, _mask in events:
                 stream = key.fileobj
                 raw_line = stream.readline()
                 if raw_line == "":
                     selector.unregister(stream)
                     continue
 
+                last_byte_monotonic = time.monotonic()
+                last_byte_wall = time.time()
+                if idle_diagnostic_seconds > 0:
+                    next_idle_diagnostic_at = last_byte_monotonic + idle_diagnostic_seconds
                 line = raw_line.rstrip("\n")
                 if key.data == "stderr":
+                    if stderr_log is not None:
+                        stderr_log.write(raw_line)
                     stderr_lines.append(line)
                     print(line, file=sys.stderr, flush=True)
                 else:
+                    if stdout_log is not None:
+                        stdout_log.write(raw_line)
                     stdout_lines.append(line)
                     print(line, flush=True)
     finally:
         selector.close()
         process.stdout.close()
         process.stderr.close()
+        if stdout_log is not None:
+            stdout_log.close()
+        if stderr_log is not None:
+            stderr_log.close()
 
     return subprocess.CompletedProcess(
         cmd,
@@ -1161,6 +1547,7 @@ def write_failure_report(
     tested_cell_count: int,
     tested_pair_count: int,
     warning_summary: dict,
+    runtime_summary: dict,
     stopped_after: str | None = None,
 ) -> int:
     report_path = failure_report_path(args)
@@ -1171,6 +1558,7 @@ def write_failure_report(
     payload["tested_pair_count"] = tested_pair_count
     payload["halted_early"] = tested_pair_count < payload["planned_pair_count"]
     payload["warning_summary"] = warning_summary
+    payload["runtime_summary"] = runtime_summary
     payload["diagnosis_artifact"] = diagnosis_artifact_payload(
         args,
         report_path,
@@ -1231,6 +1619,14 @@ def run_tests_and_report(
     total_pairs = len(pairs)
     tested_cell_count = 0
     emit_status("tests", started_at=tests_started_at, completed=0, total=total_pairs, event="start")
+    reset_runtime_jsonl(args.report_dir)
+    runtime_state: dict[str, object] = {
+        "records": [],
+        "heartbeat_logs": [],
+        "malformed_heartbeat_lines": 0,
+        "missing_heartbeat_logs": 0,
+        "partial_records": 0,
+    }
 
     for pair_index, (preset, tag) in enumerate(pairs, start=1):
         pair_chroms = chroms_by_pair[(preset, tag)]
@@ -1240,6 +1636,10 @@ def run_tests_and_report(
         env["VARDICT_E2E_SWEEP_CONFIG"] = preset
         env["VARDICT_E2E_SWEEP_BED_ROOT"] = str(sweep_bed_root)
         env["CI"] = "true"
+        log_role = f"cargo-{preset}-{tag}-pair{pair_index:03}"
+        heartbeat_path = heartbeat_log_path(args.report_dir, log_role)
+        heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+        env["VARDICT_E2E_SWEEP_HEARTBEAT_LOG"] = str(heartbeat_path)
         cmd = sweep_test_command(args, test_name, exact=exact_selector)
         emit_status(
             "tests",
@@ -1248,10 +1648,32 @@ def run_tests_and_report(
             total=total_pairs,
             active=f"{preset}/{tag}",
             event="pair-start",
-            detail=f"cmd={reproducer}",
+            detail=f"cmd={reproducer} heartbeat_log={heartbeat_path}",
         )
-        result = run_streaming_subprocess(cmd, cwd=PROJECT_ROOT, env=env)
+        pair_started_at = time.monotonic()
+        result = run_streaming_subprocess(
+            cmd,
+            cwd=PROJECT_ROOT,
+            env=env,
+            report_dir=args.report_dir,
+            log_role=log_role,
+            idle_diagnostic_seconds=getattr(args, "idle_diagnostic_seconds", 0.0),
+            status_phase="tests",
+        )
+        wrapper_pair_seconds = time.monotonic() - pair_started_at
         combined_output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+        runtime_records, runtime_parse_summary = collect_runtime_records(
+            heartbeat_path,
+            preset=preset,
+            tag=tag,
+            test_threads=args.test_threads,
+            cargo_test_name=test_name,
+            command=reproducer,
+            wrapper_pair_seconds=wrapper_pair_seconds,
+            libtest_seconds=parse_libtest_seconds(combined_output),
+        )
+        update_runtime_state(runtime_state, runtime_records, runtime_parse_summary, heartbeat_path)
+        append_runtime_records(runtime_jsonl_path(args.report_dir), runtime_records)
         stderr_source = result.stderr if result.stderr else combined_output
         stderr_tail = stderr_source.splitlines()[-50:]
         running_match = RUNNING_TESTS_RE.search(result.stdout)
@@ -1289,6 +1711,13 @@ def run_tests_and_report(
                 tested_cell_count=tested_cell_count,
                 tested_pair_count=pair_index,
                 warning_summary=warning_summary,
+                runtime_summary=runtime_summary_payload(
+                    args,
+                    runtime_state,
+                    started_at=tests_started_at,
+                    tested_cell_count=tested_cell_count,
+                    tested_pair_count=pair_index,
+                ),
                 stopped_after=f"{preset}/{tag}",
             )
 
@@ -1340,6 +1769,13 @@ def run_tests_and_report(
             tested_cell_count=tested_cell_count,
             tested_pair_count=pair_index,
             warning_summary=warning_summary,
+            runtime_summary=runtime_summary_payload(
+                args,
+                runtime_state,
+                started_at=tests_started_at,
+                tested_cell_count=tested_cell_count,
+                tested_pair_count=pair_index,
+            ),
             stopped_after=f"{preset}/{tag}",
         )
 
@@ -1353,6 +1789,13 @@ def run_tests_and_report(
             for preset, tag, chrom in matrix
         ],
     }
+    pass_payload["runtime_summary"] = runtime_summary_payload(
+        args,
+        runtime_state,
+        started_at=tests_started_at,
+        tested_cell_count=tested_cell_count,
+        tested_pair_count=total_pairs,
+    )
     args.report_dir.mkdir(parents=True, exist_ok=True)
     write_json_atomic(last_pass_path(args), pass_payload)
     green_report = failure_report_base(matrix, report_commit)
@@ -1362,6 +1805,7 @@ def run_tests_and_report(
     green_report["tested_pair_count"] = green_report["planned_pair_count"]
     green_report["halted_early"] = False
     green_report["warning_summary"] = warning_summary
+    green_report["runtime_summary"] = pass_payload["runtime_summary"]
     green_report["diagnosis_artifact"] = diagnosis_artifact_payload(
         args,
         report_path,

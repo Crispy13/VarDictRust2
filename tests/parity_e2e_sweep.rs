@@ -7,6 +7,7 @@ use libtest_mimic::Arguments;
 // Regenerate goldens with: bash scripts/gen_e2e_sweep_golden.sh
 // Shard runs with: VARDICT_E2E_SWEEP_SHARD=i/N cargo test --profile debug-release --test parity_e2e_sweep -- --include-ignored --test-threads=10
 // Scope configs with: VARDICT_E2E_SWEEP_CONFIG=<config>
+// Optional runtime diagnostics: VARDICT_E2E_SWEEP_HEARTBEAT_LOG=<path>
 // Legacy exact selectors like hg002_sweep::parity_e2e_sweep_hg002 are rewritten
 // to the corresponding chunk-trial prefix for backwards-compatible repro commands.
 #[path = "common/mod.rs"]

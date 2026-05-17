@@ -79,6 +79,15 @@ Treat the artifact as diagnosis-ready only when all of the following are true:
 - `warning_summary.readiness_impact.status` is `ready`
 - each failure entry carries `preset`, `tag`, and `region_str`
 
+Optional runtime telemetry fields are compatible with the same schema-v2 contract:
+
+- `runtime_summary` may appear at the artifact root and must be treated as side-channel
+   metadata, not parity evidence.
+- When present, `runtime_summary.cell_runtimes_path` points at the report-root
+   `cell-runtimes.jsonl` file containing per-chunk runtime records.
+- Missing or partial runtime telemetry does not change diagnosis readiness by itself;
+   Review Gate/change-impact-review consumes it during the post-repair performance step.
+
 Compatibility behavior for older schema-v2 artifacts:
 
 - Older schema-v2 artifacts without the completeness or warning fields remain readable as historical context.
@@ -325,9 +334,15 @@ Confirm the fix resolves the original failure without introducing regressions.
 4. Re-run the same full declared gate scope recorded in the reviewed repair plan file and
    the source artifact's `original_matrix_scope`. Do not silently narrow verification to
    only the formerly failing preset, tag, chromosome, or region.
-5. If additional failures remain in that same full scope, loop back to Phase 2 for the
+5. If that same full-scope rerun passes after a parity repair, record the repair as
+   `PERF_PENDING` and return to Orchestrator for Review Gate/change-impact-review before
+   treating the repair as approved. The final repair report must include one of
+   `PERF_SAFE`, `PERF_RISK`, or `PERF_REGRESSION`.
+6. If additional failures remain in that same full scope, loop back to Phase 2 for the
    next failure.
-6. When the same full-scope gate passes, report CONFIG-E2E PASS.
+7. When the same full-scope gate passes and the post-repair performance verdict is not
+   `PERF_REGRESSION`, report CONFIG-E2E PASS. `PERF_RISK` is conditional and must carry
+   the Review Gate rationale, including bootstrap-baseline notation when applicable.
 
 ### Outputs
 

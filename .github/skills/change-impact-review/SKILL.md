@@ -1,6 +1,6 @@
 ---
 name: change-impact-review
-description: "Assess performance impact of code changes before approval. Use when: reviewing code changes, pre-merge performance gate, benchmark before/after, regression detection, hot path change, allocator change, collection swap, algorithm change, loop modification. Produces PERF_SAFE / PERF_RISK / PERF_REGRESSION verdict."
+description: "Assess performance impact of code changes before approval. Use when: reviewing code changes, pre-merge performance gate, E2E parity repair performance review, benchmark before/after, runtime telemetry review, regression detection, hot path change, allocator change, collection swap, algorithm change, loop modification. Produces PERF_SAFE / PERF_RISK / PERF_REGRESSION verdict."
 argument-hint: "Describe the change, e.g. 'SV processor find_match loop restructured' or 'review PR #42 for perf impact'"
 ---
 
@@ -23,6 +23,11 @@ Classifies risk, runs benchmarks when needed, and produces a binding verdict.
 - Documentation-only changes (`.md`, comments with no logic change)
 - Test-only changes (`#[cfg(test)]` modules, `tests/` directory)
 - CI/build configuration changes (`Cargo.toml` dependency bumps without feature changes)
+
+Exception: after an E2E parity repair, Orchestrator may still route this skill for a
+`PERF_PENDING` review even when the repair looks fixture/provenance-only. In that mode,
+verify the diff really has zero `.rs` source/test changes and zero `scripts/` changes
+before classifying it as low-risk/data-only.
 ---
 
 ## Caller Context
@@ -42,6 +47,31 @@ When the `Review Gate` loads this skill during Section 3 (Performance Impact):
 - Your verdict is **binding** — it determines whether the change is approved
 - `PERF_REGRESSION` **blocks approval** and must be escalated via the orchestrator
 - If the Port Engineer already included an advisory verdict, review it but produce your own independent classification
+
+### E2E Post-Repair Mode (Review Gate / Orchestrator)
+After an E2E parity repair and successful verification rerun, the repair remains
+`PERF_PENDING` until this skill emits `PERF_SAFE`, `PERF_RISK`, or `PERF_REGRESSION`.
+Use the repair diff, the terminal artifact `runtime_summary`, and the referenced
+`cell-runtimes.jsonl` as evidence. Runtime telemetry is side-channel metadata; it never
+changes parity PASS/FAIL, but it can change the performance verdict.
+
+Rules:
+- Fixture/provenance-only classification requires evidence of zero `.rs` source/test
+  changes and zero `scripts/` changes in the repair diff. If any Rust or script file
+  changed, use the normal risk decision tree.
+- If no prior canonical full-scope runtime baseline exists, classify unexplained timing
+  uncertainty as `PERF_RISK` with explicit `bootstrap-baseline` notation rather than a
+  measured regression.
+- The first successful canonical full-scope gate with runtime telemetry is the baseline
+  candidate for later comparisons. Bounded diagnostic runs can inform judgment but cannot
+  establish the canonical baseline.
+- `PERF_SAFE` requires no hot-path concern, no suspicious slow cells in the runtime
+  summary, and either a usable baseline or a clear low-risk/data-only rationale.
+- `PERF_RISK` covers missing baseline, noisy telemetry, partial/missing runtime records,
+  or slow cells that are not yet proven regressions.
+- `PERF_REGRESSION` is reserved for clear before/after regressions, obvious hot-path
+  slowdowns, or telemetry that shows a repair made the gate materially slower with no
+  parity-required justification.
 
 ## Step 1: Classify Risk
 

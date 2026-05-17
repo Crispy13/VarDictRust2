@@ -398,6 +398,73 @@ If any workflow YAML was modified, validate syntax:
 python -c "import yaml; yaml.safe_load(open('.github/workflows/{file}.yml'))"
 ```
 
+---
+
+## Phase 6: Work Report
+
+After Phase 5 passes, write a work report so that other agents can understand what
+changed and why without re-reading the entire infrastructure.
+
+### 6.1 File Location
+
+Write the report in workspace memory with file name: `wf-change-{short-slug}-{YYYYMMDD}.md`
+
+where `{short-slug}` is a 2–4 word kebab-case summary of the change (e.g.
+`add-workflow-inspector-skill`, `rename-shard-debugger`, `add-somatic-parity-test`).
+
+### 6.2 Report Template
+
+```markdown
+# Workflow Change: {title}
+
+**Date:** {YYYY-MM-DD}
+**Risk:** {LOW | MEDIUM | HIGH}
+**Status:** COMPLETE
+
+## What Changed
+
+{One or two sentence summary of the change.}
+
+## Files Modified
+
+| File | Change | Notes |
+|------|--------|-------|
+| {path} | created / modified / deleted / renamed | {brief reason} |
+
+## Cross-References Updated
+
+{List of files where a reference was updated, or "None."}
+
+## Reachability After Change
+
+{For each new or modified component: how is it now activated?
+Or "No reachability changes." if no new components were added.}
+
+## Why This Change Was Made
+
+{Context sentence or two: what prompted this, what it unlocks or fixes.}
+
+## Impact on Existing Agents
+
+{Call out any agent whose behavior or invocation path is affected.
+Or "No impact on existing agents." if none.}
+
+## Known Gaps or Follow-Ups
+
+{Optional. List anything deferred or intentionally left out.
+Or "None." if the change is self-contained.}
+```
+
+### 6.3 Rules
+
+- Write the report even for LOW-risk changes. Other agents read these to stay current.
+- Keep every section concise — bullet points preferred over prose.
+- Do not copy-paste the Phase 3 impact report verbatim; the work report is a
+  post-implementation summary for other agents, not a pre-approval checklist.
+- Date the file with the actual implementation date, not the request date.
+- Announce the report path in chat after writing it so the user and any supervising
+  orchestrator can find it.
+
 ### 5.5 Test Execution (if tests were affected)
 
 If the change modified test files, test configuration, or fixture scripts:

@@ -15,6 +15,9 @@
 //! Environment:
 //! - `VARDICT_E2E_SWEEP_CONFIG=<name>` selects the cache layout; defaults to `default`.
 //! - `VARDICT_E2E_SWEEP_SHARD=i/N` optionally runs only one shard of the tile set.
+//! - `VARDICT_E2E_SWEEP_HEARTBEAT_LOG=<path>` appends diagnostic phase markers and runtime
+//!   telemetry to a side-channel file while also echoing them to stderr. Heartbeats never enter
+//!   captured variant buffers, TSV rows, JSONL fixtures, or parity comparisons.
 //! - `CI=true` converts missing-cache handling into a hard panic instead of a local skip.
 //!
 //! Run with:
@@ -44,15 +47,15 @@
 // Phase 4 (somatic): pub(crate) visibility on helpers cross-binary somatic reuse.
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
-use std::io::{self, BufRead, BufReader, Read};
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::UNIX_EPOCH;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use libtest_mimic::{Failed, Trial};
 use serde_json::Value;
@@ -67,6 +70,7 @@ pub const MAX_FAILURES: usize = 10;
 pub const CHUNK_SIZE: usize = 20_000;
 
 static FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static HEARTBEAT_LOG: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 
 fn sweep_bed_root() -> PathBuf {
     if let Ok(root) = std::env::var("VARDICT_E2E_SWEEP_BED_ROOT") {
@@ -128,6 +132,14 @@ struct ChunkPlan {
     tiles: Arc<Vec<TileKey>>,
     start: usize,
     end: usize,
+}
+
+#[derive(Default)]
+struct ChunkRuntimeTimings {
+    cache_ms: Option<u128>,
+    java_load_ms: Option<u128>,
+    rust_run_ms: Option<u128>,
+    diff_ms: Option<u128>,
 }
 
 pub fn reset_failure_count() {
@@ -257,14 +269,51 @@ fn run_chunk_trial(
     end: usize,
     trial_name: String,
 ) -> Result<(), String> {
+    let trial_started = Instant::now();
+    let mut timings = ChunkRuntimeTimings::default();
+    let mut final_status = "passed";
+    let region_str = chunk_region_str(&tiles[start..end]);
+    emit_chunk_heartbeat(
+        &context,
+        &trial_name,
+        &chrom,
+        ordinal,
+        "start",
+        Some(&format!(
+            "tiles={} window={start}..{end} region_str={}",
+            end - start,
+            heartbeat_escape(&region_str)
+        )),
+    );
     let result = catch_unwind(AssertUnwindSafe(|| {
         if FAILURE_COUNT.load(Ordering::Relaxed) >= MAX_FAILURES {
+            final_status = "skipped";
+            emit_chunk_heartbeat(
+                &context,
+                &trial_name,
+                &chrom,
+                ordinal,
+                "cap-skip",
+                Some(&format!("max_failures={MAX_FAILURES}")),
+            );
             eprintln!("{trial_name}: skipped after MAX_FAILURES cap ({MAX_FAILURES})");
             return Ok(());
         }
 
+        emit_chunk_heartbeat(&context, &trial_name, &chrom, ordinal, "cache-start", None);
+        let cache_started = Instant::now();
         if let Err(error) = validate_tag_cache(&context) {
+            timings.cache_ms = Some(elapsed_ms(cache_started));
+            emit_chunk_heartbeat(
+                &context,
+                &trial_name,
+                &chrom,
+                ordinal,
+                "cache-failed",
+                Some(&format!("error={}", heartbeat_escape(&error))),
+            );
             if is_ci() {
+                final_status = "failed";
                 return fail_or_skip_after_cap(
                     &trial_name,
                     format!(
@@ -276,34 +325,135 @@ fn run_chunk_trial(
             if !context.cache_skip_logged.swap(true, Ordering::Relaxed) {
                 handle_missing_cache(&context.tag, &error);
             }
+            final_status = "skipped";
             return Ok(());
         }
+        timings.cache_ms = Some(elapsed_ms(cache_started));
+        emit_chunk_heartbeat(&context, &trial_name, &chrom, ordinal, "cache-ok", None);
 
         let window = &tiles[start..end];
-        let java = load_java_tsv_chunk(&context.tag, &chrom, &context.config_name, window)
-            .map_err(|error| {
-                format!(
-                    "Failed to load cached Java TSV chunk for {}/{chrom} chunk {ordinal}: {error}",
-                    context.tag
-                )
-            })?;
-        let rust = run_rust_chunk(&context, window).map_err(|error| {
+        emit_chunk_heartbeat(
+            &context,
+            &trial_name,
+            &chrom,
+            ordinal,
+            "java-load-start",
+            Some(&format!("tiles={}", window.len())),
+        );
+        let java_started = Instant::now();
+        let java_result = load_java_tsv_chunk(&context.tag, &chrom, &context.config_name, window);
+        timings.java_load_ms = Some(elapsed_ms(java_started));
+        let java = java_result.map_err(|error| {
+            final_status = "failed";
+            format!(
+                "Failed to load cached Java TSV chunk for {}/{chrom} chunk {ordinal}: {error}",
+                context.tag
+            )
+        })?;
+        emit_chunk_heartbeat(
+            &context,
+            &trial_name,
+            &chrom,
+            ordinal,
+            "java-load-ok",
+            Some(&format!("rows={}", count_rows(&java))),
+        );
+        emit_chunk_heartbeat(
+            &context,
+            &trial_name,
+            &chrom,
+            ordinal,
+            "rust-run-start",
+            None,
+        );
+        let rust_started = Instant::now();
+        let rust_result = run_rust_chunk(&context, window, &trial_name, &chrom, ordinal);
+        timings.rust_run_ms = Some(elapsed_ms(rust_started));
+        let rust = rust_result.map_err(|error| {
+            final_status = "failed";
             format!(
                 "Failed to run Rust chunk for {}/{chrom} chunk {ordinal}: {error}",
                 context.tag
             )
         })?;
+        emit_chunk_heartbeat(
+            &context,
+            &trial_name,
+            &chrom,
+            ordinal,
+            "rust-run-ok",
+            Some(&format!("rows={}", count_rows(&rust))),
+        );
+        emit_chunk_heartbeat(&context, &trial_name, &chrom, ordinal, "diff-start", None);
+        let diff_started = Instant::now();
         let failures = diff_chunk(&java, &rust, &context.config_name);
+        timings.diff_ms = Some(elapsed_ms(diff_started));
+        emit_chunk_heartbeat(
+            &context,
+            &trial_name,
+            &chrom,
+            ordinal,
+            "diff-complete",
+            Some(&format!("mismatches={}", failures.len())),
+        );
         if failures.is_empty() {
             return Ok(());
         }
 
+        final_status = "failed";
         fail_or_skip_after_cap(&trial_name, format_report(&failures))
     }));
 
     match result {
-        Ok(result) => result,
+        Ok(Ok(())) => {
+            emit_chunk_heartbeat(
+                &context,
+                &trial_name,
+                &chrom,
+                ordinal,
+                "end-ok",
+                Some(&chunk_runtime_detail(
+                    final_status,
+                    &region_str,
+                    elapsed_ms(trial_started),
+                    &timings,
+                    None,
+                )),
+            );
+            Ok(())
+        }
+        Ok(Err(error)) => {
+            emit_chunk_heartbeat(
+                &context,
+                &trial_name,
+                &chrom,
+                ordinal,
+                "end-error",
+                Some(&chunk_runtime_detail(
+                    "failed",
+                    &region_str,
+                    elapsed_ms(trial_started),
+                    &timings,
+                    Some(&error),
+                )),
+            );
+            Err(error)
+        }
         Err(payload) => {
+            emit_chunk_heartbeat(
+                &context,
+                &trial_name,
+                &chrom,
+                ordinal,
+                "panic",
+                Some(&chunk_runtime_detail(
+                    "panic",
+                    &region_str,
+                    elapsed_ms(trial_started),
+                    &timings,
+                    None,
+                )),
+            );
             if let Some(message) = payload.downcast_ref::<&'static str>() {
                 return Err((*message).to_string());
             }
@@ -315,6 +465,51 @@ fn run_chunk_trial(
     }
 }
 
+fn elapsed_ms(started_at: Instant) -> u128 {
+    started_at.elapsed().as_millis()
+}
+
+fn chunk_region_str(window: &[TileKey]) -> String {
+    match (window.first(), window.last()) {
+        (Some(first), Some(last)) if first.chrom == last.chrom => {
+            format!("{}:{}-{}", first.chrom, first.start, last.end)
+        }
+        (Some(first), Some(last)) => format!(
+            "{}:{}-{}:{}",
+            first.chrom, first.start, last.chrom, last.end
+        ),
+        _ => "unavailable".to_string(),
+    }
+}
+
+fn chunk_runtime_detail(
+    status: &str,
+    region_str: &str,
+    total_ms: u128,
+    timings: &ChunkRuntimeTimings,
+    error: Option<&str>,
+) -> String {
+    let mut parts = vec![
+        format!("status={status}"),
+        format!("region_str={}", heartbeat_escape(region_str)),
+        format!("total_ms={total_ms}"),
+    ];
+    push_timing_detail(&mut parts, "cache_ms", timings.cache_ms);
+    push_timing_detail(&mut parts, "java_load_ms", timings.java_load_ms);
+    push_timing_detail(&mut parts, "rust_run_ms", timings.rust_run_ms);
+    push_timing_detail(&mut parts, "diff_ms", timings.diff_ms);
+    if let Some(error) = error {
+        parts.push(format!("error={}", heartbeat_escape(error)));
+    }
+    parts.join(" ")
+}
+
+fn push_timing_detail(parts: &mut Vec<String>, key: &str, value: Option<u128>) {
+    if let Some(value) = value {
+        parts.push(format!("{key}={value}"));
+    }
+}
+
 fn fail_or_skip_after_cap(trial_name: &str, message: String) -> Result<(), String> {
     let previous = FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
     if previous >= MAX_FAILURES {
@@ -323,6 +518,82 @@ fn fail_or_skip_after_cap(trial_name: &str, message: String) -> Result<(), Strin
     }
 
     Err(message)
+}
+
+fn heartbeat_log() -> Option<&'static Mutex<File>> {
+    HEARTBEAT_LOG
+        .get_or_init(|| {
+            let path = std::env::var("VARDICT_E2E_SWEEP_HEARTBEAT_LOG").ok()?;
+            let path = path.trim();
+            if path.is_empty() {
+                return None;
+            }
+            let path = PathBuf::from(path);
+            if let Some(parent) = path.parent() {
+                if let Err(error) = fs::create_dir_all(parent) {
+                    eprintln!(
+                        "HEARTBEAT phase=init status=disabled reason=create-dir-failed path={} error={}",
+                        path.display(),
+                        heartbeat_escape(&error.to_string())
+                    );
+                    return None;
+                }
+            }
+            match OpenOptions::new().create(true).append(true).open(&path) {
+                Ok(file) => Some(Mutex::new(file)),
+                Err(error) => {
+                    eprintln!(
+                        "HEARTBEAT phase=init status=disabled reason=open-failed path={} error={}",
+                        path.display(),
+                        heartbeat_escape(&error.to_string())
+                    );
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+fn emit_chunk_heartbeat(
+    context: &TagContext,
+    trial_name: &str,
+    chrom: &str,
+    ordinal: usize,
+    phase: &str,
+    detail: Option<&str>,
+) {
+    let mut line = format!(
+        "HEARTBEAT ts={} phase={phase} config={} tag={} chrom={chrom} chunk={ordinal} trial={trial_name}",
+        heartbeat_timestamp(),
+        context.config_name,
+        context.tag,
+    );
+    if let Some(detail) = detail {
+        line.push(' ');
+        line.push_str(detail);
+    }
+
+    eprintln!("{line}");
+    if let Some(handle) = heartbeat_log() {
+        if let Ok(mut file) = handle.lock() {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+}
+
+fn heartbeat_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn heartbeat_escape(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join("_")
+}
+
+fn count_rows(rows_by_tile: &BTreeMap<TileKey, Vec<String>>) -> usize {
+    rows_by_tile.values().map(Vec::len).sum()
 }
 
 fn validate_tag_cache(context: &TagContext) -> Result<(), String> {
@@ -591,6 +862,9 @@ fn load_java_tsv_chunk(
 fn run_rust_chunk(
     context: &TagContext,
     tiles: &[TileKey],
+    trial_name: &str,
+    chrom: &str,
+    ordinal: usize,
 ) -> io::Result<BTreeMap<TileKey, Vec<String>>> {
     let regions = build_regions(tiles)?;
     let _guard = init_sweep_scope(
@@ -601,7 +875,16 @@ fn run_rust_chunk(
     let captured = Arc::new(Mutex::new(String::new()));
     let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
     GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Buffer(captured.clone()));
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "rust-simple-start",
+        None,
+    );
     simple_mode.not_parallel();
+    emit_chunk_heartbeat(context, trial_name, chrom, ordinal, "rust-simple-end", None);
 
     let output = super::common::take_captured_output(&captured);
     let mut rows_by_tile = empty_tile_map(tiles);
