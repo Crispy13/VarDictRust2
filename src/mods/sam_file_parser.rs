@@ -4,12 +4,18 @@
 //! opens overlapping-query iterators, and streams filtered reads through
 //! RecordPreprocessor's filter cascade to CigarParser.
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use rust_htslib::bam::{self, HeaderView, Read as BamRead};
 
 use crate::data::{InitialData, Region};
 use crate::scope::{GlobalReadOnlyScope, Scope};
+
+thread_local! {
+    static SAM_VIEW_READERS: RefCell<HashMap<String, bam::IndexedReader>> =
+        RefCell::new(HashMap::new());
+}
 
 const _: fn() = {
     fn check() {
@@ -156,6 +162,7 @@ pub struct RecordPreprocessor {
     pub duplicate_reads: i32,
 
     current_reader: Option<bam::IndexedReader>,
+    current_bam_path: Option<String>,
     current_record: bam::Record,
     filter: u16,
     duplicates: HashSet<String>,
@@ -189,6 +196,7 @@ impl RecordPreprocessor {
             filter,
             duplicates: HashSet::new(),
             first_matching_position: -1,
+            current_bam_path: None,
         };
 
         // Java constructor calls nextReader() at end
@@ -237,9 +245,9 @@ impl RecordPreprocessor {
             return;
         }
 
-        // Close current reader (Java: if (currentReader != null) currentReader.close())
-        // In Rust, dropping the IndexedReader closes it; just replace with None first
-        self.current_reader = None;
+        // Java closes the current SamView before opening the next one. Reusing the reader
+        // preserves fetch/read semantics while avoiding repeated BAM index reloads.
+        self.release_current_reader();
 
         // Java: bams.pollLast() — we use pop() since our Vec is reversed
         let bam_path = self.bams.pop().unwrap();
@@ -249,8 +257,12 @@ impl RecordPreprocessor {
 
         // Open IndexedReader — equivalent to SamView constructor
         // Ported from: SamView.java:L20-L24
-        let mut reader = bam::IndexedReader::from_path(&bam_path)
-            .unwrap_or_else(|e| panic!("Failed to open BAM file {}: {}", bam_path, e));
+        let mut reader = SAM_VIEW_READERS
+            .with(|cached_readers| cached_readers.borrow_mut().remove(&bam_path))
+            .unwrap_or_else(|| {
+                bam::IndexedReader::from_path(&bam_path)
+                    .unwrap_or_else(|e| panic!("Failed to open BAM file {}: {}", bam_path, e))
+            });
 
         // Set thread count for decompression (performance, not parity-critical)
         reader.set_threads(1).ok();
@@ -277,11 +289,22 @@ impl RecordPreprocessor {
         let _ = conf.validation_stringency; // Acknowledge the field exists
 
         self.current_reader = Some(reader);
+        self.current_bam_path = Some(bam_path);
 
         // Java: duplicates = new HashSet<>()
         self.duplicates = HashSet::new();
         // Java: firstMatchingPosition = -1
         self.first_matching_position = -1;
+    }
+
+    fn release_current_reader(&mut self) {
+        if let (Some(bam_path), Some(reader)) =
+            (self.current_bam_path.take(), self.current_reader.take())
+        {
+            SAM_VIEW_READERS.with(|cached_readers| {
+                cached_readers.borrow_mut().insert(bam_path, reader);
+            });
+        }
     }
 
     // Ported from: RecordPreprocessor.java:L103-L115
@@ -446,6 +469,12 @@ impl RecordPreprocessor {
     pub fn get_chr_name(&self) -> String {
         let conf = &GlobalReadOnlyScope::instance().conf;
         get_chr_name(&self.region, conf)
+    }
+}
+
+impl Drop for RecordPreprocessor {
+    fn drop(&mut self) {
+        self.release_current_reader();
     }
 }
 

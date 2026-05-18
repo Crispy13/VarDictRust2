@@ -3,6 +3,7 @@ use serde::de::Deserializer;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 /// Serializes a HashMap<i32, V> as sorted array of pairs: [[key, value], ...]
 pub fn serialize_sorted_int_map<V: Serialize, S: Serializer>(
@@ -19,10 +20,16 @@ pub fn serialize_sorted_int_map<V: Serialize, S: Serializer>(
 }
 
 /// Serializes an IndexMap<K, V> as array of pairs in insertion order: [[key, value], ...]
-pub fn serialize_indexmap_as_pairs<K: Serialize, V: Serialize, S: Serializer>(
-    map: &IndexMap<K, V>,
+pub fn serialize_indexmap_as_pairs<K, V, H, S>(
+    map: &IndexMap<K, V, H>,
     serializer: S,
-) -> Result<S::Ok, S::Error> {
+) -> Result<S::Ok, S::Error>
+where
+    K: Serialize,
+    V: Serialize,
+    H: BuildHasher,
+    S: Serializer,
+{
     let mut seq = serializer.serialize_seq(Some(map.len()))?;
     for (key, value) in map {
         seq.serialize_element(&(key, value))?;
@@ -68,16 +75,19 @@ where
 
 /// Deserializes [[K, V], ...] JSON array → IndexMap<K, V>
 /// Mirror of serialize_indexmap_as_pairs.
-pub fn deserialize_indexmap_as_pairs<'de, K, V, D>(
+pub fn deserialize_indexmap_as_pairs<'de, K, V, H, D>(
     deserializer: D,
-) -> Result<IndexMap<K, V>, D::Error>
+) -> Result<IndexMap<K, V, H>, D::Error>
 where
     K: Deserialize<'de> + std::hash::Hash + Eq,
     V: Deserialize<'de>,
+    H: BuildHasher + Default,
     D: Deserializer<'de>,
 {
     let entries = Vec::<(K, V)>::deserialize(deserializer)?;
-    Ok(entries.into_iter().collect())
+    let mut map = IndexMap::with_capacity_and_hasher(entries.len(), H::default());
+    map.extend(entries);
+    Ok(map)
 }
 
 /// Serializes a BTreeMap<String, V> as sorted array of pairs: [["key", value], ...]
@@ -110,9 +120,8 @@ where
 mod tests {
     use crate::data::{
         AlignedVarsData, RealignedVariationData, SortedStringMap, Variation, VariationData,
-        VariationMap, Vars,
+        VariationEntries, VariationMap, Vars,
     };
-    use indexmap::IndexMap;
     use std::collections::{BTreeMap, HashMap};
 
     /// Helper: serialize → deserialize → re-serialize, assert JSON strings are byte-equal.
@@ -128,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_variation_map_round_trip() {
-        let mut entries = IndexMap::new();
+        let mut entries = VariationEntries::default();
         entries.insert(
             "A".to_string(),
             Variation {
@@ -152,7 +161,7 @@ mod tests {
     #[test]
     fn test_variation_data_round_trip() {
         let mut non_ins = HashMap::new();
-        let mut vmap1 = IndexMap::new();
+        let mut vmap1 = VariationEntries::default();
         vmap1.insert(
             "C".to_string(),
             Variation {
@@ -189,7 +198,7 @@ mod tests {
     #[test]
     fn test_realigned_variation_data_round_trip() {
         let mut non_ins = HashMap::new();
-        let mut vmap = IndexMap::new();
+        let mut vmap = VariationEntries::default();
         vmap.insert(
             "G".to_string(),
             Variation {

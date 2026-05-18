@@ -4,12 +4,15 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use indexmap::IndexMap;
+use rustc_hash::FxBuildHasher;
 use serde::de::Deserializer;
 use serde::ser::{SerializeSeq, Serializer};
 
 use crate::config::Configuration;
 use crate::patterns::ANY_SV;
 use crate::utils::{substr, substr_with_len};
+
+pub type VariationEntries = IndexMap<String, Variation, FxBuildHasher>;
 
 // ─── SortedStringMap: BTreeMap<String, V> with array-of-pairs serde ─────────
 
@@ -448,7 +451,7 @@ pub struct VariationMapSV {
 pub struct VariationMap {
     #[serde(serialize_with = "crate::parity::format::serialize_indexmap_as_pairs")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_indexmap_as_pairs")]
-    pub entries: IndexMap<String, Variation>,
+    pub entries: VariationEntries,
 
     pub sv: Option<VariationMapSV>,
 }

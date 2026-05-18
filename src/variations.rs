@@ -698,7 +698,7 @@ pub fn clear_variation_utils_scope() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{SortedIntMap, SortedStringMap};
+    use crate::data::{SortedIntMap, SortedStringMap, VariationEntries};
     use std::sync::Mutex;
 
     static TEST_SCOPE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
@@ -1001,7 +1001,7 @@ mod tests {
 
     #[test]
     fn get_variation_maybe_looks_up_reference_base_strings() {
-        let mut entries = indexmap::IndexMap::new();
+        let mut entries = VariationEntries::default();
         entries.insert(String::from("A"), Variation::default());
 
         let map = VariationMap { entries, sv: None };
@@ -1445,7 +1445,7 @@ mod tests {
 
     #[test]
     fn get_variation_maybe_uses_single_base_string_keys() {
-        let mut entries = indexmap::IndexMap::new();
+        let mut entries = VariationEntries::default();
         entries.insert(String::from("C"), Variation::default());
         let hash = HashMap::from([(1, VariationMap { entries, sv: None })]);
 
@@ -1543,7 +1543,7 @@ mod tests {
 
     #[test]
     fn get_variation_maybe_returns_none_for_non_matching_base() {
-        let mut entries = indexmap::IndexMap::new();
+        let mut entries = VariationEntries::default();
         entries.insert(String::from("G"), Variation::default());
         let hash = HashMap::from([(4, VariationMap { entries, sv: None })]);
 
