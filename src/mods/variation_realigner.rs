@@ -133,17 +133,18 @@ pub fn comp3(a: &SortPositionSclip, b: &SortPositionSclip) -> std::cmp::Ordering
 /// Flatten a position→{description→count} map into a sorted vec.
 /// Sort: descending count → ascending position → descending description_string.
 /// **Parity trap T1**: tertiary sort is DESC descriptionString (reversed compareTo).
-pub fn fill_and_sort_tmp(
-    changes: &HashMap<i32, impl IntoIterator<Item = (impl Into<String> + Clone, i32)> + Clone>,
-) -> Vec<SortPositionDescription> {
+pub fn fill_and_sort_tmp<M>(changes: &HashMap<i32, M>) -> Vec<SortPositionDescription>
+where
+    for<'a> &'a M: IntoIterator<Item = (&'a String, &'a i32)>,
+{
     // Java: VariationRealigner.java#L2160-L2175
     let mut tmp = Vec::new();
     for (&position, v) in changes {
-        for (description_string, cnt) in v.clone().into_iter() {
+        for (description_string, cnt) in v {
             tmp.push(SortPositionDescription::new(
                 position,
-                description_string,
-                cnt,
+                description_string.clone(),
+                *cnt,
             ));
         }
     }
