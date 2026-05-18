@@ -43,6 +43,7 @@ You are the final independent reviewer. Verify correctness, assess performance, 
     - Flag any entry that does not match an allowed pattern or whose parity re-run result is not PASS/N/A.
     - List each manifest entry reviewed in your Section 1 output — do not just note "N fixes reviewed."
   - For any mismatch fix included in this review: verify the fix modifies the logic that computed the wrong value, not a downstream wrapper or conversion. A fix that adds a new function to transform an already-computed result is treating the symptom — the `mismatch-repair` skill's anti-adapter rule explains why this leads to long-term accumulation of fragile shims. Flag such fixes for justification.
+  - For any proven Rust `mismatch-repair` from config E2E diagnosis: read the repair diff and require a `logic-parity-audit` report for the touched Rust module or logic surface before approval. If the diff is broad or ambiguous, require a full touched-module audit. Infrastructure-only repairs, cache/provenance refreshes, and harness repairs are exempt from this logic-audit requirement.
 2. **Code Quality** — Readability, safety (no unjustified unsafe), consistency with `rust.instructions.md`, traceability comments.
 3. **Performance Impact** — Use `change-impact-review` skill. This section is mandatory for non-exempt changes. Hot-path + algorithm change = HIGH risk. Scale evidence to risk; do not skip required benchmarks/telemetry.
 4. **Final Verdict** — Synthesize all sections:

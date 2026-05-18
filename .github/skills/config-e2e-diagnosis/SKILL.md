@@ -41,6 +41,12 @@ the canonical full-scope artifact as the governing parity claim on its own.
 - For any wrapper-driven `scripts/e2e_sweep_gate.sh` or `scripts/e2e_sweep_gate.py`
   run, Orchestrator has confirmed the chosen `--test-threads` count with the user
   and recorded it in the routed artifact or reviewed plan file
+- Long wrapper-driven E2E parity sweep runs should be launched in sync/blocking terminal
+   mode. The routed artifact or reviewed plan file must declare the `--report-dir` so
+   humans can monitor `progress.log`, `child-logs/`, `heartbeats/`, `cell-runtimes.jsonl`,
+   and the terminal `parity-failure-report.json` or `last-pass.json` there instead of
+   requiring periodic agent polling. This monitoring rule must not narrow the active
+   full-scope gate.
 
 ### Warning Taxonomy
 
@@ -305,9 +311,19 @@ Fix the Rust module to match Java behavior for the identified config+region.
 1. Use the Phase 2 isolation report and the Phase 3 failing-test contract as the repair inputs.
 2. Orchestrator runs the global `plan-duck` skill on the Phase 2/3 outputs, writes the
    reviewed repair plan file, and dispatches Port Engineer with `mismatch-repair`.
-3. Port Engineer implements the fix.
+3. Port Engineer implements the fix using `mismatch-repair`.
 4. Run the Phase 3 test named in the reviewed repair plan file inside `mismatch-repair`
-   Phase 3 — it must pass.
+   Phase 3 — it must pass. Then run the focused/module verification required by the
+   repair plan.
+5. For any proven Rust `mismatch-repair`, read the repair diff after the fix exists and
+   focused/module verification has passed. Use the touched Rust module or logic surface
+   as the `logic-parity-audit` scope. If the diff is broad or ambiguous, audit the full
+   touched module.
+6. Run `logic-parity-audit` before Review Gate / `change-impact-review`. If the audit
+   returns NEEDS_REVIEW, route findings back to Port Engineer before Review Gate.
+
+Infrastructure-only repairs, cache refreshes, provenance fixes, and harness repairs do
+not trigger `logic-parity-audit`; they follow the infrastructure/workflow review path.
 
 ### Agent Routing
 
@@ -331,19 +347,25 @@ Confirm the fix resolves the original failure without introducing regressions.
    plan file for any wrapper-driven sweep rerun. If the plan file omits it, stop and
    return to Orchestrator.
 3. Run the full module sweep test — it must pass with no regression.
-4. Re-run the same full declared gate scope recorded in the reviewed repair plan file and
+4. For a proven Rust `mismatch-repair`, read the repair diff and run
+   `logic-parity-audit` for the touched Rust module or logic surface before Review Gate
+   approval and before the full-scope rerun is accepted as the next canonical step. If
+   the diff is broad or ambiguous, audit the full touched module. If the audit returns
+   NEEDS_REVIEW, route findings back to Port Engineer for targeted fixes before Review
+   Gate.
+5. Re-run the same full declared gate scope recorded in the reviewed repair plan file and
    the source artifact's `original_matrix_scope`. Do not silently narrow verification to
    only the formerly failing preset, tag, chromosome, or region.
-5. If that same full-scope rerun passes after a parity repair, record the repair as
+6. If that same full-scope rerun passes after a parity repair, record the repair as
    `PERF_PENDING` and return to Orchestrator for Review Gate/change-impact-review before
    treating the repair as approved. The final repair report must include a terminal
    non-pending verdict: `PERF_SAFE`, `PERF_RISK`, `PERF_REGRESSION`, or
    `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`. If evidence is still insufficient,
    keep the repair at `PERF_PENDING`, document the missing evidence, and record the
    expiry trigger: next same-module/surface code change or next full-gate cycle.
-6. If additional failures remain in that same full scope, loop back to Phase 2 for the
+7. If additional failures remain in that same full scope, loop back to Phase 2 for the
    next failure.
-7. When the same full-scope gate passes and the post-repair performance verdict is not
+8. When the same full-scope gate passes and the post-repair performance verdict is not
    `PERF_REGRESSION`, report CONFIG-E2E PASS only after the Review Gate result is
    terminal. `PERF_RISK` is conditional and must carry the Review Gate rationale,
    including bootstrap-baseline notation when applicable. `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`
@@ -360,7 +382,7 @@ Confirm the fix resolves the original failure without introducing regressions.
 This skill operates as a loop:
 
 ```text
-full-scope Phase 1 -> [for each failure:] Phase 2 -> Phase 3 -> Phase 4 -> full-scope Phase 5 -> [loop if more failures]
+full-scope Phase 1 -> [for each failure:] Phase 2 -> Phase 3 -> Phase 4 -> focused/module verification -> logic-parity-audit for Rust repairs -> Review Gate/change-impact-review -> full-scope Phase 5 -> [loop if more failures]
 ```
 
 The loop terminates when:
@@ -386,6 +408,7 @@ The loop terminates when:
 | tiered-config-test | Expand nightly/sweep coverage and tier promotion across the 44-config matrix |
 | mismatch-repair | Phase 4 fix methodology for Port Engineer; Phase 3 canonical verification loop for the failing config-e2e test |
 | module-parity-test | Phase 5 per-module regression check |
+| logic-parity-audit | Mandatory post-repair audit for proven Rust divergence repairs before Review Gate/full-scope acceptance |
 
 ## Agent Responsibilities
 

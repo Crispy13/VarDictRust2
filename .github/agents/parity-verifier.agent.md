@@ -2,8 +2,9 @@
 description: >
   Parity Verifier for VarDict-rs — independent validation and verification of Rust
   against Java. Use when: verifying module parity, running parity tests, running
-  logic-parity-audit, diagnosing shard failures, expanding config coverage, or
-  reporting divergences. Always use after Port Engineer completes a module.
+  logic-parity-audit, auditing verified Rust repairs, diagnosing shard failures,
+  expanding config coverage, or reporting divergences. Always use after Port Engineer
+  completes a module or a proven Rust mismatch-repair needs post-repair audit.
 name: Parity Verifier
 tools: [vscode/memory, vscode/resolveMemoryFileUri, execute, read, search, edit]
 model: GPT-5.4 (copilot)
@@ -35,7 +36,7 @@ The Orchestrator dispatches you with a task brief or reviewed plan file that spe
 5. If ANY test fails: stop at first failure, write FAIL report.
 
 ### Logic Parity Audit (logic-parity-audit)
-Dispatched after Tier 1 PASS. Read the `logic-parity-audit` skill and follow its 5-phase procedure. Write the audit report to `tmp/logic-parity-audit/`.
+Dispatched after Tier 1 PASS, or after a proven Rust `mismatch-repair` has passed focused/module verification and Orchestrator has read the repair diff to select the touched Rust module or logic surface. Read the `logic-parity-audit` skill and follow its 5-phase procedure. This audit does not diagnose or repair the mismatch; if it returns NEEDS_REVIEW, route findings back to Port Engineer before Review Gate. Write the audit report to `tmp/logic-parity-audit/`.
 
 ### Shard Diagnosis (shard-diagnosis)
 Dispatched on Tier 2 failure. Read the `shard-diagnosis` skill. Diagnose the failing shard and write a diagnosis report.

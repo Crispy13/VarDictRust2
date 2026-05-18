@@ -1,6 +1,6 @@
 ---
 name: logic-parity-audit
-description: "Run a white-box logic parity audit for a ported Rust module after Tier 1 parity passes. Use this whenever the user asks for a logic check, code comparison, verify port, inspect ported code, compare Java and Rust, function-by-function review, method comparison, audit port quality, white-box review, structural parity audit, review translated logic, or wants confidence that a passing port did not silently miss methods, branches, null behavior, or formatting before Tier 2 sweep. This skill works for any ported module."
+description: "Run a white-box logic parity audit for a ported Rust module after Tier 1 parity passes or after a proven Rust mismatch-repair has passed focused/module verification and needs diff-scoped audit before Review Gate. Use this whenever the user asks for a logic check, code comparison, verify port, inspect ported code, compare Java and Rust, function-by-function review, method comparison, audit port quality, white-box review, structural parity audit, review translated logic, or post-repair audit of a touched Rust module/surface. This skill works for any ported module and is not a substitute for shard-diagnosis or mismatch-repair."
 argument-hint: "Module name, e.g. 'CigarParser' or 'Utils'"
 ---
 
@@ -35,6 +35,22 @@ logic-parity-audit
 tiered-config-test / Tier 2 sweep
 ```
 
+It is also used as a post-repair checkpoint after a proven Rust config-E2E repair:
+
+```text
+config-e2e-diagnosis / shard-diagnosis
+        ↓
+mismatch-repair
+        ↓
+focused/module verification PASS
+        ↓
+read repair diff and select touched Rust module or logic surface
+        ↓
+logic-parity-audit
+        ↓
+Review Gate / change-impact-review
+```
+
 Why here:
 
 - Tier 1 gives evidence that the module works on representative inputs.
@@ -45,13 +61,15 @@ Why here:
 
 Use this skill for any ported module where you want systematic verification that the Rust translation faithfully mirrors the Java source. The audit is most valuable for larger, stateful modules with many methods, but it works equally well for smaller utilities — a shorter module simply produces a shorter report.
 
-Do not use it for mismatch repair after a failing shard. That case is better served by the shard-diagnosis and mismatch-repair skills.
+For post-repair audits, scope the audit to the touched Rust module or repaired logic surface selected from the repair diff. If the diff is broad or ambiguous, audit the full touched module. If the audit returns NEEDS_REVIEW, route findings back to Port Engineer before Review Gate.
+
+Do not use this skill to diagnose a failing shard or to implement a mismatch repair. Those cases remain the responsibility of `shard-diagnosis`, `config-e2e-diagnosis`, and `mismatch-repair`. The post-repair use case starts only after the repair exists and focused/module verification has passed.
 
 ## Prerequisites
 
 Before starting, make sure the audit has enough context to be meaningful:
 
-1. Tier 1 parity already passed for the target module, or the user explicitly asked for a pre-pass audit anyway.
+1. Tier 1 parity already passed for the target module, or a proven Rust `mismatch-repair` has passed focused/module verification and the repair diff is available for scope selection. If the user explicitly asks for a pre-pass audit, record that override.
 2. The Java source file exists in VarDictJava/src/main/java/... and is accessible for direct reading.
 3. The Java module doc at copilot-office/codebase/java/{Module}.md is available as supplementary context (method inventory, parity warnings, algorithm notes).
 4. The Rust implementation is present in src/ and is stable enough to inspect.
@@ -69,7 +87,7 @@ Read the actual source files for both languages:
 2. The corresponding Rust source file or files under src/
 3. The Java module doc in copilot-office/codebase/java/{Module}.md — use as supplementary context for method inventory, parity warnings, and algorithm notes
 4. The parity rules in .github/instructions/rust-parity.instructions.md when a finding touches types, ordering, nulls, float formatting, or traceability
-5. The recent Tier 1 result, if available, to understand whether the audit is confirming a pass or explaining residual risk
+5. The recent Tier 1 or focused/module verification result, if available, to understand whether the audit is confirming a pass or explaining residual risk
 
 Capture a quick working note with:
 
