@@ -1,0 +1,4 @@
+interface:
+  display_name: "Perf Optimization Cycle"
+  short_description: "Run profile-to-audit VarDict-rs optimization rounds"
+  default_prompt: "Run a complete VarDict-rs optimization cycle: profile first, implement one scoped optimization, validate, benchmark against Java, and write the logic audit."
