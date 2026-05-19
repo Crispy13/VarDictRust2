@@ -451,10 +451,10 @@ impl RecordPreprocessor {
 
     // Ported from: RecordPreprocessor.java:L117-L125
 
-    /// Close BAM reader. In Rust, dropping handles cleanup, but this provides
-    /// explicit close semantics matching the Java API.
+    /// Close BAM reader. Keep the underlying htslib reader available for the
+    /// next region on this thread so the BAM index is not reloaded per tile.
     pub fn close(&mut self) {
-        self.current_reader = None;
+        self.release_current_reader();
     }
 
     /// Returns a clone of the current BAM header for downstream CIGAR parsing.
