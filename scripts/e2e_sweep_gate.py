@@ -2,7 +2,8 @@
 
 Stages existing fixtures from --fixture-source into tmp/sweep_fixtures/output/,
 initializes manifest.json for fresh staging roots, populates cache_entries via
-scripts.lib.merge_manifest, and runs scoped parity_e2e_sweep cargo tests.
+scripts.lib.merge_manifest, validates cached TSV content against paired
+*.chunks.json monolithic_md5 fingerprints, and runs scoped parity_e2e_sweep cargo tests.
 Writes a schema-version 2 config E2E sweep report to parity-failure-report.json
 on both pass and fail, including diagnosis_artifact readiness/default_action
 metadata for config-e2e-diagnosis handoff plus report-level scope/completeness
@@ -34,6 +35,7 @@ from __future__ import annotations
 import argparse
 import csv
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -101,6 +103,14 @@ WRAPPER_FINALIZER_STATE: dict[str, object] = {
 }
 WARNING_SEVERITY_BY_KEY = {
     "missing_chunks": "not-ready",
+    "missing_tsv": "not-ready",
+    "missing_monolithic_md5": "not-ready",
+    "missing_monolithic_bytes": "not-ready",
+    "incompatible_chunks_json": "not-ready",
+    "incompatible_backfilled_chunks": "not-ready",
+    "mismatch_monolithic_md5": "not-ready",
+    "mismatch_monolithic_bytes": "not-ready",
+    "unreadable_tsv": "not-ready",
     "missing_vardict_commit": "not-ready",
     "missing_generator_flags": "not-ready",
     "mismatch_generator_flags": "not-ready",
@@ -1329,6 +1339,86 @@ def bed_sha256(sweep_bed_root: Path, tag: str) -> str:
     return sha256_concat(bed_paths)
 
 
+def decompressed_tsv_md5_and_bytes(path: Path) -> tuple[str, int]:
+    digest = hashlib.md5()
+    byte_count = 0
+    proc = subprocess.Popen(
+        ["zstd", "-dc", str(path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.stdout is not None
+    try:
+        for chunk in iter(lambda: proc.stdout.read(1024 * 1024), b""):
+            digest.update(chunk)
+            byte_count += len(chunk)
+        return_code = proc.wait()
+        if return_code != 0:
+            stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+            raise subprocess.CalledProcessError(return_code, proc.args, stderr=stderr)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if proc.stdout is not None:
+            proc.stdout.close()
+        if proc.stderr is not None:
+            proc.stderr.close()
+    return digest.hexdigest(), byte_count
+
+
+def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
+    if not isinstance(payload, dict):
+        return "incompatible_chunks_json", f"{chunks_path} top-level JSON value is not an object"
+
+    if not tsv_path.exists():
+        return "missing_tsv", str(tsv_path)
+
+    monolithic_md5 = payload.get("monolithic_md5")
+    if monolithic_md5 is None:
+        return "missing_monolithic_md5", str(chunks_path)
+    if not isinstance(monolithic_md5, str) or len(monolithic_md5) != 32:
+        return "incompatible_chunks_json", f"{chunks_path} invalid monolithic_md5"
+    if any(char not in "0123456789abcdefABCDEF" for char in monolithic_md5):
+        return "incompatible_chunks_json", f"{chunks_path} non-hex monolithic_md5"
+
+    monolithic_bytes = payload.get("monolithic_bytes")
+    if monolithic_bytes is None:
+        return "missing_monolithic_bytes", str(chunks_path)
+    if not isinstance(monolithic_bytes, int) or isinstance(monolithic_bytes, bool) or monolithic_bytes < 0:
+        return "incompatible_chunks_json", f"{chunks_path} invalid monolithic_bytes"
+
+    if payload.get("backfilled") is True:
+        missing_provenance = [
+            key
+            for key in ("generator_flags", "preset", "bed_sha256")
+            if payload.get(key) is None
+        ]
+        if missing_provenance:
+            return (
+                "incompatible_backfilled_chunks",
+                f"{chunks_path} missing gate provenance: {','.join(missing_provenance)}",
+            )
+
+    try:
+        actual_md5, actual_bytes = decompressed_tsv_md5_and_bytes(tsv_path)
+    except Exception as exc:  # noqa: BLE001
+        return "unreadable_tsv", f"{tsv_path}: {exc}"
+
+    if actual_md5.lower() != monolithic_md5.lower():
+        return (
+            "mismatch_monolithic_md5",
+            f"{chunks_path} expected={monolithic_md5} actual={actual_md5}",
+        )
+    if actual_bytes != monolithic_bytes:
+        return (
+            "mismatch_monolithic_bytes",
+            f"{chunks_path} expected={monolithic_bytes} actual={actual_bytes}",
+        )
+
+    return None
+
+
 def manifest_cache_entries_payload() -> dict:
     if not CANONICAL_MANIFEST.exists():
         return {}
@@ -1591,6 +1681,7 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
 
     for pair_index, (preset, tag, chroms) in enumerate(pair_batches, start=1):
         for chrom in chroms:
+            tsv_path = target_path(CANONICAL_OUTPUT_ROOT, preset, chrom, tag, ".tsv.zst")
             chunks_path = target_path(CANONICAL_OUTPUT_ROOT, preset, chrom, tag, ".chunks.json")
             if not chunks_path.exists():
                 track_warning(
@@ -1602,7 +1693,30 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                 completed_cells += 1
                 continue
 
-            payload = read_json(chunks_path)
+            try:
+                payload = read_json(chunks_path)
+            except Exception as exc:  # noqa: BLE001
+                track_warning(
+                    warning_counts,
+                    "incompatible_chunks_json",
+                    f"{chunks_path}: {exc}",
+                    warning_samples,
+                )
+                completed_cells += 1
+                continue
+
+            fingerprint_warning = cache_fingerprint_warning(tsv_path, chunks_path, payload)
+            if fingerprint_warning is not None:
+                warning_key, warning_message = fingerprint_warning
+                track_warning(
+                    warning_counts,
+                    warning_key,
+                    warning_message,
+                    warning_samples,
+                )
+            if not isinstance(payload, dict):
+                completed_cells += 1
+                continue
             vardict_commit = payload.get("vardict_commit")
             if vardict_commit is None:
                 track_warning(

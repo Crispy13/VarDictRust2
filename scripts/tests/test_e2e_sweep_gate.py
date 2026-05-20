@@ -54,6 +54,126 @@ class GateSmokeTest(unittest.TestCase):
         self.assertEqual(summary["readiness_impact"]["status"], "not-ready")
         self.assertEqual(summary["readiness_impact"]["unknown_warning_keys"], ["unexpected_warning"])
 
+    def test_cache_fingerprint_match_passes_readiness_check(self) -> None:
+        payload = {
+            "monolithic_md5": hashlib.md5(b"fixture\n").hexdigest(),
+            "monolithic_bytes": len(b"fixture\n"),
+            "generator_flags": "--output-only --config T1-01 --tags hg002",
+            "preset": "T1-01",
+            "bed_sha256": "abc123",
+        }
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            tsv = root / "hg002_1.tsv.zst"
+            chunks = root / "hg002_1.chunks.json"
+            tsv.write_bytes(b"compressed")
+            chunks.write_text(json.dumps(payload), encoding="utf-8")
+
+            with mock.patch(
+                "scripts.e2e_sweep_gate.decompressed_tsv_md5_and_bytes",
+                return_value=(payload["monolithic_md5"], payload["monolithic_bytes"]),
+            ):
+                warning = e2e_sweep_gate.cache_fingerprint_warning(tsv, chunks, payload)
+
+        self.assertIsNone(warning)
+
+    def test_cache_fingerprint_missing_md5_blocks_readiness(self) -> None:
+        payload = {"monolithic_bytes": 8}
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            tsv = root / "hg002_1.tsv.zst"
+            chunks = root / "hg002_1.chunks.json"
+            tsv.write_bytes(b"compressed")
+
+            warning = e2e_sweep_gate.cache_fingerprint_warning(tsv, chunks, payload)
+
+        self.assertEqual(warning[0], "missing_monolithic_md5")
+
+    def test_cache_fingerprint_non_object_payload_blocks_readiness(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            tsv = root / "hg002_1.tsv.zst"
+            chunks = root / "hg002_1.chunks.json"
+            tsv.write_bytes(b"compressed")
+
+            warning = e2e_sweep_gate.cache_fingerprint_warning(tsv, chunks, ["not", "an", "object"])
+
+        self.assertEqual(warning[0], "incompatible_chunks_json")
+
+    def test_cache_fingerprint_mismatch_blocks_readiness(self) -> None:
+        payload = {
+            "monolithic_md5": hashlib.md5(b"old\n").hexdigest(),
+            "monolithic_bytes": len(b"new\n"),
+            "generator_flags": "--output-only --config T1-01 --tags hg002",
+            "preset": "T1-01",
+            "bed_sha256": "abc123",
+        }
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            tsv = root / "hg002_1.tsv.zst"
+            chunks = root / "hg002_1.chunks.json"
+            tsv.write_bytes(b"compressed")
+
+            with mock.patch(
+                "scripts.e2e_sweep_gate.decompressed_tsv_md5_and_bytes",
+                return_value=(hashlib.md5(b"new\n").hexdigest(), len(b"new\n")),
+            ):
+                warning = e2e_sweep_gate.cache_fingerprint_warning(tsv, chunks, payload)
+
+        self.assertEqual(warning[0], "mismatch_monolithic_md5")
+
+    def test_backfilled_sidecar_without_gate_provenance_blocks_readiness(self) -> None:
+        payload = {
+            "monolithic_md5": hashlib.md5(b"fixture\n").hexdigest(),
+            "monolithic_bytes": len(b"fixture\n"),
+            "backfilled": True,
+        }
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            tsv = root / "hg002_1.tsv.zst"
+            chunks = root / "hg002_1.chunks.json"
+            tsv.write_bytes(b"compressed")
+
+            warning = e2e_sweep_gate.cache_fingerprint_warning(tsv, chunks, payload)
+
+        self.assertEqual(warning[0], "incompatible_backfilled_chunks")
+
+    def test_cache_fingerprint_warning_routes_as_not_ready(self) -> None:
+        summary = e2e_sweep_gate.warning_summary_payload(
+            {
+                "provenance": {
+                    "counts": {"mismatch_monolithic_md5": 1},
+                    "samples": ["sample-warning"],
+                }
+            }
+        )
+
+        self.assertEqual(summary["readiness_impact"]["status"], "not-ready")
+        self.assertEqual(summary["readiness_impact"]["not_ready_warning_keys"], ["mismatch_monolithic_md5"])
+
+    def test_run_provenance_check_invalid_chunks_json_warns_instead_of_crashing(self) -> None:
+        matrix = [("T1-01", "hg002", "1")]
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            output_root = root / "output"
+            chunks = output_root / "T1-01" / "1" / "hg002_1.chunks.json"
+            chunks.parent.mkdir(parents=True, exist_ok=True)
+            chunks.write_text("{not json\n", encoding="utf-8")
+            args = mock.Mock(sweep_bed_root=root / "beds")
+
+            with mock.patch.object(e2e_sweep_gate, "CANONICAL_OUTPUT_ROOT", output_root), mock.patch(
+                "scripts.e2e_sweep_gate.live_vardictjava_commit",
+                return_value="deadbeef",
+            ), mock.patch(
+                "scripts.e2e_sweep_gate.runtime_sweep_bed_root",
+                return_value=root / "beds",
+            ), mock.patch("scripts.e2e_sweep_gate.emit_status"), mock.patch(
+                "scripts.e2e_sweep_gate.emit_warning_summary"
+            ):
+                warnings = e2e_sweep_gate.run_provenance_check(args, matrix)
+
+        self.assertEqual(warnings["counts"], {"incompatible_chunks_json": 1})
+
     def test_progress_log_captures_status_and_warning_lines(self) -> None:
         with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
             args = mock.Mock(report_dir=Path(report_dir))

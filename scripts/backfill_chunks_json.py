@@ -4,7 +4,9 @@
 For each ``<output_dir>/*/*/<stem>.tsv.zst`` without a paired
 ``<stem>.chunks.json``, stream-decompress the TSV, compute MD5 + byte length,
 and write a single-chunk sidecar that satisfies ``validate_chunks_json``
-(``scripts/sweep_fixtures_parallel.py``).
+(``scripts/sweep_fixtures_parallel.py``). Backfilled sidecars preserve the
+content fingerprint, but the E2E sweep gate treats them as not-ready unless
+the required gate provenance fields are present.
 
 Default mode is DRY-RUN; pass ``--apply`` to actually write files.
 """

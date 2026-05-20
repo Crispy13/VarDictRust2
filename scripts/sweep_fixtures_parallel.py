@@ -93,6 +93,21 @@ class ConfigPreset:
     flags: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class OutputExpectation:
+    config_name: str | None
+    shard: Shard
+    bed_lines: int
+
+
+@dataclass(frozen=True)
+class OutputGuardResult:
+    status: str
+    expected_count: int
+    non_empty_count: int
+    missing: tuple[OutputExpectation, ...] = ()
+
+
 TIMINGS_HEADER = [
     "preset",
     "tag",
@@ -143,7 +158,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-only",
         action="store_true",
-        help="Write only output TSVs and skip module JSONL fixture generation.",
+        help=(
+            "Write only output TSVs and skip module JSONL fixture generation. "
+            "Expected non-empty selections fail if no complete TSV/sidecar output is produced."
+        ),
     )
     config_group = parser.add_mutually_exclusive_group()
     config_group.add_argument(
@@ -694,6 +712,88 @@ def count_bed_lines(bed_path: Path) -> int:
         for _ in handle:
             count += 1
     return count
+
+
+def requested_output_expectations(
+    shards: list[Shard],
+    selected_presets: list[ConfigPreset] | None,
+    config_name: str | None,
+) -> list[OutputExpectation]:
+    configs: list[str | None]
+    if selected_presets is None:
+        configs = [config_name]
+    else:
+        configs = [preset.name for preset in selected_presets]
+
+    expectations: list[OutputExpectation] = []
+    bed_line_cache: dict[Path, int] = {}
+    for shard in shards:
+        bed_lines = bed_line_cache.get(shard.bed_path)
+        if bed_lines is None:
+            bed_lines = count_bed_lines(shard.bed_path)
+            bed_line_cache[shard.bed_path] = bed_lines
+        for config in configs:
+            expectations.append(
+                OutputExpectation(
+                    config_name=config,
+                    shard=shard,
+                    bed_lines=bed_lines,
+                )
+            )
+    return expectations
+
+
+def validate_requested_outputs(
+    output_root: Path,
+    expectations: list[OutputExpectation],
+) -> OutputGuardResult:
+    if not expectations:
+        return OutputGuardResult(status="empty-scope", expected_count=0, non_empty_count=0)
+
+    non_empty = [expectation for expectation in expectations if expectation.bed_lines > 0]
+    if not non_empty:
+        return OutputGuardResult(
+            status="empty-scope",
+            expected_count=len(expectations),
+            non_empty_count=0,
+        )
+
+    missing = []
+    for expectation in non_empty:
+        final_dir = output_dir(
+            output_root,
+            expectation.config_name,
+            expectation.shard.chrom,
+        )
+        if not shard_is_complete(final_dir, expectation.shard.tag, expectation.shard.chrom):
+            missing.append(expectation)
+
+    return OutputGuardResult(
+        status="missing-output" if missing else "ready",
+        expected_count=len(expectations),
+        non_empty_count=len(non_empty),
+        missing=tuple(missing),
+    )
+
+
+def output_expectation_label(expectation: OutputExpectation) -> str:
+    config = expectation.config_name or "default"
+    return f"{config}/{expectation.shard.tag}/{expectation.shard.chrom}"
+
+
+def output_guard_failures(output_guard: OutputGuardResult) -> list[ShardResult]:
+    if output_guard.status != "missing-output":
+        return []
+    return [
+        ShardResult(
+            tag=expectation.shard.tag,
+            chrom=expectation.shard.chrom,
+            status="failed",
+            config_name=expectation.config_name,
+            error="expected non-empty refresh produced no complete TSV/sidecar output",
+        )
+        for expectation in output_guard.missing
+    ]
 
 
 def split_bed_chunks(bed_path: Path, chunk_size: int, tmp_dir: Path) -> list[Path]:
@@ -1608,6 +1708,28 @@ def main() -> int:
         append_timing_rows(timings_path, results)
 
         failed_shards = [result for result in results if result.status == "failed"]
+        output_guard = validate_requested_outputs(
+            output_root,
+            requested_output_expectations(shards, selected_presets, config_name),
+        )
+        if output_guard.status == "empty-scope":
+            emit(
+                "INFO: requested scope is empty: "
+                f"expected_outputs={output_guard.expected_count} "
+                f"non_empty_beds={output_guard.non_empty_count}",
+                run_log,
+                stream=sys.stderr,
+            )
+        elif output_guard.status == "missing-output" and not failed_shards:
+            emit(
+                "ERROR: expected non-empty fixture refresh produced no complete TSV/sidecar for "
+                + ", ".join(output_expectation_label(expectation) for expectation in output_guard.missing[:5]),
+                run_log,
+                stream=sys.stderr,
+            )
+            guard_failures = output_guard_failures(output_guard)
+            failed_shards.extend(guard_failures)
+            results.extend(guard_failures)
         skipped_shards = sum(1 for result in results if result.status == "skipped")
         completed_shards = sum(1 for result in results if result.status == "success")
         shard_count = len(results) if selected_presets is not None else len(shards)

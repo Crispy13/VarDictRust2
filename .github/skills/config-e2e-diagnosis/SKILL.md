@@ -57,6 +57,13 @@ Sweep-gate warning classes are interpreted as follows:
 - `diagnostic-only` — the artifact remains usable for canonical routing
 - unknown warning classes default to `not-ready` until classified
 
+Cache-readiness warnings such as `missing_tsv`, `missing_monolithic_md5`,
+`missing_monolithic_bytes`, `incompatible_chunks_json`,
+`incompatible_backfilled_chunks`, `mismatch_monolithic_md5`,
+`mismatch_monolithic_bytes`, and `unreadable_tsv` are `not-ready`. Treat them
+as fixture/cache infrastructure problems requiring a fresh full-scope cache
+refresh, not as Rust repair evidence.
+
 ### State Authority Drift
 
 Older session reports and some mission files were missing or inaccessible during the

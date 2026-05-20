@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -49,6 +50,41 @@ class SweepFixturesParallelSmokeTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("one process per discovered shard", result.stdout)
         self.assertIn("one thread per selected preset", result.stdout)
+
+    def test_non_empty_scope_without_output_is_failed_by_guard(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            bed = root / "1.bed"
+            bed.write_text("1\t10\t20\n", encoding="utf-8")
+            shard = sweep_fixtures_parallel.Shard(tag="hg002", chrom="1", bed_path=bed)
+
+            guard = sweep_fixtures_parallel.validate_requested_outputs(
+                root / "out",
+                sweep_fixtures_parallel.requested_output_expectations([shard], None, "T1-01"),
+            )
+            failures = sweep_fixtures_parallel.output_guard_failures(guard)
+
+        self.assertEqual(guard.status, "missing-output")
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0].status, "failed")
+        self.assertIn("no complete TSV/sidecar", failures[0].error)
+
+    def test_empty_scope_is_reported_without_failure(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            bed = root / "1.bed"
+            bed.write_text("", encoding="utf-8")
+            shard = sweep_fixtures_parallel.Shard(tag="hg002", chrom="1", bed_path=bed)
+
+            guard = sweep_fixtures_parallel.validate_requested_outputs(
+                root / "out",
+                sweep_fixtures_parallel.requested_output_expectations([shard], None, "T1-01"),
+            )
+
+        self.assertEqual(guard.status, "empty-scope")
+        self.assertEqual(guard.expected_count, 1)
+        self.assertEqual(guard.non_empty_count, 0)
+        self.assertEqual(sweep_fixtures_parallel.output_guard_failures(guard), [])
 
 
 if __name__ == "__main__":
