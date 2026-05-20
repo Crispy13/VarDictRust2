@@ -17,6 +17,12 @@ runtime_summary field to terminal artifacts. Optional idle diagnostics are
 disabled by default and report liveness context without killing the child
 process.
 
+If the Python wrapper receives a handled termination signal or raises after the
+test phase has started but before canonical completion, it writes a distinct
+wrapper-termination-report.json plus status.json/failed markers. Those artifacts
+classify the result as infrastructure-not-ready and do not synthesize parity
+mismatches or success.
+
 When a single-chrom matrix is run with --allow-extra-beds against a broader BED
 root, the gate copies the selected BEDs into report-dir/scoped_beds and runs the
 Rust harness against that scoped root so cache validation matches staged fixtures.
@@ -32,6 +38,7 @@ import json
 import os
 import re
 import selectors
+import signal
 import shutil
 import subprocess
 import sys
@@ -86,6 +93,12 @@ FAILURE_REGION_PATTERNS = (
     re.compile(r"config=[^\s]+\s+tile=(([^:\s]+):\d+-\d+)"),
 )
 PROGRESS_LOG_HANDLE: TextIO | None = None
+WRAPPER_FINALIZER_STATE: dict[str, object] = {
+    "active": False,
+    "canonical_finalized": False,
+    "infra_finalized": False,
+    "writing": False,
+}
 WARNING_SEVERITY_BY_KEY = {
     "missing_chunks": "not-ready",
     "missing_vardict_commit": "not-ready",
@@ -411,6 +424,236 @@ def emit_warning_summary(
 
 def progress_log_path(args: argparse.Namespace) -> Path:
     return args.report_dir / "progress.log"
+
+
+def wrapper_termination_report_path(args: argparse.Namespace) -> Path:
+    return args.report_dir / "wrapper-termination-report.json"
+
+
+def status_json_path(args: argparse.Namespace) -> Path:
+    return args.report_dir / "status.json"
+
+
+def failed_marker_path(args: argparse.Namespace) -> Path:
+    return args.report_dir / "failed"
+
+
+def begin_wrapper_finalizer_run(
+    args: argparse.Namespace,
+    matrix: list[tuple[str, str, str]],
+    *,
+    started_at: float,
+    total_pairs: int,
+) -> None:
+    WRAPPER_FINALIZER_STATE.clear()
+    WRAPPER_FINALIZER_STATE.update(
+        {
+            "active": True,
+            "canonical_finalized": False,
+            "infra_finalized": False,
+            "writing": False,
+            "args": args,
+            "matrix": matrix,
+            "started_at": started_at,
+            "total_pairs": total_pairs,
+        }
+    )
+
+
+def update_wrapper_finalizer_context(**updates: object) -> None:
+    if WRAPPER_FINALIZER_STATE.get("active"):
+        WRAPPER_FINALIZER_STATE.update(updates)
+
+
+def mark_wrapper_canonical_finalized() -> None:
+    WRAPPER_FINALIZER_STATE["canonical_finalized"] = True
+    WRAPPER_FINALIZER_STATE["active"] = False
+
+
+def tail_last_nonempty_line(path: Path | None, *, max_bytes: int = 65536) -> str | None:
+    if path is None or not path.is_file():
+        return None
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - max_bytes), os.SEEK_SET)
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in reversed(text.splitlines()):
+        if line.strip():
+            return line.strip()
+    return None
+
+
+def newest_heartbeat_log(report_dir: Path) -> Path | None:
+    heartbeat_dir = report_dir / "heartbeats"
+    if not heartbeat_dir.is_dir():
+        return None
+    try:
+        paths = [path for path in heartbeat_dir.glob("*.log") if path.is_file()]
+    except OSError:
+        return None
+    if not paths:
+        return None
+    return max(paths, key=lambda path: path.stat().st_mtime)
+
+
+def signal_name(signum: int) -> str:
+    try:
+        return signal.Signals(signum).name
+    except ValueError:
+        return f"signal-{signum}"
+
+
+def wrapper_finalizer_should_write() -> bool:
+    return bool(
+        WRAPPER_FINALIZER_STATE.get("active")
+        and not WRAPPER_FINALIZER_STATE.get("canonical_finalized")
+        and not WRAPPER_FINALIZER_STATE.get("infra_finalized")
+        and not WRAPPER_FINALIZER_STATE.get("writing")
+    )
+
+
+def wrapper_finalizer_report_payload(reason: dict[str, object]) -> tuple[Path, dict]:
+    args = WRAPPER_FINALIZER_STATE["args"]
+    matrix = WRAPPER_FINALIZER_STATE["matrix"]
+    assert isinstance(args, argparse.Namespace)
+    assert isinstance(matrix, list)
+
+    report_dir = Path(args.report_dir).resolve()
+    progress_path = progress_log_path(args).resolve()
+    active_heartbeat = WRAPPER_FINALIZER_STATE.get("heartbeat_log")
+    heartbeat_path = Path(active_heartbeat).resolve() if active_heartbeat else None
+    if heartbeat_path is None or not heartbeat_path.is_file():
+        heartbeat_path = newest_heartbeat_log(report_dir)
+    report_path = wrapper_termination_report_path(args).resolve()
+    active_child_pid = WRAPPER_FINALIZER_STATE.get("child_pid")
+    child_pid = (
+        active_child_pid
+        if isinstance(active_child_pid, int)
+        else WRAPPER_FINALIZER_STATE.get("last_child_pid")
+    )
+    child_liveness = (
+        process_liveness_summary(active_child_pid)
+        if isinstance(active_child_pid, int)
+        else None
+    )
+    started_at = WRAPPER_FINALIZER_STATE.get("started_at")
+    elapsed_seconds = round(time.monotonic() - float(started_at), 3) if isinstance(started_at, float) else None
+
+    payload = {
+        "artifact_type": "e2e-sweep-wrapper-infrastructure-report",
+        "schema_version": 1,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "result": "infra-failed",
+        "classification": reason.get("classification", "wrapper-interrupted"),
+        "reason": reason,
+        "diagnosis_artifact": {
+            "kind": "config-e2e-infrastructure-report",
+            "consumer_skill": "config-e2e-diagnosis",
+            "result": "infra-failed",
+            "default_action": "repair-or-rerun-full-scope",
+            "readiness": {
+                "ready": False,
+                "status": "not-ready",
+                "reason": "Wrapper terminated before a canonical parity pass/fail artifact was written.",
+            },
+        },
+        "active_pair": {
+            "preset": WRAPPER_FINALIZER_STATE.get("preset"),
+            "tag": WRAPPER_FINALIZER_STATE.get("tag"),
+            "chroms": WRAPPER_FINALIZER_STATE.get("chroms"),
+            "pair_index": WRAPPER_FINALIZER_STATE.get("pair_index"),
+            "total_pairs": WRAPPER_FINALIZER_STATE.get("total_pairs"),
+        },
+        "child": {
+            "pid": child_pid,
+            "liveness": child_liveness,
+            "command": WRAPPER_FINALIZER_STATE.get("command"),
+            "stdout_log": WRAPPER_FINALIZER_STATE.get("stdout_log"),
+            "stderr_log": WRAPPER_FINALIZER_STATE.get("stderr_log"),
+        },
+        "paths": {
+            "report_dir": str(report_dir),
+            "progress_log": str(progress_path),
+            "heartbeat_log": str(heartbeat_path) if heartbeat_path is not None else None,
+            "wrapper_termination_report": str(report_path),
+            "status_json": str(status_json_path(args).resolve()),
+            "failed_marker": str(failed_marker_path(args).resolve()),
+        },
+        "frontier": {
+            "progress_tail": tail_last_nonempty_line(progress_path),
+            "heartbeat_tail": tail_last_nonempty_line(heartbeat_path),
+        },
+        "matrix_summary": matrix_summary(matrix),
+        "original_matrix_scope": original_matrix_scope(matrix),
+        "elapsed_seconds": elapsed_seconds,
+    }
+    return report_path, payload
+
+
+def write_wrapper_infra_finalizer(reason: dict[str, object]) -> None:
+    if not wrapper_finalizer_should_write():
+        return
+    WRAPPER_FINALIZER_STATE["writing"] = True
+    try:
+        args = WRAPPER_FINALIZER_STATE["args"]
+        assert isinstance(args, argparse.Namespace)
+        report_path, payload = wrapper_finalizer_report_payload(reason)
+        write_json_atomic(report_path, payload)
+        status_payload = {
+            "schema_version": 1,
+            "generated_at": payload["generated_at"],
+            "status": "failed",
+            "result": "infra-failed",
+            "classification": payload["classification"],
+            "diagnosis_ready": False,
+            "report_path": str(report_path),
+            "progress_log": payload["paths"]["progress_log"],
+        }
+        write_json_atomic(status_json_path(args), status_payload)
+        failed_marker_path(args).write_text(
+            f"infra-failed {payload['classification']} report={report_path}\n",
+            encoding="utf-8",
+        )
+        emit_status(
+            "done",
+            event="infra-failed",
+            detail=f"classification={payload['classification']} report={report_path}",
+        )
+        WRAPPER_FINALIZER_STATE["infra_finalized"] = True
+    finally:
+        WRAPPER_FINALIZER_STATE["writing"] = False
+
+
+def forward_signal_to_child(signum: int) -> None:
+    child_pid = WRAPPER_FINALIZER_STATE.get("child_pid")
+    if not isinstance(child_pid, int):
+        return
+    try:
+        os.kill(child_pid, signum)
+    except OSError:
+        return
+
+
+def wrapper_signal_handler(signum: int, _frame: object) -> None:
+    reason = {
+        "classification": "wrapper-terminated",
+        "signal": signal_name(signum),
+        "signal_number": signum,
+    }
+    write_wrapper_infra_finalizer(reason)
+    forward_signal_to_child(signum)
+    raise SystemExit(128 + signum)
+
+
+def install_wrapper_finalizer_signal_handlers() -> None:
+    for signal_attr in ("SIGTERM", "SIGHUP", "SIGINT"):
+        signum = getattr(signal, signal_attr, None)
+        if signum is not None:
+            signal.signal(signum, wrapper_signal_handler)
 
 
 @contextmanager
@@ -839,6 +1082,11 @@ def run_streaming_subprocess(
     )
     assert process.stdout is not None
     assert process.stderr is not None
+    update_wrapper_finalizer_context(
+        child_pid=process.pid,
+        last_child_pid=process.pid,
+        child_returncode=None,
+    )
 
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, data="stdout")
@@ -857,6 +1105,10 @@ def run_streaming_subprocess(
         stderr_log_path = log_dir / f"{stem}.stderr.log"
         stdout_log = stdout_log_path.open("a", encoding="utf-8", buffering=1)
         stderr_log = stderr_log_path.open("a", encoding="utf-8", buffering=1)
+        update_wrapper_finalizer_context(
+            stdout_log=str(stdout_log_path),
+            stderr_log=str(stderr_log_path),
+        )
         emit_status(
             status_phase,
             event="child-output-log",
@@ -921,9 +1173,11 @@ def run_streaming_subprocess(
         if stderr_log is not None:
             stderr_log.close()
 
+    returncode = process.wait()
+    update_wrapper_finalizer_context(child_pid=None, child_returncode=returncode)
     return subprocess.CompletedProcess(
         cmd,
-        process.wait(),
+        returncode,
         "\n".join(stdout_lines),
         "\n".join(stderr_lines),
     )
@@ -1568,6 +1822,7 @@ def write_failure_report(
         warning_summary=warning_summary,
     )
     write_json_atomic(report_path, payload)
+    mark_wrapper_canonical_finalized()
 
     detail_parts = [f"failures={len(failures)}", f"report={report_path}"]
     if stopped_after is not None:
@@ -1618,6 +1873,7 @@ def run_tests_and_report(
     pairs = grouped_pairs(matrix)
     total_pairs = len(pairs)
     tested_cell_count = 0
+    begin_wrapper_finalizer_run(args, matrix, started_at=tests_started_at, total_pairs=total_pairs)
     emit_status("tests", started_at=tests_started_at, completed=0, total=total_pairs, event="start")
     reset_runtime_jsonl(args.report_dir)
     runtime_state: dict[str, object] = {
@@ -1641,6 +1897,18 @@ def run_tests_and_report(
         heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
         env["VARDICT_E2E_SWEEP_HEARTBEAT_LOG"] = str(heartbeat_path)
         cmd = sweep_test_command(args, test_name, exact=exact_selector)
+        update_wrapper_finalizer_context(
+            preset=preset,
+            tag=tag,
+            chroms=list(pair_chroms),
+            pair_index=pair_index,
+            heartbeat_log=str(heartbeat_path),
+            command=reproducer,
+            child_pid=None,
+            child_returncode=None,
+            stdout_log=None,
+            stderr_log=None,
+        )
         emit_status(
             "tests",
             started_at=tests_started_at,
@@ -1815,6 +2083,7 @@ def run_tests_and_report(
         warning_summary=warning_summary,
     )
     write_json_atomic(report_path, green_report)
+    mark_wrapper_canonical_finalized()
     emit_status(
         "done",
         started_at=tests_started_at,
@@ -1881,6 +2150,7 @@ def main(argv: list[str] | None = None) -> int:
     args = normalize_args(parser.parse_args(argv), parser)
     enforce_chr1_scope_guard(args)
     matrix = resolve_matrix(args)
+    install_wrapper_finalizer_signal_handlers()
     print_matrix(matrix)
     if args.dry_run and not args.unstage:
         print_planned_actions(args, matrix)
@@ -1912,10 +2182,31 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 )
             except SystemExit as exc:
+                write_wrapper_infra_finalizer(
+                    {
+                        "classification": "wrapper-system-exit",
+                        "exception_type": "SystemExit",
+                        "message": str(exc),
+                    }
+                )
                 emit_status(
                     "done",
                     event="failed",
                     detail=f"reason={exc}",
+                )
+                raise
+            except BaseException as exc:
+                write_wrapper_infra_finalizer(
+                    {
+                        "classification": "wrapper-exception",
+                        "exception_type": exc.__class__.__name__,
+                        "message": str(exc),
+                    }
+                )
+                emit_status(
+                    "done",
+                    event="failed",
+                    detail=f"reason={exc.__class__.__name__}",
                 )
                 raise
 
