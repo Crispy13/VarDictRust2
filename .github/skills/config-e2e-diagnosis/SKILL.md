@@ -60,9 +60,12 @@ Sweep-gate warning classes are interpreted as follows:
 Cache-readiness warnings such as `missing_tsv`, `missing_monolithic_md5`,
 `missing_monolithic_bytes`, `incompatible_chunks_json`,
 `incompatible_backfilled_chunks`, `mismatch_monolithic_md5`,
-`mismatch_monolithic_bytes`, and `unreadable_tsv` are `not-ready`. Treat them
-as fixture/cache infrastructure problems requiring a fresh full-scope cache
-refresh, not as Rust repair evidence.
+`mismatch_monolithic_bytes`, `unreadable_tsv`, `missing_generator_flags`,
+`mismatch_generator_flags`, `missing_bed_sha256`, and `mismatch_bed_sha256`
+are `not-ready`. Treat unreadable staged paths, payload fingerprint failures,
+and provenance/schema compatibility warnings as fixture/cache infrastructure
+problems requiring cache refresh or provenance repair, not as Rust repair
+evidence.
 
 ### State Authority Drift
 

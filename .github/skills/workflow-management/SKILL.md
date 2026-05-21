@@ -11,7 +11,10 @@ description: >
   porting Rust code, fixing parity mismatches, or running tests — those have their own
   skills. This skill exists because workflow changes have high blast radius: a single
   edit can break agent routing, stale cross-references, orphan skills, or silently
-  disable test coverage.
+  disable test coverage. Also use when you need to understand, orient on, or inspect
+  the VarDict-rs workflow structure (agents, skills, CI wiring, test tiers) without
+  making any changes. In orientation mode, read `references/workflow-structure.md`
+  directly — no phase protocol required.
 ---
 
 # Workflow Management
@@ -22,7 +25,15 @@ A renamed test file drops coverage without warning. A stale description can keep
 otherwise-correct agent or skill from ever being invoked. This skill prevents those
 failures by requiring full context before any edit.
 
-The protocol has five phases. No phase may be skipped or abbreviated.
+In change mode, the protocol has five phases. No phase may be skipped or abbreviated.
+
+## Mode Selection
+
+This skill operates in two modes depending on what the user needs:
+
+**Orientation Mode** — Use when the goal is to understand or inspect the workflow structure, not change it. Triggers include phrases like "understand the workflow", "what skills exist", "how does the workflow work", "show me the workflow structure", "what agents are there", "inspect workflow", "orient on the workflow". In orientation mode: read `references/workflow-structure.md` and answer from it. No phase protocol required.
+
+**Change Mode** — Use when any infrastructure file will be created, modified, deleted, or renamed. This is the default when a modification is requested. Triggers are the same as the skill description's main use case. In change mode: run the full Phase 1–6 protocol below.
 
 ---
 
@@ -40,13 +51,7 @@ Read every `.agent.md` under `.github/agents/`:
 |------|-----------------|
 | Each agent file | Name, description, tools list, model, agents list, user-invocable, disable-model-invocation, any file-level purpose note, full body instructions |
 
-Current agents (update this list if agents are added/removed):
-- `orchestrator.agent.md`
-- `module-analyst.agent.md`
-- `port-engineer.agent.md`
-- `parity-verifier.agent.md`
-- `review-gate.agent.md`
-- `gerneral-purpose.agent.md`
+> See `references/workflow-structure.md` → Agents for the current list.
 
 ### 1.2 Skill Files
 
@@ -56,18 +61,13 @@ Read every `SKILL.md` under `.github/skills/*/`:
 |-------|-----------------|
 | Each skill | Name, description, trigger contexts, which agents reference it, any agent names mentioned in the body, any file paths referenced, workflow phases |
 
-Current skills (15):
-`change-impact-review`, `codebase-doc-manage`, `config-e2e-diagnosis`, `faithful-port`,
-`git-commit`, `logic-parity-audit`, `mem-optimization`, `mismatch-repair`,
-`module-parity-test`, `perf-optimization`, `rust-freshness-verification`,
-`shard-diagnosis`, `tiered-config-test`, `workflow-management`, `workflow-router`
+> See `references/workflow-structure.md` → Skills for the current list.
 
 ### 1.3 Instruction Files
 
 Read every `.instructions.md` under `.github/instructions/`:
-- `ops-policy.instructions.md` (applyTo: `**`)
-- `rust-parity.instructions.md` (applyTo: `**/*.rs`)
-- `rust.instructions.md` (applyTo: `**/*.rs`)
+
+> See `references/workflow-structure.md` → Instructions for the current list.
 
 For each instruction file, extract `description`, `applyTo`, and any file-level
 purpose note in addition to the rule body.
@@ -75,10 +75,8 @@ purpose note in addition to the rule body.
 ### 1.4 Test Harness
 
 Read every file under `tests/`:
-- All `parity_*.rs` test files, including the 7 parity harness binaries: `parity_suite`, `parity_sweep_suite`, `parity_e2e`, `parity_config_e2e`, `parity_config_e2e_cells`, `parity_e2e_sweep`, and `parity_e2e_sweep_somatic`
-- `tests/parity_suite.rs`, `tests/parity_sweep_suite.rs`, `tests/parity_e2e_sweep.rs`, and `tests/parity_e2e_sweep_somatic.rs`
-- Every file under `tests/parity_suite/`, `tests/parity_sweep_suite/`, `tests/parity_e2e_sweep/`, and `tests/parity_e2e_sweep_somatic/`
-- `tests/common/mod.rs`
+
+> See `references/workflow-structure.md` → Test Harness for the current file inventory.
 
 `parity_e2e_sweep` is the full-BAM E2E parity tier, cost-gated, with 3 `#[ignore]`
 tests (one per BAM tag). `parity_e2e_sweep_somatic` is the full-pair somatic sweep
@@ -90,10 +88,8 @@ which modules each test covers.
 ### 1.5 CI Workflows
 
 Read every `.yml` under `.github/workflows/`:
-- `ci.yml`
-- `parity.yml`
-- `sweep.yml`
-- `ignore-audit.yml`
+
+> See `references/workflow-structure.md` → CI Workflows for the current list.
 
 Note triggers, job names, environment variables, test commands, and which test files
 each workflow runs.
@@ -102,18 +98,7 @@ each workflow runs.
 
 Read every script under `scripts/`:
 
-Shell scripts: `aa_gate.sh`, `batch_fixtures.sh`, `bisect_parity.sh`,
-`check_ignored_tests.sh`, `check_preset_drift.sh`, `config_e2e_surface_gate.sh`,
-`e2e_sweep_gate.sh`, `gen_e2e_golden_tsv.sh`, `gen_e2e_sweep_golden.sh`, `gen_somatic_sweep_bed.sh`,
-`gen_sweep_bed.sh`, `parity_status.sh`, `sample_regions.sh`, `sweep_aa_check.sh`,
-`sweep_fixtures.sh`
-
-Python scripts: `dual_run.py`, `e2e_sweep_gate.py`, `pilot_generate.py`,
-`sample_regions.py`, `sweep_fixtures_parallel.py`, `sweep_generate_v2.py`
-
-Library modules: `lib/merge_manifest.py`
-
-Also read: `scripts/ignored_tests_allowlist.txt`
+> See `references/workflow-structure.md` → Scripts for the current list.
 
 ### 1.7 Build Configuration
 
@@ -398,6 +383,36 @@ If any workflow YAML was modified, validate syntax:
 python -c "import yaml; yaml.safe_load(open('.github/workflows/{file}.yml'))"
 ```
 
+### 5.5 Test Execution (if tests were affected)
+
+If the change modified test files, test configuration, or fixture scripts:
+```bash
+cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_
+```
+
+### 5.6 Reference File Sync
+
+After all other validation steps, verify that `references/workflow-structure.md` accurately reflects the change just made:
+
+- If the change added, removed, or renamed any agent, skill, instruction, test file, CI workflow, or script: update `references/workflow-structure.md` accordingly.
+- If the reference is already current: explicitly confirm in the Validation Report — "Reference file verified, no update needed."
+
+This step is mandatory even when no update is needed. A change-mode run that omits the reference-sync check leaves the reference file unverified.
+
+### 5.7 Validation Report
+
+```
+## Validation Results
+
+- Build check: {PASS | FAIL — details}
+- Cross-reference scan: {CLEAN | {N} stale refs found — details}
+- Description/docstring sanity: {PASS | FAIL — details}
+- CI YAML validation: {PASS | FAIL | N/A}
+- Test execution: {PASS | FAIL | N/A}
+- Reference file sync: {UPDATED | VERIFIED-NO-CHANGE | FAIL — details}
+- Ignored tests allowlist: {up-to-date | needs update — details}
+```
+
 ---
 
 ## Phase 6: Work Report
@@ -465,31 +480,14 @@ Or "None." if the change is self-contained.}
 - Announce the report path in chat after writing it so the user and any supervising
   orchestrator can find it.
 
-### 5.5 Test Execution (if tests were affected)
-
-If the change modified test files, test configuration, or fixture scripts:
-```bash
-cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_
-```
-
-### 5.6 Validation Report
-
-```
-## Validation Results
-
-- Build check: {PASS | FAIL — details}
-- Cross-reference scan: {CLEAN | {N} stale refs found — details}
-- Description/docstring sanity: {PASS | FAIL — details}
-- CI YAML validation: {PASS | FAIL | N/A}
-- Test execution: {PASS | FAIL | N/A}
-- Ignored tests allowlist: {up-to-date | needs update — details}
-```
-
 ---
 
 ## Maintaining This Skill
 
 This skill references specific files and counts that exist in the repository today.
 When infrastructure changes (new agents, new skills, new test tiers), update the
-file lists in Phase 1 to match reality. The lists serve as a checklist — if they're
-stale, the whole point of the skill (complete context) is undermined.
+`references/workflow-structure.md` to match reality. The reference file is the single
+authoritative inventory — if it's stale, the whole point of the skill (complete
+context) is undermined. The SKILL.md procedural steps rarely need updating for
+routine infrastructure changes, but may need edits for new component types or
+structural process changes.

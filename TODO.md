@@ -6,10 +6,10 @@ Deferred work items in the VarDict-rs port that must be resolved before full pro
 # Planned
 ## Minimum stale Java cache guard follow-ups
 
-**Status:** Minimum gate guard implemented; broader hardening deferred.
+**Status:** Symlink-safe gate guard and provenance normalization implemented; broader writer-side alignment and hardening deferred.
 **Location:** [scripts/e2e_sweep_gate.py](scripts/e2e_sweep_gate.py), [scripts/sweep_fixtures_parallel.py](scripts/sweep_fixtures_parallel.py), [scripts/backfill_chunks_json.py](scripts/backfill_chunks_json.py)
 
-The minimum workflow-managed stale-cache fix validates staged Java TSV content against paired `*.chunks.json` `monolithic_md5` fingerprints and prevents expected non-empty `--output-only` refreshes from succeeding as no-ops. Backfilled sidecars without gate provenance are cache-readiness failures, not Rust repair evidence.
+The workflow-managed stale-cache fix now validates staged Java TSV content against paired `*.chunks.json` `monolithic_md5` fingerprints through symlink-safe staged paths, normalizes mixed `generator_flags` and `bed_sha256` provenance schemas deliberately, and preserves `incompatible_backfilled_chunks` for backfilled sidecars without gate provenance. These remain cache-readiness failures, not Rust repair evidence.
 
 Deferred hardening remains out of the first slice: Rust harness-side content validation, CI YAML changes, a broad no-mutation audit framework, and a stronger new content hash field. Revisit those only if gate-time validation proves insufficient for the active workflow.
 

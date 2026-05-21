@@ -1274,6 +1274,30 @@ def read_json(path: Path) -> dict:
         return json.load(handle)
 
 
+def anchored_project_path(path: Path) -> Path:
+    candidate = path.expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate
+
+
+def validation_path_pair(path: Path) -> tuple[Path, Path]:
+    original_path = anchored_project_path(path)
+    return original_path, original_path.resolve(strict=False)
+
+
+def format_validation_path(original_path: Path, resolved_path: Path) -> str:
+    if original_path == resolved_path:
+        return str(original_path)
+    return f"staged={original_path} resolved={resolved_path}"
+
+
+def read_chunks_payload(chunks_path: Path) -> object:
+    _original_path, resolved_path = validation_path_pair(chunks_path)
+    with resolved_path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def write_json(path: Path, payload: dict, *, sort_keys: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=sort_keys) + "\n", encoding="utf-8")
@@ -1340,10 +1364,11 @@ def bed_sha256(sweep_bed_root: Path, tag: str) -> str:
 
 
 def decompressed_tsv_md5_and_bytes(path: Path) -> tuple[str, int]:
+    _original_path, resolved_path = validation_path_pair(path)
     digest = hashlib.md5()
     byte_count = 0
     proc = subprocess.Popen(
-        ["zstd", "-dc", str(path)],
+        ["zstd", "-dc", str(resolved_path)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -1367,53 +1392,122 @@ def decompressed_tsv_md5_and_bytes(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), byte_count
 
 
-def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
-    if not isinstance(payload, dict):
-        return "incompatible_chunks_json", f"{chunks_path} top-level JSON value is not an object"
+def missing_backfilled_provenance_keys(payload: dict[str, object]) -> list[str]:
+    if payload.get("backfilled") is not True:
+        return []
+    return [key for key in ("generator_flags", "preset", "bed_sha256") if payload.get(key) is None]
 
-    if not tsv_path.exists():
-        return "missing_tsv", str(tsv_path)
+
+def normalize_generator_flags(value: object) -> str | None:
+    if isinstance(value, str):
+        normalized = " ".join(value.split())
+        return normalized or ""
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        normalized = " ".join(item.strip() for item in value if item.strip())
+        return normalized or ""
+    return None
+
+
+def normalize_bed_sha256(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) != 64:
+        return None
+    if any(char not in "0123456789abcdefABCDEF" for char in value):
+        return None
+    return value.lower()
+
+
+def provenance_metadata_warning(
+    key: str,
+    actual_value: object,
+    expected_value: object,
+    *,
+    chunks_path: Path,
+    resolved_chunks_path: Path,
+) -> tuple[str, str] | None:
+    chunks_label = format_validation_path(chunks_path, resolved_chunks_path)
+
+    if key == "generator_flags":
+        expected_flags = normalize_generator_flags(expected_value)
+        actual_flags = normalize_generator_flags(actual_value)
+        if expected_flags is not None and actual_flags == expected_flags:
+            return None
+        detail = f"{chunks_label} expected={expected_value} actual={actual_value}"
+        if actual_flags is not None:
+            detail += f" normalized_actual={actual_flags}"
+        else:
+            detail += f" actual_schema={type(actual_value).__name__}"
+        return f"mismatch_{key}", detail
+
+    if key == "bed_sha256":
+        expected_bed_sha256 = normalize_bed_sha256(expected_value)
+        actual_bed_sha256 = normalize_bed_sha256(actual_value)
+        if expected_bed_sha256 is not None and actual_bed_sha256 == expected_bed_sha256:
+            return None
+        detail = f"{chunks_label} expected_aggregate={expected_value} actual={actual_value}"
+        if actual_bed_sha256 is not None:
+            detail += f" normalized_actual={actual_bed_sha256}"
+        else:
+            detail += f" actual_schema={type(actual_value).__name__}"
+        return f"mismatch_{key}", detail
+
+    if actual_value == expected_value:
+        return None
+    return f"mismatch_{key}", f"{chunks_label} expected={expected_value} actual={actual_value}"
+
+
+def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
+    staged_tsv_path, resolved_tsv_path = validation_path_pair(tsv_path)
+    staged_chunks_path, resolved_chunks_path = validation_path_pair(chunks_path)
+    tsv_label = format_validation_path(staged_tsv_path, resolved_tsv_path)
+    chunks_label = format_validation_path(staged_chunks_path, resolved_chunks_path)
+
+    if not isinstance(payload, dict):
+        return "incompatible_chunks_json", f"{chunks_label} top-level JSON value is not an object"
+
+    if not staged_tsv_path.exists():
+        return "missing_tsv", tsv_label
 
     monolithic_md5 = payload.get("monolithic_md5")
     if monolithic_md5 is None:
-        return "missing_monolithic_md5", str(chunks_path)
+        return "missing_monolithic_md5", chunks_label
     if not isinstance(monolithic_md5, str) or len(monolithic_md5) != 32:
-        return "incompatible_chunks_json", f"{chunks_path} invalid monolithic_md5"
+        return "incompatible_chunks_json", f"{chunks_label} invalid monolithic_md5"
     if any(char not in "0123456789abcdefABCDEF" for char in monolithic_md5):
-        return "incompatible_chunks_json", f"{chunks_path} non-hex monolithic_md5"
+        return "incompatible_chunks_json", f"{chunks_label} non-hex monolithic_md5"
 
     monolithic_bytes = payload.get("monolithic_bytes")
     if monolithic_bytes is None:
-        return "missing_monolithic_bytes", str(chunks_path)
+        return "missing_monolithic_bytes", chunks_label
     if not isinstance(monolithic_bytes, int) or isinstance(monolithic_bytes, bool) or monolithic_bytes < 0:
-        return "incompatible_chunks_json", f"{chunks_path} invalid monolithic_bytes"
+        return "incompatible_chunks_json", f"{chunks_label} invalid monolithic_bytes"
 
-    if payload.get("backfilled") is True:
-        missing_provenance = [
-            key
-            for key in ("generator_flags", "preset", "bed_sha256")
-            if payload.get(key) is None
-        ]
-        if missing_provenance:
+    missing_provenance = missing_backfilled_provenance_keys(payload)
+    if missing_provenance:
             return (
                 "incompatible_backfilled_chunks",
-                f"{chunks_path} missing gate provenance: {','.join(missing_provenance)}",
+                f"{chunks_label} missing gate provenance: {','.join(missing_provenance)}",
             )
 
     try:
-        actual_md5, actual_bytes = decompressed_tsv_md5_and_bytes(tsv_path)
+        actual_md5, actual_bytes = decompressed_tsv_md5_and_bytes(staged_tsv_path)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.strip() if isinstance(exc.stderr, str) else ""
+        detail = f"{tsv_label} argv={exc.cmd} exit={exc.returncode}"
+        if stderr:
+            detail += f" stderr={stderr}"
+        return "unreadable_tsv", detail
     except Exception as exc:  # noqa: BLE001
-        return "unreadable_tsv", f"{tsv_path}: {exc}"
+        return "unreadable_tsv", f"{tsv_label}: {exc}"
 
     if actual_md5.lower() != monolithic_md5.lower():
         return (
             "mismatch_monolithic_md5",
-            f"{chunks_path} expected={monolithic_md5} actual={actual_md5}",
+            f"{chunks_label} expected={monolithic_md5} actual={actual_md5}",
         )
     if actual_bytes != monolithic_bytes:
         return (
             "mismatch_monolithic_bytes",
-            f"{chunks_path} expected={monolithic_bytes} actual={actual_bytes}",
+            f"{chunks_label} expected={monolithic_bytes} actual={actual_bytes}",
         )
 
     return None
@@ -1683,23 +1777,24 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
         for chrom in chroms:
             tsv_path = target_path(CANONICAL_OUTPUT_ROOT, preset, chrom, tag, ".tsv.zst")
             chunks_path = target_path(CANONICAL_OUTPUT_ROOT, preset, chrom, tag, ".chunks.json")
-            if not chunks_path.exists():
+            staged_chunks_path, resolved_chunks_path = validation_path_pair(chunks_path)
+            if not staged_chunks_path.exists():
                 track_warning(
                     warning_counts,
                     "missing_chunks",
-                    f"{preset}/{tag}/chr{chrom}",
+                    format_validation_path(staged_chunks_path, resolved_chunks_path),
                     warning_samples,
                 )
                 completed_cells += 1
                 continue
 
             try:
-                payload = read_json(chunks_path)
+                payload = read_chunks_payload(chunks_path)
             except Exception as exc:  # noqa: BLE001
                 track_warning(
                     warning_counts,
                     "incompatible_chunks_json",
-                    f"{chunks_path}: {exc}",
+                    f"{format_validation_path(staged_chunks_path, resolved_chunks_path)}: {exc}",
                     warning_samples,
                 )
                 completed_cells += 1
@@ -1740,20 +1835,33 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                 "preset": preset,
                 "bed_sha256": bed_sha256(active_sweep_bed_root, tag),
             }
+            backfilled_missing = set(missing_backfilled_provenance_keys(payload))
             for key, expected_value in optional_checks.items():
                 actual_value = payload.get(key)
                 if actual_value is None:
+                    if key in backfilled_missing:
+                        continue
                     track_warning(
                         warning_counts,
                         f"missing_{key}",
-                        str(chunks_path),
+                        format_validation_path(staged_chunks_path, resolved_chunks_path),
                         warning_samples,
                     )
-                elif str(actual_value) != str(expected_value):
+                    continue
+
+                metadata_warning = provenance_metadata_warning(
+                    key,
+                    actual_value,
+                    expected_value,
+                    chunks_path=staged_chunks_path,
+                    resolved_chunks_path=resolved_chunks_path,
+                )
+                if metadata_warning is not None:
+                    warning_key, warning_message = metadata_warning
                     track_warning(
                         warning_counts,
-                        f"mismatch_{key}",
-                        f"{chunks_path} expected={expected_value} actual={actual_value}",
+                        warning_key,
+                        warning_message,
                         warning_samples,
                     )
             completed_cells += 1
