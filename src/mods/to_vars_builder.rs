@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use regex::Regex;
 
 use crate::config::{Configuration, SVFLANK};
-use crate::data::{AlignedVarsData, Region, Variant, VariationMap, Vars};
+use crate::data::{AlignedVarsData, PositionMap, Region, Variant, VariationMap, Vars};
 use crate::patterns::{
     AMP_ATGC, ANY_SV, BEGIN_DIGITS, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_CARET, CARET_ATGNC,
     DUP_NUM, HASH_GROUP_CARET_GROUP, INV_NUM, SOME_SV_NUMBERS,
@@ -192,7 +192,7 @@ pub fn proceed_vref_is_deletion(
     // left 70 bases in reference sequence
     let leftseq = join_ref(ref_map, (position - REF_70_BASES).max(1), position - 1);
     let chr0 = chromosome_limit(region, ref_map); // Trap T23: non-mutating
-    // right dellen+70 bases in reference sequence
+                                                  // right dellen+70 bases in reference sequence
     let tseq = join_ref(
         ref_map,
         position,
@@ -238,7 +238,7 @@ pub fn proceed_vref_is_insertion(
     // left 50 bases (inclusive of position)
     let leftseq = join_ref(ref_map, (position - REF_50_BASES).max(1), position);
     let x = chromosome_limit(region, ref_map); // Trap T23: non-mutating
-    // right 70 bases
+                                               // right 70 bases
     let tseq2 = join_ref(ref_map, position + 1, (position + REF_70_BASES).min(x));
 
     let (mut msi, shift3, mut msint) = find_msi(tseq1, &tseq2, Some(&leftseq));
@@ -461,9 +461,9 @@ pub fn create_insertion(
     var: &mut Vec<Variant>,
     debug_lines: &mut Vec<String>,
     mut hicov: i32,
-    insertion_variants: &HashMap<i32, VariationMap>,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &HashMap<i32, i32>,
+    insertion_variants: &PositionMap<VariationMap>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &PositionMap<i32>,
     ref_map: &HashMap<i32, u8>,
     conf: &Configuration,
 ) -> i32 {
@@ -615,7 +615,7 @@ pub fn collect_vars_at_position(
 pub fn is_the_same_variation_on_ref(
     position: i32,
     vars_at_cur_position: &VariationMap,
-    insertion_variants: &HashMap<i32, VariationMap>,
+    insertion_variants: &PositionMap<VariationMap>,
     ref_map: &HashMap<i32, u8>,
     conf: &Configuration,
     has_amplicon_based_calling: bool,
@@ -736,8 +736,8 @@ pub fn collect_reference_variants(
     debug_lines: &[String],
     ref_map: &HashMap<i32, u8>,
     region: &Region,
-    ref_coverage: &HashMap<i32, i32>,
-    non_insertion_variants: &HashMap<i32, VariationMap>,
+    ref_coverage: &PositionMap<i32>,
+    non_insertion_variants: &PositionMap<VariationMap>,
     duprate: f64,
     conf: &Configuration,
     has_amplicon_based_calling: bool,
@@ -1100,7 +1100,7 @@ fn process_variant_finalization(
     variations_at_pos: &mut Vars,
     ref_map: &HashMap<i32, u8>,
     region: &Region,
-    ref_coverage: &HashMap<i32, i32>,
+    ref_coverage: &PositionMap<i32>,
     _duprate: f64,
     conf: &Configuration,
     debug_lines: &[String],
@@ -1347,9 +1347,9 @@ pub fn process(
     max_read_length: i32,
     region: &Region,
     ref_map: &HashMap<i32, u8>,
-    ref_coverage: &HashMap<i32, i32>,
-    insertion_variants: &HashMap<i32, VariationMap>,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    ref_coverage: &PositionMap<i32>,
+    insertion_variants: &PositionMap<VariationMap>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
     duprate: f64,
 ) -> AlignedVarsData {
     let (conf, has_amplicon_based_calling) = GlobalReadOnlyScope::with_instance(|scope| {
@@ -1412,9 +1412,9 @@ fn process_position(
     position: i32,
     aligned_variants: &mut HashMap<i32, Vars>,
     ref_map: &HashMap<i32, u8>,
-    ref_coverage: &HashMap<i32, i32>,
-    insertion_variants: &HashMap<i32, VariationMap>,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    ref_coverage: &PositionMap<i32>,
+    insertion_variants: &PositionMap<VariationMap>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
     region: &Region,
     duprate: f64,
     conf: &Configuration,

@@ -12,6 +12,7 @@ use crate::config::Configuration;
 use crate::patterns::ANY_SV;
 use crate::utils::{substr, substr_with_len};
 
+pub type PositionMap<V> = HashMap<i32, V, FxBuildHasher>;
 pub type VariationEntries = IndexMap<String, Variation, FxBuildHasher>;
 
 // ─── SortedStringMap: BTreeMap<String, V> with array-of-pairs serde ─────────
@@ -502,17 +503,17 @@ pub struct InitialData {
     #[serde(rename = "nonInsertionVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub non_insertion_variants: HashMap<i32, VariationMap>,
+    pub non_insertion_variants: PositionMap<VariationMap>,
 
     #[serde(rename = "insertionVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub insertion_variants: HashMap<i32, VariationMap>,
+    pub insertion_variants: PositionMap<VariationMap>,
 
     #[serde(rename = "refCoverage")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub ref_coverage: HashMap<i32, i32>,
+    pub ref_coverage: PositionMap<i32>,
 
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
@@ -527,9 +528,9 @@ pub struct InitialData {
 
 impl InitialData {
     pub fn new(
-        non_insertion_variants: HashMap<i32, VariationMap>,
-        insertion_variants: HashMap<i32, VariationMap>,
-        ref_coverage: HashMap<i32, i32>,
+        non_insertion_variants: PositionMap<VariationMap>,
+        insertion_variants: PositionMap<VariationMap>,
+        ref_coverage: PositionMap<i32>,
         soft_clips_3_end: HashMap<i32, Sclip>,
         soft_clips_5_end: HashMap<i32, Sclip>,
     ) -> Self {
@@ -549,27 +550,27 @@ pub struct VariationData {
     #[serde(rename = "nonInsertionVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub non_insertion_variants: HashMap<i32, VariationMap>,
+    pub non_insertion_variants: PositionMap<VariationMap>,
 
     #[serde(rename = "insertionVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub insertion_variants: HashMap<i32, VariationMap>,
+    pub insertion_variants: PositionMap<VariationMap>,
 
     #[serde(rename = "positionToInsertionCount")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub position_to_insertion_count: HashMap<i32, SortedStringMap<i32>>,
+    pub position_to_insertion_count: PositionMap<SortedStringMap<i32>>,
 
     #[serde(rename = "positionToDeletionsCount")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub position_to_deletions_count: HashMap<i32, SortedStringMap<i32>>,
+    pub position_to_deletions_count: PositionMap<SortedStringMap<i32>>,
 
     #[serde(rename = "refCoverage")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub ref_coverage: HashMap<i32, i32>,
+    pub ref_coverage: PositionMap<i32>,
 
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
@@ -593,7 +594,7 @@ pub struct VariationData {
 
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub mnp: HashMap<i32, SortedStringMap<i32>>,
+    pub mnp: PositionMap<SortedStringMap<i32>>,
 
     #[serde(rename = "spliceCount")]
     pub splice_count: SortedStringMap<Vec<i32>>,
@@ -1103,12 +1104,12 @@ pub struct RealignedVariationData {
     #[serde(rename = "nonInsertionVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub non_insertion_variants: HashMap<i32, VariationMap>,
+    pub non_insertion_variants: PositionMap<VariationMap>,
 
     #[serde(rename = "insertionVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub insertion_variants: HashMap<i32, VariationMap>,
+    pub insertion_variants: PositionMap<VariationMap>,
 
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
@@ -1123,7 +1124,7 @@ pub struct RealignedVariationData {
     #[serde(rename = "refCoverage")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub ref_coverage: HashMap<i32, i32>,
+    pub ref_coverage: PositionMap<i32>,
 
     #[serde(rename = "maxReadLength")]
     pub max_read_length: Option<i32>,

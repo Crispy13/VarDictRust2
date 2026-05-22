@@ -5,6 +5,7 @@ Discovered by pytest if pytest is installed.
 """
 from __future__ import annotations
 
+import argparse
 import contextlib
 import hashlib
 import io
@@ -64,6 +65,17 @@ def _run(args: list[str], env: dict[str, str] | None = None) -> subprocess.Compl
 
 
 class GateSmokeTest(unittest.TestCase):
+    def tearDown(self) -> None:
+        e2e_sweep_gate.WRAPPER_FINALIZER_STATE.clear()
+        e2e_sweep_gate.WRAPPER_FINALIZER_STATE.update(
+            {
+                "active": False,
+                "canonical_finalized": False,
+                "infra_finalized": False,
+                "writing": False,
+            }
+        )
+
     def test_warning_summary_defaults_unknown_keys_to_not_ready(self) -> None:
         summary = e2e_sweep_gate.warning_summary_payload(
             {
@@ -436,6 +448,72 @@ class GateSmokeTest(unittest.TestCase):
 
         self.assertEqual(progress_lines[0], "STATUS phase=tests event=pair-start active=T1-01/hg002 elapsed=00:00:00")
         self.assertIn("WARNING phase=provenance elapsed=00:00:00 warnings=2", progress_lines[1])
+
+    def test_write_wrapper_infra_finalizer_falls_back_when_atomic_report_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
+            report_path = Path(report_dir)
+            args = argparse.Namespace(report_dir=report_path)
+            e2e_sweep_gate.begin_wrapper_finalizer_run(
+                args,
+                [("T1-01", "hg002", "1")],
+                started_at=1.0,
+                total_pairs=1,
+            )
+            e2e_sweep_gate.update_wrapper_finalizer_context(
+                preset="T1-01",
+                tag="hg002",
+                chroms=["1"],
+                pair_index=1,
+            )
+            original_write_json_atomic = e2e_sweep_gate.write_json_atomic
+
+            def flaky_write_json_atomic(path: Path, payload: dict, *, sort_keys: bool = True) -> None:
+                if path == report_path / "wrapper-termination-report.json":
+                    raise OSError("simulated atomic report write failure")
+                original_write_json_atomic(path, payload, sort_keys=sort_keys)
+
+            with mock.patch("scripts.e2e_sweep_gate.write_json_atomic", side_effect=flaky_write_json_atomic):
+                e2e_sweep_gate.write_wrapper_infra_finalizer({"classification": "wrapper-terminated"})
+
+            payload = json.loads((report_path / "wrapper-termination-report.json").read_text(encoding="utf-8"))
+            status_payload = json.loads((report_path / "status.json").read_text(encoding="utf-8"))
+            failed_marker = (report_path / "failed").read_text(encoding="utf-8")
+
+        self.assertEqual(payload["result"], "infra-failed")
+        self.assertEqual(payload["classification"], "wrapper-terminated")
+        self.assertEqual(payload["reason"]["finalizer_errors"][0]["stage"], "infra-finalizer")
+        self.assertEqual(status_payload["result"], "infra-failed")
+        self.assertIn("infra-failed wrapper-terminated", failed_marker)
+
+    def test_wrapper_exit_hook_writes_infra_artifacts_for_active_test_phase(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
+            report_path = Path(report_dir)
+            args = argparse.Namespace(report_dir=report_path)
+            e2e_sweep_gate.begin_wrapper_finalizer_run(
+                args,
+                [("T1-01", "hg002", "1")],
+                started_at=1.0,
+                total_pairs=1,
+            )
+            e2e_sweep_gate.update_wrapper_finalizer_context(
+                preset="T1-01",
+                tag="hg002",
+                chroms=["1"],
+                pair_index=1,
+            )
+
+            e2e_sweep_gate.wrapper_exit_hook()
+
+            payload = json.loads((report_path / "wrapper-termination-report.json").read_text(encoding="utf-8"))
+            status_payload = json.loads((report_path / "status.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["classification"], "wrapper-exit-without-finalize")
+        self.assertEqual(
+            payload["reason"]["reason"],
+            "Interpreter exited while the test-phase finalizer was still active.",
+        )
+        self.assertEqual(status_payload["status"], "failed")
+        self.assertFalse(e2e_sweep_gate.wrapper_finalizer_should_write())
 
     def test_format_status_line_includes_progress_fields(self) -> None:
         with mock.patch("scripts.e2e_sweep_gate.time.monotonic", return_value=3661.0):

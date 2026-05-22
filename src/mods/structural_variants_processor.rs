@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use crate::config::{DISCPAIRQUAL, MINSVCDIST, SEED_1, SEED_2, SVFLANK};
 use crate::data::{
-    CurrentSegment, InitialData, Match, RealignedVariationData, Region, SVStructures, Sclip, Side,
-    SortPositionSclip, Variation, VariationMap, VariationMapSV,
+    CurrentSegment, InitialData, Match, PositionMap, RealignedVariationData, Region, SVStructures,
+    Sclip, Side, SortPositionSclip, Variation, VariationMap, VariationMapSV,
 };
 use crate::reference::{Reference, ReferenceResource};
 use crate::scope::{GlobalReadOnlyScope, Scope, VariantPrinter};
@@ -699,10 +699,7 @@ pub fn fill_and_sort_tmp_sv(
 /// Get-or-create SV metadata for a position in non_insertion_variants.
 /// Java: VariationMap.getSV()
 /// Duplicate of variation_realigner's private get_sv — needed for cross-module access.
-fn get_sv(
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    pos: i32,
-) -> &mut VariationMapSV {
+fn get_sv(non_insertion_variants: &mut PositionMap<VariationMap>, pos: i32) -> &mut VariationMapSV {
     let vmap = non_insertion_variants
         .entry(pos)
         .or_insert_with(VariationMap::default);
@@ -732,9 +729,9 @@ fn run_partial_pipeline(
     me: i32,
     max_read_length: i32,
     reference: &mut Reference,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
 ) {
@@ -883,9 +880,9 @@ fn prefetch_dup_breakpoint_reference_if_missing(
 /// Two parts: 5' forward (svfdel loop) + 3' reverse (svrdel loop).
 pub fn find_del(
     sv_structures: &mut SVStructures,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -1504,9 +1501,9 @@ pub fn find_del(
 /// Thin dispatcher: calls findINVsub for all 4 INV lists in exact order.
 pub fn find_inv(
     sv_structures: &mut SVStructures,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -1616,9 +1613,9 @@ fn find_inv_sub(
     svref: &mut Vec<Sclip>,
     dir: i32,
     side: Side,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -2022,8 +2019,8 @@ fn find_inv_sub(
 /// Find DEL/INV from raw soft-clip scanning — two passes: 5' then 3'.
 #[allow(clippy::too_many_arguments)]
 pub fn findsv(
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -2466,8 +2463,8 @@ pub fn findsv(
 #[allow(clippy::too_many_arguments)]
 pub fn find_del_disc(
     sv_structures: &mut SVStructures,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -2746,8 +2743,8 @@ pub fn find_del_disc(
 #[allow(clippy::too_many_arguments)]
 pub fn find_inv_disc(
     sv_structures: &mut SVStructures,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &HashMap<i32, Sclip>,
     soft_clips_5_end: &HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -3014,9 +3011,9 @@ pub fn find_inv_disc(
 #[allow(clippy::too_many_arguments)]
 pub fn find_dup_disc(
     sv_structures: &mut SVStructures,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -3466,9 +3463,9 @@ fn rebuild_softp2sv_from_sv_structures(
 #[allow(clippy::too_many_arguments)]
 pub fn find_all_svs(
     sv_structures: &mut SVStructures,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -3600,8 +3597,8 @@ pub fn find_all_svs(
 /// Rescues short soft-clipped reads (≤5 bp consensus) as SNVs by adjusting
 /// counts on matching existing non-insertion variants.
 pub fn adj_snv(
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     reference: &Reference,
@@ -3767,8 +3764,8 @@ pub fn process(
     region: &Region,
     bams: &Option<Vec<String>>,
     splice: &Option<std::collections::BTreeSet<String>>,
-    _prev_non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    _prev_ref_coverage: &mut HashMap<i32, i32>,
+    _prev_non_insertion_variants: &mut PositionMap<VariationMap>,
+    _prev_ref_coverage: &mut PositionMap<i32>,
     _prev_soft_clips_3_end: &mut HashMap<i32, Sclip>,
     _prev_soft_clips_5_end: &mut HashMap<i32, Sclip>,
     _prev_reference_sequences: &HashMap<i32, u8>,

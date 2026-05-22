@@ -5,22 +5,22 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use rust_htslib::bam::{self, HeaderView, record::Aux};
+use rust_htslib::bam::{self, record::Aux, HeaderView};
 
 use crate::config::{Configuration, MINMAPBASE, MINSVCDIST, MINSVPOS, SEED_1};
 use crate::data::{
-    BaseInsertion, Mate, ModifiedCigar, Region, SVStructures, Sclip, SortedStringMap, Variation,
-    VariationData, VariationMap,
+    BaseInsertion, Mate, ModifiedCigar, PositionMap, Region, SVStructures, Sclip, SortedStringMap,
+    Variation, VariationData, VariationMap,
 };
 use crate::mods::cigar_modifier::modify_cigar;
-use crate::mods::sam_file_parser::{RecordPreprocessor, get_mate_reference_name};
+use crate::mods::sam_file_parser::{get_mate_reference_name, RecordPreprocessor};
 use crate::patterns::*;
 use crate::reference::Reference;
 use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{get_reverse_complemented_sequence, global_find, substr_with_len};
 use crate::variations::{
-    get_variation, get_variation_from_seq, inc_cnt, is_equals, is_has_and_equals_base,
-    is_has_and_equals_str, is_has_and_not_equals_base, is_not_equals,
+    get_variation, get_variation_from_seq, inc_cnt, inc_cnt_sorted_string_map, is_equals,
+    is_has_and_equals_base, is_has_and_equals_str, is_has_and_not_equals_base, is_not_equals,
     is_reference_mismatch_and_not_n,
 };
 
@@ -214,14 +214,14 @@ impl Offset {
 /// and per-record mutable state for the CIGAR element loop.
 pub struct CigarParser {
     // ── Output maps (populated across all records) ──
-    pub non_insertion_variants: HashMap<i32, VariationMap>,
-    pub insertion_variants: HashMap<i32, VariationMap>,
-    pub ref_coverage: HashMap<i32, i32>,
+    pub non_insertion_variants: PositionMap<VariationMap>,
+    pub insertion_variants: PositionMap<VariationMap>,
+    pub ref_coverage: PositionMap<i32>,
     pub soft_clips_3_end: HashMap<i32, Sclip>,
     pub soft_clips_5_end: HashMap<i32, Sclip>,
-    pub position_to_insertion_count: HashMap<i32, SortedStringMap<i32>>,
-    pub mnp: HashMap<i32, SortedStringMap<i32>>,
-    pub position_to_deletion_count: HashMap<i32, SortedStringMap<i32>>,
+    pub position_to_insertion_count: PositionMap<SortedStringMap<i32>>,
+    pub mnp: PositionMap<SortedStringMap<i32>>,
+    pub position_to_deletion_count: PositionMap<SortedStringMap<i32>>,
     pub splice_count: SortedStringMap<Vec<i32>>,
     pub sv_structures: SVStructures,
 
@@ -258,14 +258,14 @@ impl CigarParser {
     pub fn new(svflag: bool) -> Self {
         Self {
             // Output maps — initialized empty
-            non_insertion_variants: HashMap::new(),
-            insertion_variants: HashMap::new(),
-            ref_coverage: HashMap::new(),
+            non_insertion_variants: PositionMap::default(),
+            insertion_variants: PositionMap::default(),
+            ref_coverage: PositionMap::default(),
             soft_clips_3_end: HashMap::new(),
             soft_clips_5_end: HashMap::new(),
-            position_to_insertion_count: HashMap::new(),
-            mnp: HashMap::new(),
-            position_to_deletion_count: HashMap::new(),
+            position_to_insertion_count: PositionMap::default(),
+            mnp: PositionMap::default(),
+            position_to_deletion_count: PositionMap::default(),
             splice_count: SortedStringMap::new(),
             sv_structures: SVStructures::default(),
 
@@ -305,9 +305,9 @@ impl CigarParser {
         splice: &HashSet<String>,
         max_read_length: i32,
         // Fields from RecordPreprocessor / InitialData:
-        non_insertion_variants: HashMap<i32, VariationMap>,
-        insertion_variants: HashMap<i32, VariationMap>,
-        ref_coverage: HashMap<i32, i32>,
+        non_insertion_variants: PositionMap<VariationMap>,
+        insertion_variants: PositionMap<VariationMap>,
+        ref_coverage: PositionMap<i32>,
         soft_clips_3_end: HashMap<i32, Sclip>,
         soft_clips_5_end: HashMap<i32, Sclip>,
         total_reads: i32,
@@ -762,7 +762,7 @@ impl CigarParser {
     /// Ported from: CigarParser.java:L1451-L1460 (increment)
     /// Increments a count in a nested Map<Integer, Map<String, Integer>>.
     pub fn increment(
-        counters: &mut HashMap<i32, SortedStringMap<i32>>,
+        counters: &mut PositionMap<SortedStringMap<i32>>,
         index: i32,
         description_string: &str,
     ) {
@@ -1902,7 +1902,7 @@ impl CigarParser {
             }
 
             // Java: CigarParser.java#L1045 — add variation to insertion variants
-            let hv = get_variation(&mut self.insertion_variants, insertion_position, &ins_desc);
+            let hv = get_variation(&mut self.insertion_variants, insertion_position, ins_desc);
             hv.inc_dir(direction);
             // Java: CigarParser.java#L1048
             hv.vars_count += 1;
@@ -1962,9 +1962,11 @@ impl CigarParser {
                 && is_has_and_equals_base(qs_bytes[idx], ref_map, insertion_position)
             {
                 // Java: CigarParser.java#L1082 — getVariationMaybe + subCnt
-                let desc_char = (qs_bytes[idx] as char).to_string();
+                let desc_char = [qs_bytes[idx]];
+                let desc_char =
+                    std::str::from_utf8(&desc_char).expect("read base lookup keys should be ASCII");
                 if let Some(map) = self.non_insertion_variants.get_mut(&insertion_position) {
-                    if let Some(tv) = map.entries.get_mut(&desc_char) {
+                    if let Some(tv) = map.entries.get_mut(desc_char) {
                         let q_val = if idx < qq_bytes.len() {
                             (qq_bytes[idx] as i32 - 33) as f64
                         } else {
@@ -1988,11 +1990,13 @@ impl CigarParser {
                     || self.cigar.get_cigar_element(0).operator == CigarOp::H)
             {
                 if let Some(&ref_base) = ref_map.get(&insertion_position) {
-                    let ref_base_str = (ref_base as char).to_string();
+                    let ref_base_str = [ref_base];
+                    let ref_base_str = std::str::from_utf8(&ref_base_str)
+                        .expect("reference base keys should be ASCII");
                     let ttref = get_variation(
                         &mut self.non_insertion_variants,
                         insertion_position,
-                        &ref_base_str,
+                        ref_base_str,
                     );
                     // Java: CigarParser.java#L1096-L1107
                     ttref.inc_dir(direction);
@@ -2119,11 +2123,13 @@ impl CigarParser {
             {
                 // Java: CigarParser.java#L1165
                 let ref_base = ref_map.get(&(self.start - 1)).unwrap();
-                let ref_base_str = (*ref_base as char).to_string();
+                let ref_base_str = [*ref_base];
+                let ref_base_str = std::str::from_utf8(&ref_base_str)
+                    .expect("reference base keys should be ASCII");
                 let variation = get_variation(
                     &mut self.non_insertion_variants,
                     self.start - 1,
-                    &ref_base_str,
+                    ref_base_str,
                 );
                 // Java: CigarParser.java#L1167
                 Self::add_cnt(
@@ -2259,9 +2265,11 @@ impl CigarParser {
             {
                 // Java: CigarParser.java#L1253
                 let ref_base = ref_map.get(&self.start).unwrap();
-                let ref_base_str = (*ref_base as char).to_string();
+                let ref_base_str = [*ref_base];
+                let ref_base_str = std::str::from_utf8(&ref_base_str)
+                    .expect("reference base keys should be ASCII");
                 let variation =
-                    get_variation(&mut self.non_insertion_variants, self.start, &ref_base_str);
+                    get_variation(&mut self.non_insertion_variants, self.start, ref_base_str);
                 // Java: CigarParser.java#L1255
                 Self::add_cnt(
                     variation,
@@ -3150,7 +3158,7 @@ impl CigarParser {
         query_sequence: &str,
         query_quality: &str,
         reference: &HashMap<i32, u8>,
-        ref_coverage: &mut HashMap<i32, i32>,
+        ref_coverage: &mut PositionMap<i32>,
     ) -> Offset {
         let (vext, goodq) = Self::with_conf(|conf| (conf.vext, conf.goodq));
         let mut offset = 0i32;
@@ -3477,16 +3485,17 @@ impl CigarParser {
                     si -= 1;
                     continue;
                 }
-                let ch = qs_bytes[char_idx] as char;
+                let ch = [qs_bytes[char_idx]];
+                let ch = std::str::from_utf8(&ch).expect("soft-clip base keys should be ASCII");
                 let idx = self.cigar_element_length - 1 - si;
 
                 // Java: CigarParser.java#L1974-L1978
                 let nt_map = &mut sclip.nt;
                 let cnts = nt_map.entry(idx).or_insert_with(SortedStringMap::new);
-                inc_cnt(cnts, ch.to_string(), 1);
+                inc_cnt_sorted_string_map(cnts, ch, 1);
 
                 // Java: CigarParser.java#L1979
-                let variation = get_variation_from_seq(sclip, idx, ch.to_string());
+                let variation = get_variation_from_seq(sclip, idx, ch);
                 let base_quality = if char_idx < qq_bytes.len() {
                     (qq_bytes[char_idx] as i32 - 33) as f64
                 } else {
@@ -3551,16 +3560,17 @@ impl CigarParser {
                 if char_idx >= qs_bytes.len() {
                     break;
                 }
-                let ch = qs_bytes[char_idx] as char;
+                let ch = [qs_bytes[char_idx]];
+                let ch = std::str::from_utf8(&ch).expect("soft-clip base keys should be ASCII");
                 let idx = si;
 
                 // Java: CigarParser.java#L1938-L1942
                 let nt_map = &mut sclip.nt;
                 let cnts = nt_map.entry(idx).or_insert_with(SortedStringMap::new);
-                inc_cnt(cnts, ch.to_string(), 1);
+                inc_cnt_sorted_string_map(cnts, ch, 1);
 
                 // Java: CigarParser.java#L1943
-                let variation = get_variation_from_seq(sclip, idx, ch.to_string());
+                let variation = get_variation_from_seq(sclip, idx, ch);
                 let base_quality = if char_idx < qq_bytes.len() {
                     (qq_bytes[char_idx] as i32 - 33) as f64
                 } else {

@@ -9,18 +9,20 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 use std::sync::Arc;
 
 use rust_htslib::bam::{self, Read as BamRead};
 
 use crate::config::{EXTENSION, MINSVCDIST, SEED_1, SVFLANK, SVMAXLEN};
 use crate::data::{
-    BaseInsertion, Cluster, CurrentSegment, InitialData, Match35, RealignedVariationData, Region,
-    Sclip, SortPositionSclip, Variation, VariationData, VariationMap, VariationMapSV,
+    BaseInsertion, Cluster, CurrentSegment, InitialData, Match35, PositionMap,
+    RealignedVariationData, Region, Sclip, SortPositionSclip, Variation, VariationData,
+    VariationMap, VariationMapSV,
 };
 use crate::patterns::{
-    AMP_ATGC, ATGSs_AMP_ATGSs_END, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_ANY, BEGIN_PLUS_ATGC,
-    CARET_ATGC_END, CARET_ATGNC, DUP_NUM_ATGC, HASH_ATGC, MINUS_NUMBER_AMP_ATGCs_END,
+    ATGSs_AMP_ATGSs_END, MINUS_NUMBER_AMP_ATGCs_END, AMP_ATGC, BEGIN_MINUS_NUMBER,
+    BEGIN_MINUS_NUMBER_ANY, BEGIN_PLUS_ATGC, CARET_ATGC_END, CARET_ATGNC, DUP_NUM_ATGC, HASH_ATGC,
     MINUS_NUMBER_ATGNC_SV_ATGNC_END, UP_NUMBER_END,
 };
 use crate::reference::{Reference, ReferenceResource};
@@ -133,8 +135,9 @@ pub fn comp3(a: &SortPositionSclip, b: &SortPositionSclip) -> std::cmp::Ordering
 /// Flatten a position→{description→count} map into a sorted vec.
 /// Sort: descending count → ascending position → descending description_string.
 /// **Parity trap T1**: tertiary sort is DESC descriptionString (reversed compareTo).
-pub fn fill_and_sort_tmp<M>(changes: &HashMap<i32, M>) -> Vec<SortPositionDescription>
+pub fn fill_and_sort_tmp<M, H>(changes: &HashMap<i32, M, H>) -> Vec<SortPositionDescription>
 where
+    H: BuildHasher,
     for<'a> &'a M: IntoIterator<Item = (&'a String, &'a i32)>,
 {
     // Java: VariationRealigner.java#L2160-L2175
@@ -408,7 +411,7 @@ pub fn adj_ref_factor(ref_var: Option<&mut Variation>, factor_f: f64) {
 // Rust clones that entry to satisfy borrowing, so the decremented clone must be
 // written back after adj_cnt_with_reference().
 fn write_back_cloned_reference_variation(
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
     reference_sequences: &HashMap<i32, u8>,
     position: i32,
     reference_var: Option<Variation>,
@@ -1484,14 +1487,17 @@ pub fn filter_all_sv_structures(
 /// Merges partial MNP sub-variants back into their parent MNP,
 /// and absorbs matching soft clips.
 /// **Parity trap T3**: left uses `<= 0`, right uses `< 0`.
-pub fn adjust_mnp(
-    mnp: &HashMap<i32, HashMap<String, i32>>,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+pub fn adjust_mnp<M, H>(
+    mnp: &HashMap<i32, M, H>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference_sequences: &HashMap<i32, u8>,
-) {
+) where
+    H: BuildHasher,
+    for<'a> &'a M: IntoIterator<Item = (&'a String, &'a i32)>,
+{
     // Java: VariationRealigner.java#L488
     let tmp = fill_and_sort_tmp(mnp);
     for tpl in &tmp {
@@ -1709,18 +1715,21 @@ pub fn adjust_mnp(
 /// Two passes: forward (absorb mismatches/clips) and reverse (merge complex deletion variants).
 /// **Parity trap T2**: bams parameter shadowing — only null-ness matters.
 /// **Parity trap T12**: Pass 2 loop `i > 0` (skips element 0).
-pub fn realigndel(
+pub fn realigndel<M, H>(
     bams_parameter: Option<&[String]>,
     instance_bams: &Option<Vec<String>>,
-    position_to_deletions_count: &HashMap<i32, HashMap<String, i32>>,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    position_to_deletions_count: &HashMap<i32, M, H>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference_sequences: &HashMap<i32, u8>,
     chr: &str,
     max_read_length: i32,
-) {
+) where
+    H: BuildHasher,
+    for<'a> &'a M: IntoIterator<Item = (&'a String, &'a i32)>,
+{
     let instance = GlobalReadOnlyScope::instance();
 
     // Java: VariationRealigner.java#L596-L600
@@ -2255,17 +2264,21 @@ pub fn realigndel(
 /// Absorbs nearby mismatches and soft clips into known short insertions.
 /// Returns NEWINS string (modified insertion description, or empty).
 /// **Parity trap T12**: Pass 2 loop `i > 0` (skips element 0).
-pub fn realignins(
-    position_to_insertion_count: &HashMap<i32, HashMap<String, i32>>,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+pub fn realignins<M, H>(
+    position_to_insertion_count: &HashMap<i32, M, H>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference_sequences: &HashMap<i32, u8>,
     chr: &str,
     max_read_length: i32,
-) -> String {
+) -> String
+where
+    H: BuildHasher,
+    for<'a> &'a M: IntoIterator<Item = (&'a String, &'a i32)>,
+{
     let instance = GlobalReadOnlyScope::instance();
     // Java: VariationRealigner.java#L865
     let tmp = fill_and_sort_tmp(position_to_insertion_count);
@@ -2876,10 +2889,7 @@ fn build_tn(vn: &str) -> String {
 
 /// Get-or-create SV metadata for a position in non_insertion_variants.
 /// Java: VariationMap.getSV()
-fn get_sv(
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    pos: i32,
-) -> &mut VariationMapSV {
+fn get_sv(non_insertion_variants: &mut PositionMap<VariationMap>, pos: i32) -> &mut VariationMapSV {
     let vmap = non_insertion_variants
         .entry(pos)
         .or_insert_with(VariationMap::default);
@@ -2894,7 +2904,7 @@ fn get_sv(
 }
 
 /// Remove SV metadata at a position. Java: VariationMap.removeSV()
-fn remove_sv(non_insertion_variants: &mut HashMap<i32, VariationMap>, pos: i32) {
+fn remove_sv(non_insertion_variants: &mut PositionMap<VariationMap>, pos: i32) {
     if let Some(vmap) = non_insertion_variants.get_mut(&pos) {
         vmap.sv = None;
         vmap.entries.shift_remove("SV");
@@ -2920,9 +2930,9 @@ fn run_partial_pipeline(
     modified_end: i32,
     max_read_length: i32,
     reference: &mut Reference,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
 ) {
@@ -3023,9 +3033,9 @@ fn realignlgdel(
     instance_bams: &Option<Vec<String>>,
     svfdel: &mut Vec<Sclip>,
     svrdel: &mut Vec<Sclip>,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -3111,7 +3121,7 @@ fn realignlgdel(
                 continue;
             }
             bp += 1; // Java: VariationRealigner.java#L1033
-            // Java: VariationRealigner.java#L1034 — markSV
+                     // Java: VariationRealigner.java#L1034 — markSV
             let sv_mark = super::structural_variants_processor::mark_sv(
                 bp,
                 p,
@@ -3767,9 +3777,9 @@ fn realignlgdel(
 /// 5' and 3' soft clips.
 pub fn realignlgins30(
     instance_bams: &Option<Vec<String>>,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &Reference,
@@ -4274,9 +4284,9 @@ fn realignlgins(
     instance_bams: &Option<Vec<String>>,
     svfdup: &mut Vec<Sclip>,
     svrdup: &mut Vec<Sclip>,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -4951,14 +4961,14 @@ fn realignlgins(
 ///
 /// Sequences the five realignment sub-procedures in exact order.
 /// Mutation order is load-bearing — each step's mutations are visible to subsequent steps.
-pub fn realign_indels(
+pub fn realign_indels<MDel, HDel, MIns, HIns>(
     instance_bams: &Option<Vec<String>>,
-    position_to_deletions_count: &HashMap<i32, HashMap<String, i32>>,
-    position_to_insertion_count: &HashMap<i32, HashMap<String, i32>>,
+    position_to_deletions_count: &HashMap<i32, MDel, HDel>,
+    position_to_insertion_count: &HashMap<i32, MIns, HIns>,
     sv_structures: &mut crate::data::SVStructures,
-    non_insertion_variants: &mut HashMap<i32, VariationMap>,
-    insertion_variants: &mut HashMap<i32, VariationMap>,
-    ref_coverage: &mut HashMap<i32, i32>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -4971,7 +4981,12 @@ pub fn realign_indels(
     splice: &HashSet<String>,
     out: &Arc<VariantPrinter>,
     bam: &str,
-) {
+) where
+    HDel: BuildHasher,
+    HIns: BuildHasher,
+    for<'a> &'a MDel: IntoIterator<Item = (&'a String, &'a i32)>,
+    for<'a> &'a MIns: IntoIterator<Item = (&'a String, &'a i32)>,
+{
     let instance = GlobalReadOnlyScope::instance();
     let partial_pipeline_context = PartialPipelineContext {
         bam,
@@ -5127,26 +5142,14 @@ pub fn process(scope: Scope<VariationData>) -> Scope<RealignedVariationData> {
 
     let mut non_insertion_variants = data.non_insertion_variants;
     let mut insertion_variants = data.insertion_variants;
-    let position_to_insertion_count: HashMap<i32, HashMap<String, i32>> = data
-        .position_to_insertion_count
-        .into_iter()
-        .map(|(k, v)| (k, v.into_iter().collect()))
-        .collect();
-    let position_to_deletions_count: HashMap<i32, HashMap<String, i32>> = data
-        .position_to_deletions_count
-        .into_iter()
-        .map(|(k, v)| (k, v.into_iter().collect()))
-        .collect();
+    let position_to_insertion_count = data.position_to_insertion_count;
+    let position_to_deletions_count = data.position_to_deletions_count;
     let mut ref_coverage = data.ref_coverage;
     let mut soft_clips_5_end = data.soft_clips_5_end;
     let mut soft_clips_3_end = data.soft_clips_3_end;
     let mut sv_structures = data.sv_structures;
     let duprate = data.duprate;
-    let mnp: HashMap<i32, HashMap<String, i32>> = data
-        .mnp
-        .into_iter()
-        .map(|(k, v)| (k, v.into_iter().collect()))
-        .collect();
+    let mnp = data.mnp;
 
     let reference_sequences = &reference.reference_sequences;
 

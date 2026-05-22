@@ -32,6 +32,7 @@ Stdlib only.
 """
 from __future__ import annotations
 
+import atexit
 import argparse
 import csv
 import fcntl
@@ -604,36 +605,181 @@ def wrapper_finalizer_report_payload(reason: dict[str, object]) -> tuple[Path, d
     return report_path, payload
 
 
+def wrapper_finalizer_error_payload(stage: str, exc: BaseException) -> dict[str, str]:
+    return {
+        "stage": stage,
+        "exception_type": exc.__class__.__name__,
+        "message": str(exc),
+    }
+
+
+def wrapper_finalizer_reason_with_error(
+    reason: dict[str, object],
+    stage: str,
+    exc: BaseException,
+) -> dict[str, object]:
+    updated = dict(reason)
+    errors = list(updated.get("finalizer_errors", []))
+    errors.append(wrapper_finalizer_error_payload(stage, exc))
+    updated["finalizer_errors"] = errors
+    return updated
+
+
+def write_json_best_effort(path: Path, payload: dict, *, sort_keys: bool = True) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(payload, indent=2, sort_keys=sort_keys) + "\n"
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temp_path.write_text(serialized, encoding="utf-8")
+        os.replace(temp_path, path)
+    except OSError:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+        path.write_text(serialized, encoding="utf-8")
+
+
+def write_text_best_effort(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def wrapper_finalizer_fallback_payload(reason: dict[str, object]) -> tuple[Path, dict, dict, Path]:
+    raw_args = WRAPPER_FINALIZER_STATE.get("args")
+    report_dir = Path(getattr(raw_args, "report_dir", PARITY_ITERATION_DIR)).resolve()
+    report_path = report_dir / "wrapper-termination-report.json"
+    status_path = report_dir / "status.json"
+    failed_path = report_dir / "failed"
+
+    matrix_obj = WRAPPER_FINALIZER_STATE.get("matrix")
+    matrix = matrix_obj if isinstance(matrix_obj, list) else []
+    active_heartbeat = WRAPPER_FINALIZER_STATE.get("heartbeat_log")
+    heartbeat_path = Path(active_heartbeat).resolve() if active_heartbeat else None
+    if heartbeat_path is None or not heartbeat_path.is_file():
+        heartbeat_path = newest_heartbeat_log(report_dir)
+
+    active_child_pid = WRAPPER_FINALIZER_STATE.get("child_pid")
+    child_pid = (
+        active_child_pid
+        if isinstance(active_child_pid, int)
+        else WRAPPER_FINALIZER_STATE.get("last_child_pid")
+    )
+    child_liveness = (
+        process_liveness_summary(active_child_pid)
+        if isinstance(active_child_pid, int)
+        else None
+    )
+    started_at = WRAPPER_FINALIZER_STATE.get("started_at")
+    elapsed_seconds = round(time.monotonic() - float(started_at), 3) if isinstance(started_at, float) else None
+
+    payload = {
+        "artifact_type": "e2e-sweep-wrapper-infrastructure-report",
+        "schema_version": 1,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "result": "infra-failed",
+        "classification": reason.get("classification", "wrapper-interrupted"),
+        "reason": reason,
+        "diagnosis_artifact": {
+            "kind": "config-e2e-infrastructure-report",
+            "consumer_skill": "config-e2e-diagnosis",
+            "result": "infra-failed",
+            "default_action": "repair-or-rerun-full-scope",
+            "readiness": {
+                "ready": False,
+                "status": "not-ready",
+                "reason": "Wrapper terminated before a canonical parity pass/fail artifact was written.",
+            },
+        },
+        "active_pair": {
+            "preset": WRAPPER_FINALIZER_STATE.get("preset"),
+            "tag": WRAPPER_FINALIZER_STATE.get("tag"),
+            "chroms": WRAPPER_FINALIZER_STATE.get("chroms"),
+            "pair_index": WRAPPER_FINALIZER_STATE.get("pair_index"),
+            "total_pairs": WRAPPER_FINALIZER_STATE.get("total_pairs"),
+        },
+        "child": {
+            "pid": child_pid,
+            "liveness": child_liveness,
+            "command": WRAPPER_FINALIZER_STATE.get("command"),
+            "stdout_log": WRAPPER_FINALIZER_STATE.get("stdout_log"),
+            "stderr_log": WRAPPER_FINALIZER_STATE.get("stderr_log"),
+        },
+        "paths": {
+            "report_dir": str(report_dir),
+            "progress_log": str((report_dir / "progress.log").resolve()),
+            "heartbeat_log": str(heartbeat_path) if heartbeat_path is not None else None,
+            "wrapper_termination_report": str(report_path),
+            "status_json": str(status_path),
+            "failed_marker": str(failed_path),
+        },
+        "frontier": {
+            "progress_tail": tail_last_nonempty_line(report_dir / "progress.log"),
+            "heartbeat_tail": tail_last_nonempty_line(heartbeat_path),
+        },
+        "matrix_summary": matrix_summary(matrix),
+        "original_matrix_scope": original_matrix_scope(matrix),
+        "elapsed_seconds": elapsed_seconds,
+    }
+    status_payload = {
+        "schema_version": 1,
+        "generated_at": payload["generated_at"],
+        "status": "failed",
+        "result": "infra-failed",
+        "classification": payload["classification"],
+        "diagnosis_ready": False,
+        "report_path": str(report_path),
+        "progress_log": payload["paths"]["progress_log"],
+    }
+    return report_path, payload, status_payload, failed_path
+
+
 def write_wrapper_infra_finalizer(reason: dict[str, object]) -> None:
     if not wrapper_finalizer_should_write():
         return
     WRAPPER_FINALIZER_STATE["writing"] = True
     try:
-        args = WRAPPER_FINALIZER_STATE["args"]
-        assert isinstance(args, argparse.Namespace)
-        report_path, payload = wrapper_finalizer_report_payload(reason)
-        write_json_atomic(report_path, payload)
-        status_payload = {
-            "schema_version": 1,
-            "generated_at": payload["generated_at"],
-            "status": "failed",
-            "result": "infra-failed",
-            "classification": payload["classification"],
-            "diagnosis_ready": False,
-            "report_path": str(report_path),
-            "progress_log": payload["paths"]["progress_log"],
-        }
-        write_json_atomic(status_json_path(args), status_payload)
-        failed_marker_path(args).write_text(
-            f"infra-failed {payload['classification']} report={report_path}\n",
-            encoding="utf-8",
-        )
-        emit_status(
-            "done",
-            event="infra-failed",
-            detail=f"classification={payload['classification']} report={report_path}",
-        )
+        try:
+            args = WRAPPER_FINALIZER_STATE["args"]
+            assert isinstance(args, argparse.Namespace)
+            report_path, payload = wrapper_finalizer_report_payload(reason)
+            status_path = status_json_path(args)
+            failed_path = failed_marker_path(args)
+            status_payload = {
+                "schema_version": 1,
+                "generated_at": payload["generated_at"],
+                "status": "failed",
+                "result": "infra-failed",
+                "classification": payload["classification"],
+                "diagnosis_ready": False,
+                "report_path": str(report_path),
+                "progress_log": payload["paths"]["progress_log"],
+            }
+            write_json_atomic(report_path, payload)
+            write_json_atomic(status_path, status_payload)
+            write_text_best_effort(
+                failed_path,
+                f"infra-failed {payload['classification']} report={report_path}\n",
+            )
+        except Exception as exc:
+            fallback_reason = wrapper_finalizer_reason_with_error(reason, "infra-finalizer", exc)
+            report_path, payload, status_payload, failed_path = wrapper_finalizer_fallback_payload(fallback_reason)
+            write_json_best_effort(report_path, payload)
+            write_json_best_effort(report_path.parent / "status.json", status_payload)
+            write_text_best_effort(
+                failed_path,
+                f"infra-failed {payload['classification']} report={report_path}\n",
+            )
+        try:
+            emit_status(
+                "done",
+                event="infra-failed",
+                detail=f"classification={payload['classification']} report={report_path}",
+            )
+        except Exception:
+            pass
         WRAPPER_FINALIZER_STATE["infra_finalized"] = True
+        WRAPPER_FINALIZER_STATE["active"] = False
     finally:
         WRAPPER_FINALIZER_STATE["writing"] = False
 
@@ -664,6 +810,20 @@ def install_wrapper_finalizer_signal_handlers() -> None:
         signum = getattr(signal, signal_attr, None)
         if signum is not None:
             signal.signal(signum, wrapper_signal_handler)
+
+
+def wrapper_exit_hook() -> None:
+    if not wrapper_finalizer_should_write():
+        return
+    write_wrapper_infra_finalizer(
+        {
+            "classification": "wrapper-exit-without-finalize",
+            "reason": "Interpreter exited while the test-phase finalizer was still active.",
+        }
+    )
+
+
+atexit.register(wrapper_exit_hook)
 
 
 @contextmanager

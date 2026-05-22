@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
-/// Serializes a HashMap<i32, V> as sorted array of pairs: [[key, value], ...]
-pub fn serialize_sorted_int_map<V: Serialize, S: Serializer>(
-    map: &HashMap<i32, V>,
+/// Serializes a HashMap<i32, V, H> as sorted array of pairs: [[key, value], ...]
+pub fn serialize_sorted_int_map<V: Serialize, H: BuildHasher, S: Serializer>(
+    map: &HashMap<i32, V, H>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     let mut entries: Vec<_> = map.iter().collect();
@@ -62,15 +62,20 @@ where
     Ok(entries.into_iter().collect())
 }
 
-/// Deserializes [[i32, V], ...] JSON array → HashMap<i32, V>
+/// Deserializes [[i32, V], ...] JSON array → HashMap<i32, V, H>
 /// Mirror of serialize_sorted_int_map.
-pub fn deserialize_sorted_int_map<'de, V, D>(deserializer: D) -> Result<HashMap<i32, V>, D::Error>
+pub fn deserialize_sorted_int_map<'de, V, H, D>(
+    deserializer: D,
+) -> Result<HashMap<i32, V, H>, D::Error>
 where
     V: Deserialize<'de>,
+    H: BuildHasher + Default,
     D: Deserializer<'de>,
 {
     let entries = Vec::<(i32, V)>::deserialize(deserializer)?;
-    Ok(entries.into_iter().collect())
+    let mut map = HashMap::with_capacity_and_hasher(entries.len(), H::default());
+    map.extend(entries);
+    Ok(map)
 }
 
 /// Deserializes [[K, V], ...] JSON array → IndexMap<K, V>
@@ -119,8 +124,8 @@ where
 #[cfg(test)]
 mod tests {
     use crate::data::{
-        AlignedVarsData, RealignedVariationData, SortedStringMap, Variation, VariationData,
-        VariationEntries, VariationMap, Vars,
+        AlignedVarsData, PositionMap, RealignedVariationData, SortedStringMap, Variation,
+        VariationData, VariationEntries, VariationMap, Vars,
     };
     use std::collections::{BTreeMap, HashMap};
 
@@ -160,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_variation_data_round_trip() {
-        let mut non_ins = HashMap::new();
+        let mut non_ins = PositionMap::default();
         let mut vmap1 = VariationEntries::default();
         vmap1.insert(
             "C".to_string(),
@@ -177,11 +182,11 @@ mod tests {
             },
         );
 
-        let mut ref_cov = HashMap::new();
+        let mut ref_cov = PositionMap::default();
         ref_cov.insert(100, 50);
         ref_cov.insert(101, 55);
 
-        let mut mnp = HashMap::new();
+        let mut mnp = PositionMap::default();
         let mut inner_mnp = SortedStringMap::new();
         inner_mnp.insert("AG".to_string(), 3);
         mnp.insert(200, inner_mnp);
@@ -197,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_realigned_variation_data_round_trip() {
-        let mut non_ins = HashMap::new();
+        let mut non_ins = PositionMap::default();
         let mut vmap = VariationEntries::default();
         vmap.insert(
             "G".to_string(),
@@ -214,7 +219,7 @@ mod tests {
             },
         );
 
-        let mut ref_cov = HashMap::new();
+        let mut ref_cov = PositionMap::default();
         ref_cov.insert(50, 42);
 
         let rdata = RealignedVariationData {

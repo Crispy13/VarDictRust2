@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
+use std::hash::BuildHasher;
 use std::hash::Hash;
 use std::sync::RwLock;
 
 use once_cell::sync::Lazy;
 
-use crate::config::{ADSEED, Configuration, SEED_2};
-use crate::data::{Sclip, Variant, Variation, VariationMap, Vars};
+use crate::config::{Configuration, ADSEED, SEED_2};
+use crate::data::{Sclip, SortedStringMap, Variant, Variation, VariationMap, Vars};
 use crate::patterns::{B_A7, B_T7};
 use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{reverse_sequence, substr_with_len};
@@ -24,9 +25,10 @@ pub trait CountMap<K> {
     fn increment_value(&mut self, key: K, add: i32);
 }
 
-impl<K> CountMap<K> for HashMap<K, i32>
+impl<K, H> CountMap<K> for HashMap<K, i32, H>
 where
     K: Eq + Hash,
+    H: BuildHasher,
 {
     fn increment_value(&mut self, key: K, add: i32) {
         *self.entry(key).or_insert(0) += add;
@@ -198,6 +200,14 @@ where
     M: CountMap<K>,
 {
     counts.increment_value(key, add);
+}
+
+pub fn inc_cnt_sorted_string_map(counts: &mut SortedStringMap<i32>, key: &str, add: i32) {
+    if let Some(total) = counts.get_mut(key) {
+        *total += add;
+    } else {
+        counts.insert(key.to_owned(), add);
+    }
 }
 
 /// Ported from: VariationUtils.java:L49-L63
@@ -544,52 +554,82 @@ pub fn get_or_put_vars(map: &mut HashMap<i32, Vars>, position: i32) -> &mut Vars
 }
 
 /// Ported from: VariationUtils.java:L400-L414
-pub fn get_variation_from_seq(
-    soft_clip: &mut Sclip,
-    idx: i32,
-    base: impl Into<String>,
-) -> &mut Variation {
-    let base = base.into();
+pub fn get_variation_from_seq<S>(soft_clip: &mut Sclip, idx: i32, base: S) -> &mut Variation
+where
+    S: AsRef<str> + Into<String>,
+{
     let sequence_map = &mut soft_clip.seq;
     let base_map = sequence_map
         .entry(idx)
         .or_insert_with(crate::data::SortedStringMap::new);
+
+    let base_ref = base.as_ref();
+    if base_map.contains_key(base_ref) {
+        return base_map
+            .get_mut(base_ref)
+            .expect("variation entry should exist after contains_key");
+    }
+
+    let base = base.into();
     base_map.entry(base).or_default()
 }
 
 /// Ported from: VariationUtils.java:L424-L438
-pub fn get_variation(
-    hash: &mut HashMap<i32, VariationMap>,
+pub fn get_variation<S, H>(
+    hash: &mut HashMap<i32, VariationMap, H>,
     start: i32,
-    description_string: impl Into<String>,
-) -> &mut Variation {
-    let description_string = description_string.into();
+    description_string: S,
+) -> &mut Variation
+where
+    S: AsRef<str> + Into<String>,
+    H: BuildHasher,
+{
     let map = hash.entry(start).or_default();
+
+    let description_ref = description_string.as_ref();
+    if map.entries.contains_key(description_ref) {
+        return map
+            .entries
+            .get_mut(description_ref)
+            .expect("variation entry should exist after contains_key");
+    }
+
+    let description_string = description_string.into();
     map.entries.entry(description_string).or_default()
 }
 
 /// Ported from: VariationUtils.java:L446-L458
-pub fn get_variation_maybe(
-    hash: &HashMap<i32, VariationMap>,
+pub fn get_variation_maybe<H>(
+    hash: &HashMap<i32, VariationMap, H>,
     start: i32,
     ref_base: Option<u8>,
-) -> Option<&Variation> {
+) -> Option<&Variation>
+where
+    H: BuildHasher,
+{
     let ref_base = ref_base?;
-    let description_string = char::from(ref_base).to_string();
+    let description_string = [ref_base];
+    let description_string = std::str::from_utf8(&description_string)
+        .expect("single-base variation keys should be ASCII");
     hash.get(&start)
-        .and_then(|map| map.entries.get(&description_string))
+        .and_then(|map| map.entries.get(description_string))
 }
 
 /// Mutable version of get_variation_maybe — used by processInsertion's subCnt path.
-pub fn get_variation_maybe_mut(
-    hash: &mut HashMap<i32, VariationMap>,
+pub fn get_variation_maybe_mut<H>(
+    hash: &mut HashMap<i32, VariationMap, H>,
     start: i32,
     ref_base: Option<u8>,
-) -> Option<&mut Variation> {
+) -> Option<&mut Variation>
+where
+    H: BuildHasher,
+{
     let ref_base = ref_base?;
-    let description_string = char::from(ref_base).to_string();
+    let description_string = [ref_base];
+    let description_string = std::str::from_utf8(&description_string)
+        .expect("single-base variation keys should be ASCII");
     hash.get_mut(&start)
-        .and_then(|map| map.entries.get_mut(&description_string))
+        .and_then(|map| map.entries.get_mut(description_string))
 }
 
 /// Ported from: VariationUtils.java:L460-L464

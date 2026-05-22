@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::data::{
-    AlignedVarsData, InitialData, RealignedVariationData, Region, Sclip, VariationMap,
+    AlignedVarsData, InitialData, PositionMap, RealignedVariationData, Region, Sclip, VariationMap,
 };
 use crate::mods::amplicon_post_process::amplicon_post_process;
 use crate::mods::cigar_parser::CigarParser;
@@ -141,8 +141,8 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
     } else {
         Some(splice.iter().cloned().collect::<BTreeSet<_>>())
     };
-    let mut prev_non_insertion_variants = HashMap::<i32, VariationMap>::new();
-    let mut prev_ref_coverage = HashMap::<i32, i32>::new();
+    let mut prev_non_insertion_variants = PositionMap::<VariationMap>::default();
+    let mut prev_ref_coverage = PositionMap::<i32>::default();
     let mut prev_soft_clips_3_end = HashMap::<i32, Sclip>::new();
     let mut prev_soft_clips_5_end = HashMap::<i32, Sclip>::new();
     let prev_reference_sequences = HashMap::<i32, u8>::new();
@@ -195,7 +195,7 @@ pub trait ParallelMode: AbstractMode + Sync {
     fn post_parallel_hook(&self) {}
 
     fn parallel(&self, threads: usize) {
-        use crossbeam_channel::{Receiver, bounded};
+        use crossbeam_channel::{bounded, Receiver};
         use rayon::ThreadPoolBuilder;
 
         let pool = ThreadPoolBuilder::new()

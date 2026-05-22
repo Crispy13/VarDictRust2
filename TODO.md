@@ -4,30 +4,16 @@ Deferred work items in the VarDict-rs port that must be resolved before full pro
 
 ---
 # Planned
-## Minimum stale Java cache guard follow-ups
+## E2E parity sweep log: need human readable progress
+HEARTBEAT ts=1779370206 ..
 
-**Status:** Symlink-safe gate guard and provenance normalization implemented; broader writer-side alignment and hardening deferred.
-**Location:** [scripts/e2e_sweep_gate.py](scripts/e2e_sweep_gate.py), [scripts/sweep_fixtures_parallel.py](scripts/sweep_fixtures_parallel.py), [scripts/backfill_chunks_json.py](scripts/backfill_chunks_json.py)
+good. but ts, this is for agent. not human. 
+human readable time, and progress (10/N) are needed.
+also it should show elapsed time for step. e.g. rust-run: 10 secs, diff check: 2 secs.
 
-The workflow-managed stale-cache fix now validates staged Java TSV content against paired `*.chunks.json` `monolithic_md5` fingerprints through symlink-safe staged paths, normalizes mixed `generator_flags` and `bed_sha256` provenance schemas deliberately, and preserves `incompatible_backfilled_chunks` for backfilled sidecars without gate provenance. These remain cache-readiness failures, not Rust repair evidence.
-
-Deferred hardening remains out of the first slice: Rust harness-side content validation, CI YAML changes, a broad no-mutation audit framework, and a stronger new content hash field. Revisit those only if gate-time validation proves insufficient for the active workflow.
-
-## Agents blocks on terminal commands, but Human can see the progress.
-
-**Status:** Set for the current E2E parity sweep.
-**Location:** [scripts/e2e_sweep_gate.py](scripts/e2e_sweep_gate.py) and dated report directories under [tmp/parity-iteration](tmp/parity-iteration)
-
-The current wrapper-driven E2E parity sweep already writes human-readable progress and log artifacts under the selected `--report-dir` before and during long runs. For active or recent runs, humans can monitor:
-
-- `progress.log` for matrix, staging, pair progress, idle diagnostics, final pass/fail, and report paths.
-- `child-logs/*.stdout.log` and `child-logs/*.stderr.log` for mirrored cargo child output.
-- `heartbeats/*.log` for Rust harness phase markers and side-channel runtime telemetry.
-- `cell-runtimes.jsonl` when test execution reaches runtime aggregation.
-- `parity-failure-report.json` or `last-pass.json` for terminal gate artifacts after completion.
-
-Operating rule: launch long wrapper-driven E2E parity sweep commands in sync/blocking terminal mode after confirming `--test-threads`, record the chosen `--report-dir`, and rely on the report directory files above for human visibility instead of periodic agent polling. Monitoring must not silently narrow the canonical full-scope gate.
-
+## E2E sweep is very slow.
+T1-01 preset, for all regions in a bam takes more than 2200 seconds.
+This is not acceptable. We need to find the bottleneck and optimize it.
 
 # Deferred
 ## 0.5 Complete CM-* call-mode test expansion
