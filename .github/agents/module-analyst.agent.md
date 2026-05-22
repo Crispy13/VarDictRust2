@@ -6,8 +6,9 @@ description: >
   lightweight depth for simple modules. Produces classification and design guidance
   for downstream implementation.
 name: Module Analyst
-tools: [vscode/memory, vscode/resolveMemoryFileUri, read, search, web]
-model: GPT-5.5 (copilot)
+target: github-copilot
+tools: [read, search, edit, web]
+model: gpt-5.5
 user-invocable: false
 disable-model-invocation: false
 ---
@@ -23,7 +24,7 @@ You are the design-phase analyst for every module. Analyze Java behavior, classi
 - Keep the brief workflow-neutral so it remains valid for faithful-port now and a possible Phase 2 idiomatic/optimization pass later.
 - DO NOT produce comprehensive documentation (keep full briefs to 1.5-2 pages; lightweight briefs shorter).
 - DO NOT invoke subagents (leaf agent).
-- Save your analysis to session memory and include the path in your response.
+- Save your analysis to the current CLI session-state artifact path and include the path in your response.
 
 ## Module Classification Rubric
 

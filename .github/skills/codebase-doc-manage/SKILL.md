@@ -112,7 +112,7 @@ Run when asked to check cache health or before a large parity sweep.
 
 Use this after receiving a report from `Module Analyst` or `Port Engineer`.
 
-1. Save the report to a session file: `/memories/session/{agent}-{module}-report.md`.
+1. Save the report to the current CLI session-state artifact path, named `{agent}-{module}-report.md`.
 2. Dispatch `Review Gate` with `report_path`, `module`, `language`, and `mode: update`.
 3. Verify the librarian response contains a `Cache Update:` footer before you treat the doc task as complete.
 

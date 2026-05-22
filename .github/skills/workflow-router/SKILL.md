@@ -72,11 +72,11 @@ If none of the above match:
 - **Example:** `> Routing: per-module-gate-cycle — Active plan shows sv_processor pending`
 
 ### MEDIUM Confidence
-- **Action:** Confirm with user via `vscode_askQuestions` using a single question with the recommended option pre-selected.
+- **Action:** Confirm with the user via a structured confirmation question using a single question with the recommended option pre-selected.
 - **Format:** One question with 2-3 options, recommended option marked.
 
 ### LOW Confidence
-- **Action:** Present full option list via `vscode_askQuestions`, let user choose.
+- **Action:** Present a structured full option list and let the user choose.
 - **Format:** One question listing all available workflows with descriptions.
 
 ## Agent References

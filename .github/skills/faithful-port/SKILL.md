@@ -36,7 +36,7 @@ When a Module Analyst design brief is provided, use its classification — it is
 ## Phase 1: Orient
 
 **If the task brief references a design brief path:**
-- Read the design brief from the provided session memory path.
+- Read the design brief from the provided CLI session-state artifact path.
 - Adopt the module classification from the brief; it is authoritative. Do NOT re-derive classification.
 - Adopt the decomposition plan from the brief (method clusters, data layout). Do NOT re-derive.
 - Skip generating a condensed parity brief; the design brief replaces it.

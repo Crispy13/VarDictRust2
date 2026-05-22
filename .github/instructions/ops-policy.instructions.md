@@ -10,7 +10,7 @@ applyTo: '**'
 - Reserve `cargo build --release` for production or explicit release validation.
 
 ## Environment
-- Activate `rust_build_env` before builds or tests, then set `LIBCLANG_PATH=$CONDA_PREFIX/lib`.
+- Activate `vdr` before builds or tests, then set `LIBCLANG_PATH=$CONDA_PREFIX/lib`.
 - If the conda env is broken, stop and ask whether to continue with Conda or switch to a Python `venv`.
 
 ## Temporary Files
