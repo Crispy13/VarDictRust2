@@ -594,9 +594,13 @@ pub fn find35match(seq5: &str, seq3: &str) -> Match35 {
             while total_length + j <= seq3_len && i + total_length <= seq5_len {
                 // Java: VariationRealigner.java#L2227
                 // substr(seq3, -j - totalLength, 1) vs substr(seq5, i + totalLength, 1)
-                let seq3_sub = substr_with_len(seq3_bytes, -j - total_length, 1);
-                let seq5_sub = substr_with_len(seq5_bytes, i + total_length, 1);
-                if seq3_sub != seq5_sub {
+                let seq3_index = seq3_len - j - total_length;
+                let seq5_index = i + total_length;
+                let bases_match = seq5_index < seq5_len
+                    && seq3_index >= 0
+                    && seq3_index < seq3_len
+                    && seq5_bytes[seq5_index as usize] == seq3_bytes[seq3_index as usize];
+                if !bases_match {
                     number_of_mismatch += 1;
                 }
                 if number_of_mismatch > long_mismatch {
@@ -5131,7 +5135,8 @@ pub fn process(scope: Scope<VariationData>) -> Scope<RealignedVariationData> {
         out,
         data,
     } = scope;
-    let mut reference = (*region_ref).clone();
+    let mut reference =
+        Arc::try_unwrap(region_ref).unwrap_or_else(|region_ref| (*region_ref).clone());
 
     let chr = crate::mods::sam_file_parser::get_chr_name(&region, &instance.conf);
     let instance_bams: Option<Vec<String>> = if bam.is_empty() {

@@ -46,6 +46,7 @@ fn region_boundaries_message(chr: &str, start: i32, end: i32) -> String {
 
 // Java: Reference L9-L49
 pub type ReferenceSequenceMap = FxHashMap<i32, u8>;
+pub type ReferenceSeedMap = FxHashMap<String, Vec<i32>>;
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Reference {
@@ -55,7 +56,7 @@ pub struct Reference {
     #[serde(rename = "referenceSequences")]
     pub reference_sequences: ReferenceSequenceMap,
 
-    pub seed: HashMap<String, Vec<i32>>,
+    pub seed: ReferenceSeedMap,
 }
 
 impl Reference {
@@ -285,9 +286,10 @@ impl ReferenceResource {
             eprintln!("TIME: Getting REF: {:?}", SystemTime::now());
         }
 
-        let sub_seq =
+        let [_header, exon_sequence] =
             self.retrieve_sub_seq(&self.fasta, &region.chr, sequence_start, sequence_end)?;
-        let exon = sub_seq[1].to_ascii_uppercase().into_bytes();
+        let mut exon = exon_sequence.into_bytes();
+        exon.make_ascii_uppercase();
 
         if Self::is_loaded(&region.chr, sequence_start, sequence_end, &reference) {
             return Ok(reference);

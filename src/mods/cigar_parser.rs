@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use rust_htslib::bam::{self, record::Aux, HeaderView};
+use rust_htslib::bam::{self, HeaderView, record::Aux};
 
 use crate::config::{Configuration, MINMAPBASE, MINSVCDIST, MINSVPOS, SEED_1};
 use crate::data::{
@@ -13,7 +13,7 @@ use crate::data::{
     Variation, VariationData, VariationMap,
 };
 use crate::mods::cigar_modifier::modify_cigar;
-use crate::mods::sam_file_parser::{get_mate_reference_name, RecordPreprocessor};
+use crate::mods::sam_file_parser::{RecordPreprocessor, get_mate_reference_name};
 use crate::patterns::*;
 use crate::reference::{Reference, ReferenceSequenceMap};
 use crate::scope::GlobalReadOnlyScope;
@@ -571,12 +571,12 @@ impl CigarParser {
     pub fn get_base_quality_string(record: &bam::Record) -> String {
         let quals = record.qual();
         let max_phred: u8 = 93; // SAMUtils.MAX_PHRED_SCORE
-        let mut result = String::with_capacity(quals.len());
+        let mut result = Vec::with_capacity(quals.len());
         for &q in quals {
             let capped = if q > max_phred { max_phred } else { q };
-            result.push((capped + 33) as char);
+            result.push(capped + 33);
         }
-        result
+        String::from_utf8(result).expect("base qualities are capped to printable ASCII")
     }
 
     // ── Predicate helpers ─────────────────────────────────────────────────

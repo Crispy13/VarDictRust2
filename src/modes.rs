@@ -130,7 +130,8 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
         mut data,
     } = scope;
 
-    let mut reference = (*region_ref).clone();
+    let mut reference =
+        Arc::try_unwrap(region_ref).unwrap_or_else(|region_ref| (*region_ref).clone());
     let bams = if bam.is_empty() {
         None
     } else {

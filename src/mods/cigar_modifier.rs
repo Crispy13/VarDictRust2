@@ -1,11 +1,11 @@
 /// Ported from: CigarModifier.java:L1-L787
 /// CIGAR string normalization before variant detection.
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::config::{LOWQUAL, SEED_2};
 use crate::data::{ModifiedCigar, Region};
 use crate::patterns::*;
-use crate::reference::{Reference, ReferenceSequenceMap};
+use crate::reference::{Reference, ReferenceSeedMap, ReferenceSequenceMap};
 use crate::utils::{complement_sequence, global_find, reverse_sequence, substr, substr_with_len};
 use crate::variations::{
     is_has_and_equals_base, is_has_and_equals_str, is_has_and_not_equals_base,
@@ -22,7 +22,7 @@ struct CigarModifierState<'a> {
     query_sequence: String,
     query_quality: String,
     reference: &'a ReferenceSequenceMap,
-    seed: &'a HashMap<String, Vec<i32>>,
+    seed: &'a ReferenceSeedMap,
     indel: i32,
     max_read_length: i32,
     region: Region,
