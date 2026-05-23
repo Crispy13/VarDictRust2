@@ -47,7 +47,7 @@ pub fn simple_post_process(scope: Scope<AlignedVarsData>) {
                 }
             } else {
                 let only_variant = variants_on_position.variants.len() == 1;
-                for mut vref in variants_on_position.variants.clone() {
+                for vref in &variants_on_position.variants {
                     if vref.refallele.contains('N') {
                         continue;
                     }
@@ -71,17 +71,20 @@ pub fn simple_post_process(scope: Scope<AlignedVarsData>) {
                             vrefs.push(ref_var);
                         }
                     }
-                    vref.vartype = vref.var_type();
+                    let vartype = vref.var_type();
                     let is_good = vref.is_good_var(
                         variants_on_position.reference_variant.as_ref(),
-                        Some(&vref.vartype),
+                        Some(&vartype),
                         &splice,
                         &conf,
                     );
                     if !is_good && !conf.do_pileup {
                         continue;
                     }
-                    vrefs.push(vref);
+
+                    let mut owned_vref = vref.clone();
+                    owned_vref.vartype = vartype;
+                    vrefs.push(owned_vref);
                 }
             }
 
