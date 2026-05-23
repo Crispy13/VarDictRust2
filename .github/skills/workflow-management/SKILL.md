@@ -343,7 +343,7 @@ After implementation, verify that nothing is broken.
 ### 5.1 Build Check
 
 ```bash
-source activate rust_build_env
+source activate vdr
 export LIBCLANG_PATH="$CONDA_PREFIX/lib"
 cargo test --profile debug-release --no-run
 ```

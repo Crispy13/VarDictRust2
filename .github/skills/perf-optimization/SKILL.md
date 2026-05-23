@@ -67,8 +67,7 @@ Establish reproducible measurements before ANY changes.
 ### 2.1 — Environment preparation
 
 ```bash
-conda activate rust_build_env
-unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+conda activate vdr
 export LIBCLANG_PATH=$CONDA_PREFIX/lib
 
 # Build release (with mimalloc, the production allocator)

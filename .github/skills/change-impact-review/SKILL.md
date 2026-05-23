@@ -159,7 +159,7 @@ Record in verdict:
 Run the relevant benchmark (from the Hot-Path Modules table above). If no specific benchmark covers the change, use `pipeline_bench` as the integration-level fallback.
 
 ```bash
-conda activate rust_build_env
+conda activate vdr
 export LIBCLANG_PATH=$CONDA_PREFIX/lib
 
 # 1. Benchmark BEFORE the change (stash or checkout base)

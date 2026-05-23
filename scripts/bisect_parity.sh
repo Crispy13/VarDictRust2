@@ -35,7 +35,7 @@ if [[ ! "$REGION_INDEX" =~ ^[0-9]+$ ]]; then
 fi
 
 if [[ -z "${CONDA_PREFIX:-}" ]]; then
-    echo "ERROR: CONDA_PREFIX is not set. Activate rust_build_env before running this script." >&2
+    echo "ERROR: CONDA_PREFIX is not set. Activate vdr before running this script." >&2
     exit 125
 fi
 
@@ -43,7 +43,7 @@ cd "$PROJECT_ROOT"
 
 export LIBCLANG_PATH="$CONDA_PREFIX/lib"
 
-# rust_build_env may leave a stray target triplet token in these flags; strip it so cargo can build.
+# vdr may leave a stray target triplet token in these flags; strip it so cargo can build.
 for var_name in CFLAGS CPPFLAGS CXXFLAGS LDFLAGS; do
     current_value="${!var_name-}"
     if [[ -n "$current_value" ]]; then

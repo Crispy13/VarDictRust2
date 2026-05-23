@@ -170,7 +170,7 @@ parse_args() {
 check_dependencies() {
     if ! command -v zstd &>/dev/null; then
         echo "ERROR: zstd is required but not found in PATH." >&2
-        echo "       Activate the conda environment first: conda activate rust_build_env" >&2
+        echo "       Activate the conda environment first: conda activate vdr" >&2
         exit 1
     fi
 }

@@ -7,10 +7,10 @@ cd "$PROJECT_ROOT"
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
 set +e
-conda activate rust_build_env
+conda activate vdr
 conda_status=$?
 set -e
-if [[ "$conda_status" -ne 0 && "${CONDA_DEFAULT_ENV:-}" != "rust_build_env" ]]; then
+if [[ "$conda_status" -ne 0 && "${CONDA_DEFAULT_ENV:-}" != "vdr" ]]; then
 	exit "$conda_status"
 fi
 set -u

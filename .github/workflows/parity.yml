@@ -25,7 +25,7 @@ jobs:
         shard: ["0/1"]
     # NOTE: Self-hosted runner must have:
     # - testdata/ directory with BAMs, FASTA, and fixtures
-    # - conda rust_build_env or equivalent system packages
+    # - conda vdr or equivalent system packages
     # - LIBCLANG_PATH configured in runner environment
     steps:
       - uses: actions/checkout@v4

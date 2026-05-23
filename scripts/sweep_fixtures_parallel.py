@@ -640,7 +640,7 @@ def shard_parallelism_summary(requested_workers: int, shard_count: int) -> tuple
 def ensure_dependencies(root: Path) -> None:
     if shutil.which("zstd") is None:
         raise SystemExit(
-            "ERROR: zstd is required but not found in PATH. Activate rust_build_env first."
+            "ERROR: zstd is required but not found in PATH. Activate vdr first."
         )
 
     vardict_bin = root / VARDICT_BIN_REL

@@ -11,8 +11,8 @@ from pathlib import Path
 
 
 KNOWN_SAMTOOLS_PATHS = (
-    Path("/home/eck/software/miniconda3/envs/rust_build_env/bin/samtools"),
-    Path.home() / "software/miniconda3/envs/rust_build_env/bin/samtools",
+    Path("/home/eck/software/miniconda3/envs/vdr/bin/samtools"),
+    Path.home() / "software/miniconda3/envs/vdr/bin/samtools",
 )
 MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 SIZE_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024

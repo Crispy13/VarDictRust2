@@ -158,7 +158,7 @@ Use this step when `mismatch-repair` is reached through `config-e2e-diagnosis` P
 - **Harness:** `config-e2e-diagnosis` Phase 3 records the test location in the reviewed repair plan file; add the test to `tests/parity_suite/{module}.rs`, which is mounted by `tests/parity_suite.rs` under the `{module}` module. If the failing test was deliberately added to a different harness, cite that harness file path and its test discovery convention before using an alternative command.
 - **Validation command:**
    ```bash
-   source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate rust_build_env && export LIBCLANG_PATH="$CONDA_PREFIX/lib"
+   source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate vdr && export LIBCLANG_PATH="$CONDA_PREFIX/lib"
    cargo test --profile debug-release --test parity_suite \
       {module}::parity_{module}_config_{config_slug}_{region_safe} -- --exact
    ```

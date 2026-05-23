@@ -14,7 +14,7 @@ Tier 1 is for routine validation. Tier 2 is for broader parity coverage before p
 Activate the Rust build environment before running scripts or tests:
 
 ```bash
-conda activate rust_build_env && export LIBCLANG_PATH="$CONDA_PREFIX/lib"
+conda activate vdr && export LIBCLANG_PATH="$CONDA_PREFIX/lib"
 ```
 
 Required tools:

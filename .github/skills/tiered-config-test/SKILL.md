@@ -59,7 +59,7 @@ Before any expensive rerun or promotion step above Tier `1`, run `rubberduck-rev
 ## Promotion Procedure
 
 1. Discover the active harness path in the workspace and confirm it supports the requested preset.
-2. Build the Rust binary with `cargo build --profile debug-release` in the `rust_build_env` environment.
+2. Build the Rust binary with `cargo build --profile debug-release` in the `vdr` environment.
 3. Run the current tier preset in `--rust-only` mode unless Java artifacts must be regenerated.
 4. Check the harness exit code and inspect the results directory for failing shards.
 5. If the tier passed, record the result in the active plan or mission notes and promote to the next tier.

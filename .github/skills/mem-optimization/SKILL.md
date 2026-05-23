@@ -17,7 +17,7 @@ End-to-end workflow for diagnosing and fixing memory regressions in the Rust Var
 
 ## Prerequisites
 
-- `rust_build_env` conda environment active
+- `vdr` conda environment active
 - Test BAM + reference FASTA (e.g., `testdata/NA12878.mapped.*.bam`, `testdata/hs37d5.fa`)
 - VarDictJava built and runnable for baseline comparison
 - DHAT feature available: `Cargo.toml` has `dhat-heap = ["dep:dhat"]`

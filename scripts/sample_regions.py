@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 VALID_CHROMS = [str(chrom) for chrom in range(1, 23)] + ["X", "Y"]
-DEFAULT_SAMTOOLS = "/home/eck/software/miniconda3/envs/rust_build_env/bin/samtools"
+DEFAULT_SAMTOOLS = "/home/eck/software/miniconda3/envs/vdr/bin/samtools"
 
 
 @dataclass(frozen=True, order=True)
