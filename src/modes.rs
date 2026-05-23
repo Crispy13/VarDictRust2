@@ -101,6 +101,7 @@ fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
     let variation_data = parser.process_preprocessor(&mut data, &header, &chr_name);
     maybe_write_module_snapshot("CIGAR_PARSER", &region, &variation_data);
     maybe_write_module_snapshot("CIGAR_MODIFIER", &region, &parser.cigar_modifier_snapshots);
+    drop(parser);
     data.close();
 
     let variation_scope = Scope {
