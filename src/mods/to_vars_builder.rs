@@ -13,6 +13,7 @@ use crate::patterns::{
     AMP_ATGC, ANY_SV, BEGIN_DIGITS, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_CARET, CARET_ATGNC,
     DUP_NUM, HASH_GROUP_CARET_GROUP, INV_NUM, SOME_SV_NUMBERS,
 };
+use crate::reference::ReferenceSequenceMap;
 use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{round_half_even, substr, substr_with_len};
 use crate::variations::{
@@ -25,7 +26,7 @@ const REF_30_BASES: i32 = 30;
 const REF_50_BASES: i32 = 50;
 const REF_70_BASES: i32 = 70;
 
-fn chromosome_limit(region: &Region, ref_map: &HashMap<i32, u8>) -> i32 {
+fn chromosome_limit(region: &Region, ref_map: &ReferenceSequenceMap) -> i32 {
     GlobalReadOnlyScope::with_instance(|scope| scope.chr_lengths.get(&region.chr).copied())
         .or_else(|| ref_map.keys().copied().max())
         .unwrap_or(0)
@@ -185,14 +186,14 @@ fn repeated_prefix_len(haystack: &[u8], unit: &[u8]) -> usize {
 pub fn proceed_vref_is_deletion(
     position: i32,
     dellen: i32,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     region: &Region,
     _conf: &Configuration,
 ) -> (f64, i32, String) {
     // left 70 bases in reference sequence
     let leftseq = join_ref(ref_map, (position - REF_70_BASES).max(1), position - 1);
     let chr0 = chromosome_limit(region, ref_map); // Trap T23: non-mutating
-                                                  // right dellen+70 bases in reference sequence
+    // right dellen+70 bases in reference sequence
     let tseq = join_ref(
         ref_map,
         position,
@@ -229,7 +230,7 @@ pub fn proceed_vref_is_deletion(
 pub fn proceed_vref_is_insertion(
     position: i32,
     vn: &str,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     region: &Region,
     _conf: &Configuration,
 ) -> (f64, i32, String) {
@@ -238,7 +239,7 @@ pub fn proceed_vref_is_insertion(
     // left 50 bases (inclusive of position)
     let leftseq = join_ref(ref_map, (position - REF_50_BASES).max(1), position);
     let x = chromosome_limit(region, ref_map); // Trap T23: non-mutating
-                                               // right 70 bases
+    // right 70 bases
     let tseq2 = join_ref(ref_map, position + 1, (position + REF_70_BASES).min(x));
 
     let (mut msi, shift3, mut msint) = find_msi(tseq1, &tseq2, Some(&leftseq));
@@ -464,7 +465,7 @@ pub fn create_insertion(
     insertion_variants: &PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &PositionMap<i32>,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     conf: &Configuration,
 ) -> i32 {
     let insertion_variations = match insertion_variants.get(&position) {
@@ -582,7 +583,7 @@ pub fn collect_vars_at_position(
     aligned_variants: &mut HashMap<i32, Vars>,
     position: i32,
     var: &[Variant],
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
 ) -> f64 {
     let mut maxfreq: f64 = 0.0;
     for tvar in var {
@@ -616,7 +617,7 @@ pub fn is_the_same_variation_on_ref(
     position: i32,
     vars_at_cur_position: &VariationMap,
     insertion_variants: &PositionMap<VariationMap>,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     conf: &Configuration,
     has_amplicon_based_calling: bool,
 ) -> bool {
@@ -687,7 +688,7 @@ fn update_ref_variant(
     debug_lines: &[String],
     reference_forward_coverage: i32,
     reference_reverse_coverage: i32,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     duprate: f64,
     conf: &Configuration,
 ) {
@@ -734,7 +735,7 @@ pub fn collect_reference_variants(
     mut total_pos_coverage: i32,
     variations_at_pos: &mut Vars,
     debug_lines: &[String],
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     region: &Region,
     ref_coverage: &PositionMap<i32>,
     non_insertion_variants: &PositionMap<VariationMap>,
@@ -1098,7 +1099,7 @@ fn process_variant_finalization(
     reference_forward_coverage: i32,
     reference_reverse_coverage: i32,
     variations_at_pos: &mut Vars,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     region: &Region,
     ref_coverage: &PositionMap<i32>,
     _duprate: f64,
@@ -1346,7 +1347,7 @@ fn process_variant_finalization(
 pub fn process(
     max_read_length: i32,
     region: &Region,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     ref_coverage: &PositionMap<i32>,
     insertion_variants: &PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
@@ -1411,7 +1412,7 @@ pub fn process(
 fn process_position(
     position: i32,
     aligned_variants: &mut HashMap<i32, Vars>,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     ref_coverage: &PositionMap<i32>,
     insertion_variants: &PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,

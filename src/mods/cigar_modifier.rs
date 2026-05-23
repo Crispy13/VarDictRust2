@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use crate::config::{LOWQUAL, SEED_2};
 use crate::data::{ModifiedCigar, Region};
 use crate::patterns::*;
-use crate::reference::Reference;
+use crate::reference::{Reference, ReferenceSequenceMap};
 use crate::utils::{complement_sequence, global_find, reverse_sequence, substr, substr_with_len};
 use crate::variations::{
     is_has_and_equals_base, is_has_and_equals_str, is_has_and_not_equals_base,
@@ -21,7 +21,7 @@ struct CigarModifierState<'a> {
     original_cigar: String,
     query_sequence: String,
     query_quality: String,
-    reference: &'a HashMap<i32, u8>,
+    reference: &'a ReferenceSequenceMap,
     seed: &'a HashMap<String, Vec<i32>>,
     indel: i32,
     max_read_length: i32,
@@ -1044,6 +1044,7 @@ mod tests {
     use super::*;
     use crate::config::Configuration;
     use once_cell::sync::Lazy;
+    use std::collections::HashMap;
     use std::sync::Mutex;
 
     static TEST_SCOPE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
@@ -1063,7 +1064,7 @@ mod tests {
     }
 
     fn make_reference(bases: &[(i32, u8)]) -> Reference {
-        let mut reference_sequences = HashMap::new();
+        let mut reference_sequences = ReferenceSequenceMap::default();
         for &(pos, base) in bases {
             reference_sequences.insert(pos, base);
         }
@@ -1074,7 +1075,9 @@ mod tests {
 
     #[test]
     fn modify_cigar_strips_leading_deletion() {
-        let _guard = TEST_SCOPE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _guard = TEST_SCOPE_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         init_test_scope();
 
         let reference = make_reference(&[]);
@@ -1097,7 +1100,9 @@ mod tests {
 
     #[test]
     fn modify_cigar_strips_repeated_leading_soft_clips_in_chimeric_path() {
-        let _guard = TEST_SCOPE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _guard = TEST_SCOPE_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         init_test_scope();
 
         let mut reference = make_reference(&[]);
@@ -1126,7 +1131,9 @@ mod tests {
 
     #[test]
     fn modify_cigar_strips_repeated_trailing_soft_clips_in_chimeric_path() {
-        let _guard = TEST_SCOPE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _guard = TEST_SCOPE_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         init_test_scope();
 
         let mut reference = make_reference(&[]);

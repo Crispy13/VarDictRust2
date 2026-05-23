@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use vardict_rs::data::{RealignedVariationData, Sclip, VariationMap};
 use vardict_rs::mods::structural_variants_processor;
-use vardict_rs::reference::ReferenceResource;
+use vardict_rs::reference::{ReferenceResource, ReferenceSequenceMap};
 
 /// Load chromosome lengths from a .fai file into a HashMap.
 fn load_chr_lengths(fai_path: &str) -> HashMap<String, i32> {
@@ -60,7 +60,7 @@ fn parity_sv_processor_all_regions() {
         let mut prev_ref_coverage: HashMap<i32, i32> = HashMap::new();
         let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
         let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
-        let prev_reference_sequences: HashMap<i32, u8> = HashMap::new();
+        let prev_reference_sequences = ReferenceSequenceMap::default();
         let prev_chr = "";
         let prev_max_read_length: i32 = 0;
 
@@ -125,7 +125,7 @@ fn parity_sv_processor_region_1_9967324_9968024() {
     let mut prev_ref_coverage: HashMap<i32, i32> = HashMap::new();
     let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
     let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
-    let prev_reference_sequences: HashMap<i32, u8> = HashMap::new();
+    let prev_reference_sequences = ReferenceSequenceMap::default();
     let prev_chr = "";
     let prev_max_read_length: i32 = 0;
 
@@ -195,7 +195,7 @@ fn parity_sv_processor_config_t1_01_14_106517915_106518615() {
     let mut prev_ref_coverage: HashMap<i32, i32> = HashMap::new();
     let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
     let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
-    let prev_reference_sequences: HashMap<i32, u8> = HashMap::new();
+    let prev_reference_sequences = ReferenceSequenceMap::default();
     let prev_chr = "";
     let prev_max_read_length: i32 = 0;
 
@@ -271,7 +271,7 @@ fn parity_sv_processor_config_t1_01_8_20002977_20003677() {
     let mut prev_ref_coverage: HashMap<i32, i32> = HashMap::new();
     let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
     let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
-    let prev_reference_sequences: HashMap<i32, u8> = HashMap::new();
+    let prev_reference_sequences = ReferenceSequenceMap::default();
     let prev_chr = "";
     let prev_max_read_length: i32 = 0;
 

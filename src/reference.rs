@@ -5,10 +5,10 @@ use std::fmt;
 use std::time::SystemTime;
 
 use rust_htslib::faidx;
+use rustc_hash::FxHashMap;
 
 use crate::data::Region;
 use crate::patterns::{UNABLE_FIND_CONTIG, WRONG_START_OR_END};
-use crate::utils::substr_with_len;
 
 // Java: Configuration.SEED_1 L203
 const SEED_1: i32 = 17;
@@ -45,13 +45,15 @@ fn region_boundaries_message(chr: &str, start: i32, end: i32) -> String {
 }
 
 // Java: Reference L9-L49
+pub type ReferenceSequenceMap = FxHashMap<i32, u8>;
+
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Reference {
     #[serde(rename = "loadedRegions")]
     pub loaded_regions: Vec<LoadedRegion>,
 
     #[serde(rename = "referenceSequences")]
-    pub reference_sequences: HashMap<i32, u8>,
+    pub reference_sequences: ReferenceSequenceMap,
 
     pub seed: HashMap<String, Vec<i32>>,
 }
@@ -291,18 +293,17 @@ impl ReferenceResource {
             return Ok(reference);
         }
 
-        reference.loaded_regions.push(LoadedRegion::new(
-            region.chr.clone(),
-            sequence_start,
-            sequence_end,
-        ));
-
         let exon_length = i32::try_from(exon.len()).expect("reference exon length exceeds i32");
         let site_end = if len == sequence_end {
             exon_length
         } else {
             exon_length - SEED_1
         };
+        reference.loaded_regions.push(LoadedRegion::new(
+            region.chr.clone(),
+            sequence_start,
+            sequence_end,
+        ));
 
         for i in 0..site_end.max(0) {
             let position = i + sequence_start;
@@ -319,12 +320,16 @@ impl ReferenceResource {
                 continue;
             }
 
-            let key_sequence = String::from_utf8(substr_with_len(&exon, i, SEED_1))
-                .expect("reference seed must remain ASCII");
+            let seed_1_end = exon_index + SEED_1 as usize;
+            let key_sequence = std::str::from_utf8(&exon[exon_index..seed_1_end])
+                .expect("reference seed must remain ASCII")
+                .to_owned();
             Self::add_positions_to_seed_sequence(&mut reference, sequence_start, i, key_sequence);
 
-            let key_sequence = String::from_utf8(substr_with_len(&exon, i, SEED_2))
-                .expect("reference seed must remain ASCII");
+            let seed_2_end = exon_index + SEED_2 as usize;
+            let key_sequence = std::str::from_utf8(&exon[exon_index..seed_2_end])
+                .expect("reference seed must remain ASCII")
+                .to_owned();
             Self::add_positions_to_seed_sequence(&mut reference, sequence_start, i, key_sequence);
         }
 

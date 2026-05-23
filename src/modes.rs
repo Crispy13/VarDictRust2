@@ -13,7 +13,7 @@ use crate::mods::simple_post_process::simple_post_process;
 use crate::mods::somatic_post_process::somatic_post_process;
 use crate::mods::{structural_variants_processor, to_vars_builder, variation_realigner};
 use crate::parity::snapshot::maybe_write_module_snapshot;
-use crate::reference::{Reference, ReferenceResource};
+use crate::reference::{Reference, ReferenceResource, ReferenceSequenceMap};
 use crate::scope::{AbstractMode, GlobalReadOnlyScope, Scope, VariantPrinter};
 use crate::utils::tsv_join;
 
@@ -145,7 +145,7 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
     let mut prev_ref_coverage = PositionMap::<i32>::default();
     let mut prev_soft_clips_3_end = HashMap::<i32, Sclip>::new();
     let mut prev_soft_clips_5_end = HashMap::<i32, Sclip>::new();
-    let prev_reference_sequences = HashMap::<i32, u8>::new();
+    let prev_reference_sequences = ReferenceSequenceMap::default();
     structural_variants_processor::process(
         &mut data,
         &mut reference,
@@ -195,7 +195,7 @@ pub trait ParallelMode: AbstractMode + Sync {
     fn post_parallel_hook(&self) {}
 
     fn parallel(&self, threads: usize) {
-        use crossbeam_channel::{bounded, Receiver};
+        use crossbeam_channel::{Receiver, bounded};
         use rayon::ThreadPoolBuilder;
 
         let pool = ThreadPoolBuilder::new()

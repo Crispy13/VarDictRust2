@@ -14,7 +14,7 @@ use crate::data::{
     CurrentSegment, InitialData, Match, PositionMap, RealignedVariationData, Region, SVStructures,
     Sclip, Side, SortPositionSclip, Variation, VariationMap, VariationMapSV,
 };
-use crate::reference::{Reference, ReferenceResource};
+use crate::reference::{Reference, ReferenceResource, ReferenceSequenceMap};
 use crate::scope::{GlobalReadOnlyScope, Scope, VariantPrinter};
 use crate::utils::{
     char_at, complement_base, complement_sequence, get_reverse_complemented_sequence,
@@ -3768,7 +3768,7 @@ pub fn process(
     _prev_ref_coverage: &mut PositionMap<i32>,
     _prev_soft_clips_3_end: &mut HashMap<i32, Sclip>,
     _prev_soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    _prev_reference_sequences: &HashMap<i32, u8>,
+    _prev_reference_sequences: &ReferenceSequenceMap,
     _prev_chr: &str,
     _prev_max_read_length: i32,
 ) {

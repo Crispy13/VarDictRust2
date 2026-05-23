@@ -6,7 +6,7 @@ use crossbeam_channel::bounded;
 use rayon::prelude::*;
 use vardict_rs::data::{RealignedVariationData, Sclip, VariationMap};
 use vardict_rs::mods::structural_variants_processor;
-use vardict_rs::reference::ReferenceResource;
+use vardict_rs::reference::{ReferenceResource, ReferenceSequenceMap};
 
 const MAX_FAILURES: usize = 10;
 const NUM_THREADS: usize = 10;
@@ -161,7 +161,7 @@ fn parity_sv_processor_sweep() {
                 let mut prev_ref_coverage: HashMap<i32, i32> = HashMap::new();
                 let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
                 let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
-                let prev_reference_sequences: HashMap<i32, u8> = HashMap::new();
+                let prev_reference_sequences = ReferenceSequenceMap::default();
 
                 structural_variants_processor::process(
                     &mut data,

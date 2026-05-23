@@ -5,9 +5,10 @@ use std::sync::RwLock;
 
 use once_cell::sync::Lazy;
 
-use crate::config::{Configuration, ADSEED, SEED_2};
+use crate::config::{ADSEED, Configuration, SEED_2};
 use crate::data::{Sclip, SortedStringMap, Variant, Variation, VariationMap, Vars};
 use crate::patterns::{B_A7, B_T7};
+use crate::reference::ReferenceSequenceMap;
 use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{reverse_sequence, substr_with_len};
 
@@ -354,7 +355,7 @@ pub fn find_conseq(soft_clip: &mut Sclip, dir: i32) -> String {
 }
 
 /// Ported from: VariationUtils.java:L159-L170
-pub fn join_ref(base_to_position: &HashMap<i32, u8>, from: i32, to: i32) -> String {
+pub fn join_ref(base_to_position: &ReferenceSequenceMap, from: i32, to: i32) -> String {
     let mut sequence = String::new();
     for position in from..=to {
         if let Some(base) = base_to_position.get(&position) {
@@ -365,7 +366,7 @@ pub fn join_ref(base_to_position: &HashMap<i32, u8>, from: i32, to: i32) -> Stri
 }
 
 /// Ported from: VariationUtils.java:L178-L191
-pub fn join_ref_f64(base_to_position: &HashMap<i32, u8>, from: i32, to: f64) -> String {
+pub fn join_ref_f64(base_to_position: &ReferenceSequenceMap, from: i32, to: f64) -> String {
     let mut sequence = String::new();
     let mut position = from;
     while (position as f64) < to {
@@ -379,7 +380,7 @@ pub fn join_ref_f64(base_to_position: &HashMap<i32, u8>, from: i32, to: f64) -> 
 
 /// Ported from: VariationUtils.java:L201-L217
 pub fn join_ref_for_5_lgins(
-    base_to_position: &HashMap<i32, u8>,
+    base_to_position: &ReferenceSequenceMap,
     from: i32,
     to: i32,
     seq: &str,
@@ -401,7 +402,7 @@ pub fn join_ref_for_5_lgins(
 
 /// Ported from: VariationUtils.java:L228-L246
 pub fn join_ref_for_3_lgins(
-    base_to_position: &HashMap<i32, u8>,
+    base_to_position: &ReferenceSequenceMap,
     from: i32,
     to: i32,
     shift5: i32,
@@ -633,12 +634,12 @@ where
 }
 
 /// Ported from: VariationUtils.java:L460-L464
-pub fn is_has_and_equals_base(ch1: u8, reference: &HashMap<i32, u8>, index: i32) -> bool {
+pub fn is_has_and_equals_base(ch1: u8, reference: &ReferenceSequenceMap, index: i32) -> bool {
     reference.get(&index).is_some_and(|refc| *refc == ch1)
 }
 
 /// Ported from: VariationUtils.java:L466-L473
-pub fn is_has_and_equals_index(index: i32, reference: &HashMap<i32, u8>, index2: i32) -> bool {
+pub fn is_has_and_equals_index(index: i32, reference: &ReferenceSequenceMap, index2: i32) -> bool {
     match (reference.get(&index), reference.get(&index2)) {
         (Some(left), Some(right)) => left == right,
         _ => false,
@@ -647,7 +648,7 @@ pub fn is_has_and_equals_index(index: i32, reference: &HashMap<i32, u8>, index2:
 
 /// Ported from: VariationUtils.java:L475-L480
 pub fn is_has_and_equals_str(
-    reference: &HashMap<i32, u8>,
+    reference: &ReferenceSequenceMap,
     index1: i32,
     string: &str,
     index2: i32,
@@ -665,13 +666,13 @@ pub fn is_has_and_equals_str(
 }
 
 /// Ported from: VariationUtils.java:L482-L487
-pub fn is_has_and_not_equals_base(ch1: u8, reference: &HashMap<i32, u8>, index: i32) -> bool {
+pub fn is_has_and_not_equals_base(ch1: u8, reference: &ReferenceSequenceMap, index: i32) -> bool {
     reference.get(&index).is_some_and(|refc| *refc != ch1)
 }
 
 /// Ported from: VariationUtils.java:L489-L497
 pub fn is_has_and_not_equals_str(
-    reference: &HashMap<i32, u8>,
+    reference: &ReferenceSequenceMap,
     index1: i32,
     string: &str,
     index2: i32,
@@ -689,7 +690,7 @@ pub fn is_has_and_not_equals_str(
 }
 
 pub fn is_reference_mismatch_and_not_n(
-    reference: &HashMap<i32, u8>,
+    reference: &ReferenceSequenceMap,
     index1: i32,
     string: &str,
     index2: i32,
@@ -868,7 +869,7 @@ mod tests {
 
     #[test]
     fn join_ref_skips_missing_positions_like_java() {
-        let reference = HashMap::from([(1, b'A'), (3, b'C'), (4, b'G')]);
+        let reference = ReferenceSequenceMap::from_iter([(1, b'A'), (3, b'C'), (4, b'G')]);
 
         assert_eq!(join_ref(&reference, 1, 4), "ACG");
         assert_eq!(join_ref_f64(&reference, 1, 3.5), "AC");
@@ -954,7 +955,7 @@ mod tests {
 
     #[test]
     fn helper_comparisons_are_null_safe() {
-        let reference = HashMap::from([(10, b'A'), (11, b'C'), (12, b'N')]);
+        let reference = ReferenceSequenceMap::from_iter([(10, b'A'), (11, b'C'), (12, b'N')]);
 
         assert!(is_has_and_equals_base(b'A', &reference, 10));
         assert!(is_has_and_equals_index(10, &reference, 10));
@@ -991,7 +992,8 @@ mod tests {
 
     #[test]
     fn join_ref_large_insertion_helpers_match_java_indexing() {
-        let reference = HashMap::from([(1, b'A'), (2, b'C'), (3, b'G'), (4, b'T')]);
+        let reference =
+            ReferenceSequenceMap::from_iter([(1, b'A'), (2, b'C'), (3, b'G'), (4, b'T')]);
 
         assert_eq!(join_ref_for_5_lgins(&reference, 1, 4, "TTAA", "T"), "AAAT");
         assert_eq!(
@@ -1175,7 +1177,7 @@ mod tests {
 
     #[test]
     fn join_ref_f64_excludes_upper_bound_like_java() {
-        let reference = HashMap::from([(4, b'T'), (5, b'G'), (6, b'C')]);
+        let reference = ReferenceSequenceMap::from_iter([(4, b'T'), (5, b'G'), (6, b'C')]);
         assert_eq!(join_ref_f64(&reference, 4, 6.0), "TG");
     }
 
@@ -1190,7 +1192,7 @@ mod tests {
 
     #[test]
     fn comparison_helpers_return_false_for_missing_indexes() {
-        let reference = HashMap::from([(1, b'A')]);
+        let reference = ReferenceSequenceMap::from_iter([(1, b'A')]);
 
         assert!(!is_has_and_equals_base(b'A', &reference, 2));
         assert!(!is_has_and_equals_index(1, &reference, 2));
@@ -1330,7 +1332,7 @@ mod tests {
 
     #[test]
     fn join_ref_for_insertion_helpers_fall_back_to_reference_when_extra_consumes_seq() {
-        let reference = HashMap::from([(1, b'A'), (2, b'C'), (3, b'G')]);
+        let reference = ReferenceSequenceMap::from_iter([(1, b'A'), (2, b'C'), (3, b'G')]);
         assert_eq!(join_ref_for_5_lgins(&reference, 1, 3, "AG", "AG"), "ACG");
         assert_eq!(join_ref_for_3_lgins(&reference, 1, 3, 0, "AG", "AG"), "ACG");
     }
@@ -1447,7 +1449,7 @@ mod tests {
 
     #[test]
     fn join_ref_returns_empty_when_no_positions_match() {
-        let reference = HashMap::from([(10, b'A')]);
+        let reference = ReferenceSequenceMap::from_iter([(10, b'A')]);
         assert_eq!(join_ref(&reference, 1, 3), "");
     }
 
@@ -1554,14 +1556,15 @@ mod tests {
 
     #[test]
     fn comparison_helpers_handle_negative_string_index_as_false() {
-        let reference = HashMap::from([(1, b'A')]);
+        let reference = ReferenceSequenceMap::from_iter([(1, b'A')]);
         assert!(!is_has_and_equals_str(&reference, 1, "A", -1));
         assert!(!is_has_and_not_equals_str(&reference, 1, "A", -1));
     }
 
     #[test]
     fn join_ref_for_3_lgins_can_inject_sequence_in_middle() {
-        let reference = HashMap::from([(5, b'A'), (6, b'C'), (7, b'G'), (8, b'T')]);
+        let reference =
+            ReferenceSequenceMap::from_iter([(5, b'A'), (6, b'C'), (7, b'G'), (8, b'T')]);
         assert_eq!(
             join_ref_for_3_lgins(&reference, 5, 8, 2, "GGCC", "G"),
             "ACGC"
@@ -1570,7 +1573,8 @@ mod tests {
 
     #[test]
     fn join_ref_for_5_lgins_can_inject_sequence_at_end() {
-        let reference = HashMap::from([(5, b'A'), (6, b'C'), (7, b'G'), (8, b'T')]);
+        let reference =
+            ReferenceSequenceMap::from_iter([(5, b'A'), (6, b'C'), (7, b'G'), (8, b'T')]);
         assert_eq!(join_ref_for_5_lgins(&reference, 5, 8, "GGCC", "G"), "ACCG");
     }
 

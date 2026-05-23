@@ -21,11 +21,11 @@ use crate::data::{
     VariationMap, VariationMapSV,
 };
 use crate::patterns::{
-    ATGSs_AMP_ATGSs_END, MINUS_NUMBER_AMP_ATGCs_END, AMP_ATGC, BEGIN_MINUS_NUMBER,
-    BEGIN_MINUS_NUMBER_ANY, BEGIN_PLUS_ATGC, CARET_ATGC_END, CARET_ATGNC, DUP_NUM_ATGC, HASH_ATGC,
+    AMP_ATGC, ATGSs_AMP_ATGSs_END, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_ANY, BEGIN_PLUS_ATGC,
+    CARET_ATGC_END, CARET_ATGNC, DUP_NUM_ATGC, HASH_ATGC, MINUS_NUMBER_AMP_ATGCs_END,
     MINUS_NUMBER_ATGNC_SV_ATGNC_END, UP_NUMBER_END,
 };
-use crate::reference::{Reference, ReferenceResource};
+use crate::reference::{Reference, ReferenceResource, ReferenceSequenceMap};
 use crate::scope::{GlobalReadOnlyScope, Scope, VariantPrinter};
 use crate::utils::{char_at, substr, substr_with_len};
 use crate::variations::{
@@ -412,7 +412,7 @@ pub fn adj_ref_factor(ref_var: Option<&mut Variation>, factor_f: f64) {
 // written back after adj_cnt_with_reference().
 fn write_back_cloned_reference_variation(
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    reference_sequences: &HashMap<i32, u8>,
+    reference_sequences: &ReferenceSequenceMap,
     position: i32,
     reference_var: Option<Variation>,
 ) {
@@ -474,7 +474,7 @@ pub fn rm_cnt(vref: &mut Variation, tv: &Variation) {
 /// Java: VariationRealigner.java#L2890-L2901
 ///
 /// Check if sequence matches reference with default 3 mismatches.
-pub fn ismatchref(sequence: &str, ref_map: &HashMap<i32, u8>, position: i32, dir: i32) -> bool {
+pub fn ismatchref(sequence: &str, ref_map: &ReferenceSequenceMap, position: i32, dir: i32) -> bool {
     // Java: VariationRealigner.java#L2895
     ismatchref_with_mm(sequence, ref_map, position, dir, 3)
 }
@@ -485,7 +485,7 @@ pub fn ismatchref(sequence: &str, ref_map: &HashMap<i32, u8>, position: i32, dir
 /// Check if sequence matches reference with a specific mismatch threshold.
 pub fn ismatchref_with_mm(
     sequence: &str,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     position: i32,
     dir: i32,
     mm_threshold: i32,
@@ -529,7 +529,7 @@ pub fn ismatchref_with_mm(
 /// Java: VariationRealigner.java#L2408-L2423
 ///
 /// Adjust the insertion position if necessary (left-align).
-pub fn adj_ins_pos(bi: i32, ins: &str, ref_map: &HashMap<i32, u8>) -> BaseInsertion {
+pub fn adj_ins_pos(bi: i32, ins: &str, ref_map: &ReferenceSequenceMap) -> BaseInsertion {
     let mut bi = bi;
     let mut n = 1i32;
     let len = ins.len() as i32;
@@ -648,7 +648,7 @@ pub fn find35match(seq5: &str, seq3: &str) -> Match35 {
 /// **Parity trap T4**: Side effect — marks soft clips used.
 /// **Parity trap T16**: Uses `mcnt < longmm` (≤3 iterations, contrast with findMM3's ≤4).
 pub fn find_mm5(
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     position: i32,
     wupseq: &str,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
@@ -768,7 +768,7 @@ pub fn find_mm5(
 /// **Parity trap T4**: Side effect — marks soft clips used.
 /// **Parity trap T16**: Uses `mcnt <= longmm` (≤4 iterations, contrast with findMM5's ≤3).
 pub fn find_mm3(
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     p: i32,
     sanpseq: &str,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
@@ -889,7 +889,7 @@ pub fn find_mm3(
 pub fn findbi(
     seq: &str,
     position: i32,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     dir: i32,
     chr: &str,
 ) -> BaseInsertion {
@@ -1078,7 +1078,7 @@ pub fn findbi(
 pub fn findbp(
     sequence: &str,
     start_position: i32,
-    ref_map: &HashMap<i32, u8>,
+    ref_map: &ReferenceSequenceMap,
     direction: i32,
     chr: &str,
 ) -> i32 {
@@ -1493,7 +1493,7 @@ pub fn adjust_mnp<M, H>(
     ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    reference_sequences: &HashMap<i32, u8>,
+    reference_sequences: &ReferenceSequenceMap,
 ) where
     H: BuildHasher,
     for<'a> &'a M: IntoIterator<Item = (&'a String, &'a i32)>,
@@ -1723,7 +1723,7 @@ pub fn realigndel<M, H>(
     ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    reference_sequences: &HashMap<i32, u8>,
+    reference_sequences: &ReferenceSequenceMap,
     chr: &str,
     max_read_length: i32,
 ) where
@@ -2271,7 +2271,7 @@ pub fn realignins<M, H>(
     ref_coverage: &mut PositionMap<i32>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    reference_sequences: &HashMap<i32, u8>,
+    reference_sequences: &ReferenceSequenceMap,
     chr: &str,
     max_read_length: i32,
 ) -> String
@@ -3121,7 +3121,7 @@ fn realignlgdel(
                 continue;
             }
             bp += 1; // Java: VariationRealigner.java#L1033
-                     // Java: VariationRealigner.java#L1034 — markSV
+            // Java: VariationRealigner.java#L1034 — markSV
             let sv_mark = super::structural_variants_processor::mark_sv(
                 bp,
                 p,
@@ -3783,7 +3783,7 @@ pub fn realignlgins30(
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &Reference,
-    reference_sequences: &HashMap<i32, u8>,
+    reference_sequences: &ReferenceSequenceMap,
     chr: &str,
     max_read_length: i32,
     region_start: i32,
@@ -5335,7 +5335,7 @@ mod tests {
     #[test]
     fn test_ismatchref_basic() {
         init_test_scope();
-        let mut ref_map: HashMap<i32, u8> = HashMap::new();
+        let mut ref_map = ReferenceSequenceMap::default();
         ref_map.insert(100, b'A');
         ref_map.insert(101, b'T');
         ref_map.insert(102, b'C');
@@ -5351,7 +5351,7 @@ mod tests {
     fn test_adj_ins_pos_no_change() {
         init_test_scope();
         // When ref base at bi doesn't match last char of ins, no adjustment
-        let mut ref_map: HashMap<i32, u8> = HashMap::new();
+        let mut ref_map = ReferenceSequenceMap::default();
         ref_map.insert(100, b'X');
         ref_map.insert(99, b'X');
 
@@ -5368,7 +5368,7 @@ mod tests {
         // ref[98]=T -> ins shifted: "CGAT" at 98
         // ref[97]=A -> ins shifted: "TCGA" at 97
         // ref[96]=X -> stop
-        let mut ref_map: HashMap<i32, u8> = HashMap::new();
+        let mut ref_map = ReferenceSequenceMap::default();
         ref_map.insert(100, b'G');
         ref_map.insert(99, b'C');
         ref_map.insert(98, b'T');

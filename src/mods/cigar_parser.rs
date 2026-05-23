@@ -15,7 +15,7 @@ use crate::data::{
 use crate::mods::cigar_modifier::modify_cigar;
 use crate::mods::sam_file_parser::{get_mate_reference_name, RecordPreprocessor};
 use crate::patterns::*;
-use crate::reference::Reference;
+use crate::reference::{Reference, ReferenceSequenceMap};
 use crate::scope::GlobalReadOnlyScope;
 use crate::utils::{get_reverse_complemented_sequence, global_find, substr_with_len};
 use crate::variations::{
@@ -639,22 +639,17 @@ impl CigarParser {
     /// Predicate: near end of M segment with adjacent I/D and good quality base.
     pub fn is_closer_then_vext_and_good_base(
         &self,
+        perform_local_realignment: bool,
+        vext: i32,
+        goodq: f64,
         query_sequence: &str,
-        ref_map: &HashMap<i32, u8>,
+        ref_map: &ReferenceSequenceMap,
         query_quality: &str,
         ci: usize,
         i: i32,
         ss: &str,
         target_op: CigarOp,
     ) -> bool {
-        let (perform_local_realignment, vext, goodq) =
-            GlobalReadOnlyScope::with_instance(|scope| {
-                (
-                    scope.conf.perform_local_realignment,
-                    scope.conf.vext,
-                    scope.conf.goodq,
-                )
-            });
         let num_elems = self.cigar.num_cigar_elements();
         // Do not adjust complex if we have hard-clips after insertion/deletion
         if num_elems > ci + 2 && self.cigar.get_cigar_element(ci + 2).operator == CigarOp::H {
@@ -1224,6 +1219,9 @@ impl CigarParser {
                 // ─── Complex variant at end of M segment ──────────────────────
                 // Java: CigarParser.java#L475-L570 — adjacent deletion case
                 if self.is_closer_then_vext_and_good_base(
+                    perform_local_realignment,
+                    vext,
+                    goodq,
                     &query_sequence,
                     ref_map,
                     &query_quality,
@@ -1309,6 +1307,9 @@ impl CigarParser {
                         }
                     }
                 } else if self.is_closer_then_vext_and_good_base(
+                    perform_local_realignment,
+                    vext,
+                    goodq,
                     &query_sequence,
                     ref_map,
                     &query_quality,
@@ -1384,6 +1385,7 @@ impl CigarParser {
                             qibases,
                             ddlen,
                             pos,
+                            goodq,
                         );
                     }
                 }
@@ -1436,7 +1438,7 @@ impl CigarParser {
         &mut self,
         query_sequence: &str,
         mapping_quality: i32,
-        ref_map: &HashMap<i32, u8>,
+        ref_map: &ReferenceSequenceMap,
         query_quality: &str,
         number_of_mismatches: i32,
         direction: bool,
@@ -1714,7 +1716,7 @@ impl CigarParser {
         &mut self,
         query_sequence: &str,
         mapping_quality: i32,
-        ref_map: &HashMap<i32, u8>,
+        ref_map: &ReferenceSequenceMap,
         query_quality: &str,
         number_of_mismatches: i32,
         direction: bool,
@@ -2034,7 +2036,7 @@ impl CigarParser {
         _header: &HeaderView,
         query_sequence: &str,
         mapping_quality: i32,
-        ref_map: &HashMap<i32, u8>,
+        ref_map: &ReferenceSequenceMap,
         query_quality: &str,
         number_of_mismatches: i32,
         direction: bool,
@@ -3000,10 +3002,13 @@ impl CigarParser {
         qibases: i32,
         ddlen: i32,
         pos: i32,
+        goodq: f64,
     ) {
-        let goodq = GlobalReadOnlyScope::with_instance(|scope| scope.conf.goodq);
+        let s_bytes = s.as_bytes();
+        let is_insertion = s_bytes.first() == Some(&b'+');
+        let has_ampersand = s_bytes.contains(&b'&');
         // Java: CigarParser.java#L1689-L1699
-        let hv: &mut Variation = if s.starts_with('+') {
+        let hv: &mut Variation = if is_insertion {
             // Java: CigarParser.java#L1690
             Self::increment(&mut self.position_to_insertion_count, pos, s);
             get_variation(&mut self.insertion_variants, pos, s)
@@ -3054,11 +3059,7 @@ impl CigarParser {
         }
 
         // Java: CigarParser.java#L1729
-        let shift: i32 = if s.starts_with('+') && s.contains('&') {
-            1
-        } else {
-            0
-        };
+        let shift: i32 = if is_insertion && has_ampersand { 1 } else { 0 };
 
         // Java: CigarParser.java#L1732-L1734 — increase coverage
         for qi in 1..=(qbases - shift) {
@@ -3157,7 +3158,7 @@ impl CigarParser {
         cigar_length: i32,
         query_sequence: &str,
         query_quality: &str,
-        reference: &HashMap<i32, u8>,
+        reference: &ReferenceSequenceMap,
         ref_coverage: &mut PositionMap<i32>,
     ) -> Offset {
         let (vext, goodq) = Self::with_conf(|conf| (conf.vext, conf.goodq));
@@ -3827,7 +3828,7 @@ impl CigarParser {
 ///
 /// Trap T14: reference.get(&bi) returning None terminates the loop
 /// (Java compares null Character with autoboxed char — returns false).
-pub fn adj_ins_pos(bi: i32, ins: &str, reference: &HashMap<i32, u8>) -> BaseInsertion {
+pub fn adj_ins_pos(bi: i32, ins: &str, reference: &ReferenceSequenceMap) -> BaseInsertion {
     let ins_bytes = ins.as_bytes();
     let ins_len = ins_bytes.len();
     if ins_len == 0 {
@@ -4049,7 +4050,7 @@ mod tests {
 
     #[test]
     fn test_adj_ins_pos_no_movement() {
-        let mut ref_map = HashMap::new();
+        let mut ref_map = ReferenceSequenceMap::default();
         ref_map.insert(100, b'A');
         ref_map.insert(99, b'C');
         // insertion "TG" at position 100 — ref[100]=A != T (last of "TG"), no movement
