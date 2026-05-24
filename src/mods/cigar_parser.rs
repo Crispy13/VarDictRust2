@@ -752,6 +752,24 @@ impl CigarParser {
         matches!(ch, b'A' | b'T' | b'G' | b'C')
     }
 
+    fn single_base_description(ch: u8) -> Option<&'static str> {
+        match ch {
+            b'A' => Some("A"),
+            b'T' => Some("T"),
+            b'G' => Some("G"),
+            b'C' => Some("C"),
+            _ => None,
+        }
+    }
+
+    fn matching_description_mut(description: &mut Option<String>, ch: u8) -> &mut String {
+        description.get_or_insert_with(|| {
+            let mut owned = String::new();
+            owned.push(ch as char);
+            owned
+        })
+    }
+
     // ── Counter helpers ───────────────────────────────────────────────────
 
     /// Ported from: CigarParser.java:L1451-L1460 (increment)
@@ -1095,9 +1113,6 @@ impl CigarParser {
                     break;
                 }
                 let ch1 = query_seq_bytes[n];
-                let mut s = String::new();
-                s.push(ch1 as char);
-                let mut start_with_deletion = false;
 
                 // Java: CigarParser.java#L381-L389 — skip 'N' bases
                 if ch1 == b'N' {
@@ -1110,6 +1125,15 @@ impl CigarParser {
                     i += 1;
                     continue;
                 }
+                let base_description = Self::single_base_description(ch1);
+                let mut s: Option<String> = if base_description.is_some() {
+                    None
+                } else {
+                    let mut owned = String::new();
+                    owned.push(ch1 as char);
+                    Some(owned)
+                };
+                let mut start_with_deletion = false;
 
                 // Java: CigarParser.java#L392
                 let mut q: f64 = (query_qual_bytes[n] as i32 - 33) as f64;
@@ -1211,6 +1235,7 @@ impl CigarParser {
 
                 // Java: CigarParser.java#L461-L463 — append MNV to s
                 if !ss.is_empty() {
+                    let s = Self::matching_description_mut(&mut s, ch1);
                     s.push('&');
                     s.push_str(&ss);
                 }
@@ -1230,6 +1255,7 @@ impl CigarParser {
                     &ss,
                     CigarOp::D,
                 ) {
+                    let s = Self::matching_description_mut(&mut s, ch1);
                     // Java: CigarParser.java#L477-L488 — consume remaining M bases
                     while i + 1 < self.cigar_element_length {
                         let next_n = (self.read_position_including_soft_clipped + 1) as usize;
@@ -1248,11 +1274,12 @@ impl CigarParser {
 
                     // Java: CigarParser.java#L491 — replaceFirst("&", "")
                     if let Some(amp_pos) = s.find('&') {
-                        s = format!("{}{}", &s[..amp_pos], &s[amp_pos + 1..]);
+                        s.replace_range(amp_pos..=amp_pos, "");
                     }
                     // Java: CigarParser.java#L493
                     let del_len = self.cigar.get_cigar_element(ci + 1).length;
-                    s = format!("-{}&{}", del_len, s);
+                    let previous = std::mem::take(s);
+                    *s = format!("-{}&{}", del_len, previous);
                     start_with_deletion = true;
                     ddlen = del_len;
                     ci += 1;
@@ -1318,6 +1345,7 @@ impl CigarParser {
                     &ss,
                     CigarOp::I,
                 ) {
+                    let s = Self::matching_description_mut(&mut s, ch1);
                     // Java: CigarParser.java#L535-L570 — adjacent insertion case
                     while i + 1 < self.cigar_element_length {
                         let next_n = (self.read_position_including_soft_clipped + 1) as usize;
@@ -1335,7 +1363,7 @@ impl CigarParser {
                     }
                     // Java: CigarParser.java#L548 — replaceFirst("&", "")
                     if let Some(amp_pos) = s.find('&') {
-                        s = format!("{}{}", &s[..amp_pos], &s[amp_pos + 1..]);
+                        s.replace_range(amp_pos..=amp_pos, "");
                     }
                     // Java: CigarParser.java#L549
                     let next_len = self.cigar.get_cigar_element(ci + 1).length;
@@ -1351,7 +1379,8 @@ impl CigarParser {
                     let first = String::from_utf8_lossy(&substr_with_len(&s_bytes, 0, next_len))
                         .into_owned();
                     let second = if nl < s.len() { &s[nl..] } else { "" };
-                    s = format!("+{}&{}", first, second);
+                    let new_s = format!("+{}&{}", first, second);
+                    *s = new_s;
 
                     // Java: CigarParser.java#L555-L560
                     for qi in 1..=next_len {
@@ -1371,14 +1400,17 @@ impl CigarParser {
                 // Java: CigarParser.java#L571-L577 — add variation if not trimmed
                 if !trim {
                     let pos = self.start - qbases + 1;
-                    if pos >= self.region.start && pos <= self.region.end && !s.contains('N') {
+                    let s_ref = s.as_deref().unwrap_or(base_description.expect(
+                        "non-owned matching descriptions should be known ASCII bases",
+                    ));
+                    if pos >= self.region.start && pos <= self.region.end && !s_ref.contains('N') {
                         self.add_variation_for_matching_part(
                             mapping_quality,
                             number_of_mismatches,
                             direction,
                             read_length_include_matching_and_insertions,
                             nmoff,
-                            &s,
+                            s_ref,
                             start_with_deletion,
                             q,
                             qbases,
