@@ -656,16 +656,21 @@ impl CigarParser {
             return false;
         }
         let n = self.read_position_including_soft_clipped as usize;
-        perform_local_realignment
+        if !(perform_local_realignment
             && self.cigar_element_length - i <= vext
             && num_elems > ci + 1
-            && self.cigar.get_cigar_element(ci + 1).operator == target_op
-            && ref_map.contains_key(&self.start)
-            && (!ss.is_empty()
-                || is_not_equals(
-                    query_sequence.as_bytes().get(n).copied(),
-                    ref_map.get(&self.start).copied(),
-                ))
+            && self.cigar.get_cigar_element(ci + 1).operator == target_op)
+        {
+            return false;
+        }
+        let Some(&reference_base) = ref_map.get(&self.start) else {
+            return false;
+        };
+        (!ss.is_empty()
+            || is_not_equals(
+                query_sequence.as_bytes().get(n).copied(),
+                Some(reference_base),
+            ))
             && n < query_quality.len()
             && (query_quality.as_bytes()[n] as i32 - 33) as f64 >= goodq
     }
