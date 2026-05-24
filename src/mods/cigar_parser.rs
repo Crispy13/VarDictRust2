@@ -1095,7 +1095,7 @@ impl CigarParser {
                     break;
                 }
                 let ch1 = query_seq_bytes[n];
-                let mut s = String::with_capacity(16);
+                let mut s = String::new();
                 s.push(ch1 as char);
                 let mut start_with_deletion = false;
 
