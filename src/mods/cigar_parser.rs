@@ -1403,7 +1403,8 @@ impl CigarParser {
                     let s_ref = s.as_deref().unwrap_or(base_description.expect(
                         "non-owned matching descriptions should be known ASCII bases",
                     ));
-                    if pos >= self.region.start && pos <= self.region.end && !s_ref.contains('N') {
+                    let description_has_n = s.as_deref().is_some_and(|owned| owned.contains('N'));
+                    if pos >= self.region.start && pos <= self.region.end && !description_has_n {
                         self.add_variation_for_matching_part(
                             mapping_quality,
                             number_of_mismatches,
