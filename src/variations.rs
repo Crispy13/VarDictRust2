@@ -588,11 +588,12 @@ where
     let map = hash.entry(start).or_default();
 
     let description_ref = description_string.as_ref();
-    if map.entries.contains_key(description_ref) {
+    if let Some(index) = map.entries.get_index_of(description_ref) {
         return map
             .entries
-            .get_mut(description_ref)
-            .expect("variation entry should exist after contains_key");
+            .get_index_mut(index)
+            .map(|(_key, variation)| variation)
+            .expect("variation entry should exist after get_index_of");
     }
 
     let description_string = description_string.into();
