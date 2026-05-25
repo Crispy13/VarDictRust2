@@ -1140,7 +1140,7 @@ impl CigarParser {
                 let mut q: f64 = (query_qual_bytes[n] as i32 - 33) as f64;
                 let mut qbases: i32 = 1;
                 let mut qibases: i32 = 0;
-                let mut ss = String::new();
+                let mut ss: Option<String> = None;
 
                 // ─── MNV detection while-loop ─────────────────────────────────
                 // Java: CigarParser.java#L403-L458
@@ -1182,7 +1182,7 @@ impl CigarParser {
                     // Java: CigarParser.java#L425
                     if is_not_equals(ref_map.get(&(self.start + 1)).copied(), Some(nuc)) {
                         // Java: CigarParser.java#L427 — consecutive mismatch
-                        ss.push(nuc as char);
+                        ss.get_or_insert_with(String::new).push(nuc as char);
                         q += (query_qual_bytes[next_n] as i32 - 33) as f64;
                         qbases += 1;
                         self.read_position_including_soft_clipped += 1;
@@ -1224,7 +1224,8 @@ impl CigarParser {
                         for ssi in 1..=ssn {
                             let idx = (self.read_position_including_soft_clipped + ssi) as usize;
                             if idx < query_seq_bytes.len() {
-                                ss.push(query_seq_bytes[idx] as char);
+                                ss.get_or_insert_with(String::new)
+                                    .push(query_seq_bytes[idx] as char);
                             }
                             if idx < query_qual_bytes.len() {
                                 q += (query_qual_bytes[idx] as i32 - 33) as f64;
@@ -1239,10 +1240,10 @@ impl CigarParser {
                 }
 
                 // Java: CigarParser.java#L461-L463 — append MNV to s
-                if !ss.is_empty() {
+                if let Some(ss) = ss.as_deref() {
                     let s = Self::matching_description_mut(&mut s, ch1);
                     s.push('&');
-                    s.push_str(&ss);
+                    s.push_str(ss);
                 }
                 let mut ddlen: i32 = 0;
 
@@ -1257,7 +1258,7 @@ impl CigarParser {
                     query_qual_bytes,
                     ci,
                     i,
-                    ss.is_empty(),
+                    ss.is_none(),
                     CigarOp::D,
                 ) {
                     let s = Self::matching_description_mut(&mut s, ch1);
@@ -1347,7 +1348,7 @@ impl CigarParser {
                     query_qual_bytes,
                     ci,
                     i,
-                    ss.is_empty(),
+                    ss.is_none(),
                     CigarOp::I,
                 ) {
                     let s = Self::matching_description_mut(&mut s, ch1);
