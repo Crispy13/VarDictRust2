@@ -642,12 +642,12 @@ impl CigarParser {
         perform_local_realignment: bool,
         vext: i32,
         goodq: f64,
-        query_sequence: &str,
+        query_sequence: &[u8],
         ref_map: &ReferenceSequenceMap,
-        query_quality: &str,
+        query_quality: &[u8],
         ci: usize,
         i: i32,
-        ss: &str,
+        ss_is_empty: bool,
         target_op: CigarOp,
     ) -> bool {
         let num_elems = self.cigar.num_cigar_elements();
@@ -666,13 +666,9 @@ impl CigarParser {
         let Some(&reference_base) = ref_map.get(&self.start) else {
             return false;
         };
-        (!ss.is_empty()
-            || is_not_equals(
-                query_sequence.as_bytes().get(n).copied(),
-                Some(reference_base),
-            ))
+        (!ss_is_empty || is_not_equals(query_sequence.get(n).copied(), Some(reference_base)))
             && n < query_quality.len()
-            && (query_quality.as_bytes()[n] as i32 - 33) as f64 >= goodq
+            && (query_quality[n] as i32 - 33) as f64 >= goodq
     }
 
     /// Ported from: CigarParser.java:L655-L663 (isTrimAtOptTBases)
@@ -1256,12 +1252,12 @@ impl CigarParser {
                     perform_local_realignment,
                     vext,
                     goodq,
-                    &query_sequence,
+                    query_seq_bytes,
                     ref_map,
-                    &query_quality,
+                    query_qual_bytes,
                     ci,
                     i,
-                    &ss,
+                    ss.is_empty(),
                     CigarOp::D,
                 ) {
                     let s = Self::matching_description_mut(&mut s, ch1);
@@ -1346,12 +1342,12 @@ impl CigarParser {
                     perform_local_realignment,
                     vext,
                     goodq,
-                    &query_sequence,
+                    query_seq_bytes,
                     ref_map,
-                    &query_quality,
+                    query_qual_bytes,
                     ci,
                     i,
-                    &ss,
+                    ss.is_empty(),
                     CigarOp::I,
                 ) {
                     let s = Self::matching_description_mut(&mut s, ch1);
