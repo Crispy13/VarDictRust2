@@ -4305,18 +4305,17 @@ fn realignlgins(
 
     // ── 5' pass ──────────────────────────────────────────────────────
     // Java: VariationRealigner.java#L1610-L1620
-    let mut tmp: Vec<SortPositionSclip> = Vec::new();
+    let mut tmp: Vec<(i32, i32)> = Vec::new();
     for (&p, sc) in soft_clips_5_end.iter() {
         if p < region_start - EXTENSION || p > region_end + EXTENSION {
             continue;
         }
-        tmp.push(SortPositionSclip::new(p, sc.clone(), 0));
+        tmp.push((p, sc.base.vars_count));
     }
-    tmp.sort_by(comp2);
+    tmp.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
     // Java: VariationRealigner.java#L1623
-    for t in &tmp {
-        let p = t.position;
+    for &(p, _) in &tmp {
 
         let (cnt, seq) = {
             let sc5v = match soft_clips_5_end.get_mut(&p) {
@@ -4617,18 +4616,17 @@ fn realignlgins(
 
     // ── 3' pass ──────────────────────────────────────────────────────
     // Java: VariationRealigner.java#L1779-L1790
-    let mut tmp: Vec<SortPositionSclip> = Vec::new();
+    let mut tmp: Vec<(i32, i32)> = Vec::new();
     for (&p, sc) in soft_clips_3_end.iter() {
         if p < region_start - EXTENSION || p > region_end + EXTENSION {
             continue;
         }
-        tmp.push(SortPositionSclip::new(p, sc.clone(), 0));
+        tmp.push((p, sc.base.vars_count));
     }
-    tmp.sort_by(comp2);
+    tmp.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
     // Java: VariationRealigner.java#L1792
-    for t in &tmp {
-        let original_p = t.position;
+    for &(original_p, _) in &tmp {
         let mut p = original_p;
         let (cnt, seq, sc3v_snapshot) = {
             let sc3v = match soft_clips_3_end.get_mut(&original_p) {

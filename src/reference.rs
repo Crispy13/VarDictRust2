@@ -349,7 +349,10 @@ impl ReferenceResource {
         i: i32,
         key_sequence: String,
     ) {
-        let seed_positions = reference.seed.entry(key_sequence).or_default();
+        let seed_positions = reference
+            .seed
+            .entry(key_sequence)
+            .or_insert_with(|| Vec::with_capacity(1));
         seed_positions.push(i + sequence_start);
     }
 

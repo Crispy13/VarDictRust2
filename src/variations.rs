@@ -588,11 +588,12 @@ where
     let map = hash.entry(start).or_default();
 
     let description_ref = description_string.as_ref();
-    if map.entries.contains_key(description_ref) {
+    if let Some(index) = map.entries.get_index_of(description_ref) {
         return map
             .entries
-            .get_mut(description_ref)
-            .expect("variation entry should exist after contains_key");
+            .get_index_mut(index)
+            .map(|(_key, variation)| variation)
+            .expect("variation entry should exist after get_index_of");
     }
 
     let description_string = description_string.into();
@@ -707,6 +708,23 @@ pub fn is_reference_mismatch_and_not_n(
     string
         .as_bytes()
         .get(compare_index)
+        .is_some_and(|candidate| reference_base != candidate)
+}
+
+pub fn is_reference_mismatch_and_not_n_at(
+    reference: &ReferenceSequenceMap,
+    index1: i32,
+    string: &[u8],
+    index2: usize,
+) -> bool {
+    let Some(reference_base) = reference.get(&index1) else {
+        return false;
+    };
+    if *reference_base == b'N' {
+        return false;
+    }
+    string
+        .get(index2)
         .is_some_and(|candidate| reference_base != candidate)
 }
 
