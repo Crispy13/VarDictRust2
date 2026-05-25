@@ -1,20 +1,14 @@
 ---
 name: workflow-management
 description: >
-  Mandatory protocol for modifying VarDict-rs workflow infrastructure — agents, skills,
-  instructions, test harness, CI workflows, or parity scripts. Use whenever the task
-  involves creating, editing, renaming, or deleting any agent (.agent.md), skill
-  (SKILL.md), instruction (.instructions.md), test file (tests/), CI workflow
-  (.github/workflows/), parity script (scripts/), or test configuration (Cargo.toml
-  dev-dependencies). Also trigger when adding tools to an agent, changing agent routing,
-  modifying skill descriptions, or restructuring the test tier system. Do NOT use for
-  porting Rust code, fixing parity mismatches, or running tests — those have their own
-  skills. This skill exists because workflow changes have high blast radius: a single
-  edit can break agent routing, stale cross-references, orphan skills, or silently
-  disable test coverage. Also use when you need to understand, orient on, or inspect
-  the VarDict-rs workflow structure (agents, skills, CI wiring, test tiers) without
-  making any changes. In orientation mode, read `references/workflow-structure.md`
-  directly — no phase protocol required.
+  Mandatory protocol for VarDict-rs Copilot CLI workflow infrastructure changes.
+  Use when creating, editing, renaming, deleting, inspecting, or migrating repo
+  agents, skills, instructions, CI workflows, parity scripts, test harness files,
+  or Cargo test configuration. Also use when changing agent tools/routing, skill
+  descriptions, test tiers, workflow references, or replacing VS Code Copilot
+  assumptions with CLI-compatible behavior. Do NOT use for Rust porting, parity
+  mismatch repair, or running parity tests; those have dedicated skills. In
+  orientation mode, read `references/workflow-structure.md` directly.
 ---
 
 # Workflow Management
