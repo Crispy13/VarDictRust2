@@ -16,7 +16,7 @@ This skill exists to redirect that instinct. Instead of patching the output, tra
 
 ## Handoff Contract
 
-When Orchestrator routes `mismatch-repair` from the E2E config failure path, the required handoff artifact is the reviewed repair plan file produced by the global `plan-duck` skill. Read that plan file first, then read the diagnosis and failing-test artifacts it names. For non-E2E shard repairs, a direct shard-diagnosis task brief remains valid.
+When `mismatch-repair` is used from the E2E config failure path, the required handoff artifact is the user-accepted repair plan file written under the current CLI session-state artifact path. Read that plan file first, then read the diagnosis and failing-test artifacts it names. For non-E2E shard repairs, a direct shard-diagnosis task brief remains valid.
 
 ## The Anti-Adapter Rule
 
@@ -39,7 +39,7 @@ Before using this skill, you need either a diagnosed mismatch from `shard-diagno
 - The responsible Rust module and file
 - The genomic position
 
-If you don't have either handoff, run `shard-diagnosis` first or ask Orchestrator for the reviewed repair plan file.
+If you don't have either handoff, run `shard-diagnosis` first or ask the user for the accepted repair plan file.
 
 ## Phase 1: Root-Cause Localization
 
@@ -76,7 +76,7 @@ Produce a concise statement like:
 This statement guides Phase 2. If you can't write a clear divergence statement, you haven't found the root cause yet — keep tracing.
 
 ### Plan Freshness Check
-If Phase 1 confirms the divergence described in the routed artifacts, continue directly into Phase 2. If Phase 1 uncovers a materially different divergence, expanded repair scope, or evidence that the reviewed repair plan file is stale, stop and return to Orchestrator so it can refresh the handoff via `plan-duck` before repair work continues.
+If Phase 1 confirms the divergence described in the routed artifacts, continue directly into Phase 2. If Phase 1 uncovers a materially different divergence, expanded repair scope, or evidence that the accepted repair plan file is stale, stop and refresh the repair plan with the user before repair work continues.
 
 ## Phase 2: In-Place Repair
 
@@ -214,5 +214,5 @@ config-e2e-diagnosis + reviewed repair plan file --/
 - **shard-diagnosis**: Upstream for the targeted-fix route. Produces the diagnosed mismatch that this skill consumes.
 - **module-parity-test**: Parallel. Used for module-level golden fixture testing during initial porting. This skill is for fixing mismatches after diagnosis, including shard-level parity sweeps and config-E2E repair handoffs.
 - **tiered-config-test**: Downstream. Used after repair to verify no regression across configs.
-- **plan-duck**: Upstream for config-E2E repair routing. Produces the reviewed repair plan file this skill consumes; do not rerun it for simple verification reruns.
+- **CLI user-review checkpoint**: Upstream for config-E2E repair routing. Produces the accepted repair plan file this skill consumes; do not repeat it for simple verification reruns.
 - **change-impact-review**: Optional gate for hot-path modules.

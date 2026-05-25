@@ -1,6 +1,6 @@
 ---
 name: logic-parity-audit
-description: "Run a white-box logic parity audit for a ported Rust module after Tier 1 parity passes or after a proven Rust mismatch-repair has passed focused/module verification and needs diff-scoped audit before Review Gate. Use this whenever the user asks for a logic check, code comparison, verify port, inspect ported code, compare Java and Rust, function-by-function review, method comparison, audit port quality, white-box review, structural parity audit, review translated logic, or post-repair audit of a touched Rust module/surface. This skill works for any ported module and is not a substitute for shard-diagnosis or mismatch-repair."
+description: "Run a white-box logic parity audit for a ported Rust module after Tier 1 parity passes or after a proven Rust mismatch-repair has passed focused/module verification and needs diff-scoped audit before performance review. Use this whenever the user asks for a logic check, code comparison, verify port, inspect ported code, compare Java and Rust, function-by-function review, method comparison, audit port quality, white-box review, structural parity audit, review translated logic, or post-repair audit of a touched Rust module/surface. This skill works for any ported module and is not a substitute for shard-diagnosis or mismatch-repair."
 argument-hint: "Module name, e.g. 'CigarParser' or 'Utils'"
 ---
 
@@ -48,7 +48,7 @@ read repair diff and select touched Rust module or logic surface
         ↓
 logic-parity-audit
         ↓
-Review Gate / change-impact-review
+change-impact-review
 ```
 
 Why here:
@@ -61,7 +61,7 @@ Why here:
 
 Use this skill for any ported module where you want systematic verification that the Rust translation faithfully mirrors the Java source. The audit is most valuable for larger, stateful modules with many methods, but it works equally well for smaller utilities — a shorter module simply produces a shorter report.
 
-For post-repair audits, scope the audit to the touched Rust module or repaired logic surface selected from the repair diff. If the diff is broad or ambiguous, audit the full touched module. If the audit returns NEEDS_REVIEW, route findings back to Port Engineer before Review Gate.
+For post-repair audits, scope the audit to the touched Rust module or repaired logic surface selected from the repair diff. If the diff is broad or ambiguous, audit the full touched module. If the audit returns NEEDS_REVIEW, repair the findings before running `change-impact-review`.
 
 Do not use this skill to diagnose a failing shard or to implement a mismatch repair. Those cases remain the responsibility of `shard-diagnosis`, `config-e2e-diagnosis`, and `mismatch-repair`. The post-repair use case starts only after the repair exists and focused/module verification has passed.
 

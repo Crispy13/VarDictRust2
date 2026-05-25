@@ -39,7 +39,7 @@ the canonical full-scope artifact as the governing parity claim on its own.
 - VarDictJava is built, and the Rust `parity_e2e_sweep` target builds successfully
 - The routed artifact or reviewed plan file names the active gate scope explicitly
 - For any wrapper-driven `scripts/e2e_sweep_gate.sh` or `scripts/e2e_sweep_gate.py`
-  run, Orchestrator has confirmed the chosen `--test-threads` count with the user
+  run, the current Copilot CLI session has confirmed the chosen `--test-threads` count with the user
   and recorded it in the routed artifact or reviewed plan file
 - Long wrapper-driven E2E parity sweep runs should be launched in sync/blocking terminal
    mode. The routed artifact or reviewed plan file must declare the `--report-dir` so
@@ -75,10 +75,10 @@ artifacts disagree, prefer the freshest acknowledged artifact set, not stale sum
 
 ## Dispatch Boundaries
 
-- **Phase 1: Evidence intake / full-scope refresh** — Orchestrator may dispatch this phase directly with a routed red artifact. No `plan-duck` checkpoint is required before the first pass.
-- **Phase 2 / Phase 3: Diagnosis dispatch and repair handoff** — Before this combined dispatch runs after a failure, Orchestrator must run the global `plan-duck` skill and hand this skill the reviewed diagnosis plan file.
-- **Phase 4: Repair dispatch** — After Phase 2/3 complete, Orchestrator must run `plan-duck` again on the combined outputs and hand Port Engineer the reviewed repair plan file before `mismatch-repair` starts.
-- **Phase 5: Verification reruns** — These are mechanical reruns of the same full declared scope. Do not insert another `plan-duck` checkpoint unless the scope changes.
+- **Phase 1: Evidence intake / full-scope refresh** — the current Copilot CLI session may run this phase directly with a routed red artifact. No custom-agent dispatch is required before the first pass.
+- **Phase 2 / Phase 3: Diagnosis and repair handoff** — before this combined pass runs after a failure, write `e2e-config-diagnosis-plan.md` under the current CLI session-state artifact path, present it to the user, and continue only after user acceptance.
+- **Phase 4: Repair** — after Phase 2/3 complete, write `e2e-config-repair-plan.md` under the current CLI session-state artifact path, present it to the user, and continue only after user acceptance. Then use the `mismatch-repair` skill directly.
+- **Phase 5: Verification reruns** — these are mechanical reruns of the same full declared scope. Do not insert another review checkpoint unless the scope changes.
 
 ## Diagnosis-Ready Red Artifact Contract
 
@@ -102,7 +102,7 @@ Optional runtime telemetry fields are compatible with the same schema-v2 contrac
 - When present, `runtime_summary.cell_runtimes_path` points at the report-root
    `cell-runtimes.jsonl` file containing per-chunk runtime records.
 - Missing or partial runtime telemetry does not change diagnosis readiness by itself;
-   Review Gate/change-impact-review consumes it during the post-repair performance step.
+   `change-impact-review` consumes it during the post-repair performance step.
 
 Compatibility behavior for older schema-v2 artifacts:
 
@@ -135,7 +135,7 @@ the existing full-scope red artifact when it is already diagnosis-ready.
 1. Read the routed artifact and extract the routed `parity-failure-report.json` path,
    the confirmed `--test-threads` count, and the artifact's recorded full-scope fields.
    If the routed material does not name the count for the wrapper-driven sweep gate run,
-   stop and return to Orchestrator.
+   stop and ask the user to confirm or supply the missing wrapper-run context.
 2. If the routed artifact exists and satisfies the diagnosis-ready contract above, use it
    as the default Phase 1 evidence source. Record the failing `(preset, tag, region_str)`
    triples from the artifact and carry forward `reproducer_cmd`, `report_path`,
@@ -143,7 +143,7 @@ the existing full-scope red artifact when it is already diagnosis-ready.
    Do not rerun the broad sweep in this case.
 3. Only if the routed artifact is missing, unreadable, schema-incompatible, incomplete,
    or marked not ready may you rerun the sweep gate. That rerun must preserve the active
-   gate's full declared scope recorded by Orchestrator or the routed artifact. Do not
+   gate's full declared scope recorded by the accepted plan or the routed artifact. Do not
    silently collapse to a subset.
 4. If a narrower diagnostic rerun is needed after full-scope evidence is established,
    stop and obtain explicit user approval first. Label the rerun diagnostic in the report
@@ -165,9 +165,9 @@ the existing full-scope red artifact when it is already diagnosis-ready.
 
 ## Phase 2: Diagnosis Dispatch
 
-**Dispatch ownership:** Orchestrator runs Phase 2 and Phase 3 together under one
-reviewed diagnosis plan file so the repair plan is built from a single completed
-diagnosis/handoff artifact set.
+**Execution ownership:** the current Copilot CLI session runs Phase 2 and Phase 3
+together under one accepted diagnosis plan file so the repair plan is built from a
+single completed diagnosis/handoff artifact set.
 
 ### Goal
 
@@ -199,7 +199,7 @@ must:
 1. Stop Phase 2. Do not infer the root-cause module from code ownership alone.
 2. Report the infrastructure defect explicitly with the exact command run, expected output,
    observed output, and inspected paths.
-3. Escalate to Orchestrator for an infrastructure fix before Phase 2 resumes.
+3. Stop and ask the user whether to fix the infrastructure issue before Phase 2 resumes.
 
 Code-ownership inference is a last-resort fallback only when infrastructure is confirmed
 healthy and the tool still cannot reach a module boundary. In that case, label the
@@ -264,11 +264,11 @@ schema mismatch explicitly.
 
 ### Review Boundary
 
-The global `plan-duck` checkpoint covers the diagnosis dispatch that runs Phases 2 and 3
-together, plus the later repair dispatch. Do not add a duplicate review checkpoint here.
+The CLI user-review checkpoint covers the diagnosis pass that runs Phases 2 and 3
+together, plus the later repair plan. Do not add a duplicate review checkpoint here.
 If later evidence materially contradicts the isolation result, stops reproducing, or
-expands the rerun scope, stop and return to Orchestrator so it can refresh the reviewed
-plan via `plan-duck` before work continues.
+expands the rerun scope, stop and refresh the accepted CLI plan with the user before
+work continues.
 
 ## Phase 3: Repair Handoff
 
@@ -276,8 +276,8 @@ plan via `plan-duck` before work continues.
 from this phase into `mismatch-repair`. The failing test is executed and verified inside
 `mismatch-repair` Phase 3; this skill defines the required inputs and naming contract.
 
-This phase is completed by Parity Verifier as part of the same diagnosis dispatch that
-runs Phase 2.
+This phase is completed by the current Copilot CLI session as part of the same diagnosis
+pass that runs Phase 2.
 
 ### Goal
 
@@ -298,7 +298,7 @@ loader call must follow the canonical convention defined in `tests/common/mod.rs
 1. Record the fixture that must be generated for the failing `(module, config, region)`
    triple at the canonical path above.
 2. Record the exact canonical path — file existence is the first thing the loader checks.
-3. Record the `#[test]` that Port Engineer must add to the module's existing parity test
+3. Record the `#[test]` that the repair phase must add to the module's existing parity test
    file using the canonical loader helpers.
 4. Record in the reviewed repair plan file that `mismatch-repair` Phase 3 must run the
    test once and confirm it fails with the same divergence Phase 2 identified.
@@ -319,9 +319,9 @@ Fix the Rust module to match Java behavior for the identified config+region.
 ### Procedure
 
 1. Use the Phase 2 isolation report and the Phase 3 failing-test contract as the repair inputs.
-2. Orchestrator runs the global `plan-duck` skill on the Phase 2/3 outputs, writes the
-   reviewed repair plan file, and dispatches Port Engineer with `mismatch-repair`.
-3. Port Engineer implements the fix using `mismatch-repair`.
+2. Write `e2e-config-repair-plan.md` under the current CLI session-state artifact path,
+   present it to the user, and continue only after user acceptance.
+3. Use the `mismatch-repair` skill directly to implement the fix.
 4. Run the Phase 3 test named in the reviewed repair plan file inside `mismatch-repair`
    Phase 3 — it must pass. Then run the focused/module verification required by the
    repair plan.
@@ -329,19 +329,20 @@ Fix the Rust module to match Java behavior for the identified config+region.
    focused/module verification has passed. Use the touched Rust module or logic surface
    as the `logic-parity-audit` scope. If the diff is broad or ambiguous, audit the full
    touched module.
-6. Run `logic-parity-audit` before Review Gate / `change-impact-review`. If the audit
-   returns NEEDS_REVIEW, route findings back to Port Engineer before Review Gate.
+6. Run `logic-parity-audit` before `change-impact-review`. If the audit returns
+   NEEDS_REVIEW, repair the findings before performance review.
 
 Infrastructure-only repairs, cache refreshes, provenance fixes, and harness repairs do
 not trigger `logic-parity-audit`; they follow the infrastructure/workflow review path.
 
-### Agent Routing
+### Skill-only execution
 
-- **Parity Verifier** runs Phases 1, 2, 3, and 5 and produces the diagnosis report, the
-  Phase 3 failing-test contract, and the final verification report
-- **Port Engineer** implements the fix using `mismatch-repair`
-- **Orchestrator** coordinates the handoffs and runs `plan-duck` before diagnosis and
-  repair dispatches
+- The current Copilot CLI session runs Phases 1, 2, 3, and 5 and produces the diagnosis
+  report, the Phase 3 failing-test contract, and the final verification report.
+- The current Copilot CLI session uses `mismatch-repair` for Phase 4 repairs.
+- User-reviewed plan files replace custom-agent dispatch: write the plan under the
+  current CLI session-state artifact path, present it to the user, and proceed only
+  after acceptance.
 
 ## Phase 5: Verify
 
@@ -355,19 +356,18 @@ Confirm the fix resolves the original failure without introducing regressions.
    `mismatch-repair` Phase 3 — it must pass.
 2. Reuse the confirmed `--test-threads` count already recorded in the reviewed repair
    plan file for any wrapper-driven sweep rerun. If the plan file omits it, stop and
-   return to Orchestrator.
+   stop and ask the user to confirm or supply the missing wrapper-run context.
 3. Run the full module sweep test — it must pass with no regression.
 4. For a proven Rust `mismatch-repair`, read the repair diff and run
-   `logic-parity-audit` for the touched Rust module or logic surface before Review Gate
+   `logic-parity-audit` for the touched Rust module or logic surface before performance
    approval and before the full-scope rerun is accepted as the next canonical step. If
    the diff is broad or ambiguous, audit the full touched module. If the audit returns
-   NEEDS_REVIEW, route findings back to Port Engineer for targeted fixes before Review
-   Gate.
+   NEEDS_REVIEW, repair the findings before running `change-impact-review`.
 5. Re-run the same full declared gate scope recorded in the reviewed repair plan file and
    the source artifact's `original_matrix_scope`. Do not silently narrow verification to
    only the formerly failing preset, tag, chromosome, or region.
 6. If that same full-scope rerun passes after a parity repair, record the repair as
-   `PERF_PENDING` and return to Orchestrator for Review Gate/change-impact-review before
+   `PERF_PENDING` and run `change-impact-review` before
    treating the repair as approved. The final repair report must include a terminal
    non-pending verdict: `PERF_SAFE`, `PERF_RISK`, `PERF_REGRESSION`, or
    `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`. If evidence is still insufficient,
@@ -376,8 +376,8 @@ Confirm the fix resolves the original failure without introducing regressions.
 7. If additional failures remain in that same full scope, loop back to Phase 2 for the
    next failure.
 8. When the same full-scope gate passes and the post-repair performance verdict is not
-   `PERF_REGRESSION`, report CONFIG-E2E PASS only after the Review Gate result is
-   terminal. `PERF_RISK` is conditional and must carry the Review Gate rationale,
+   `PERF_REGRESSION`, report CONFIG-E2E PASS only after the performance verdict is
+   terminal. `PERF_RISK` is conditional and must carry the recorded rationale,
    including bootstrap-baseline notation when applicable. `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED`
    also requires explicit user acknowledgment and a tracked optimization follow-up.
 
@@ -392,7 +392,7 @@ Confirm the fix resolves the original failure without introducing regressions.
 This skill operates as a loop:
 
 ```text
-full-scope Phase 1 -> [for each failure:] Phase 2 -> Phase 3 -> Phase 4 -> focused/module verification -> logic-parity-audit for Rust repairs -> Review Gate/change-impact-review -> full-scope Phase 5 -> [loop if more failures]
+full-scope Phase 1 -> [for each failure:] Phase 2 -> Phase 3 -> Phase 4 -> focused/module verification -> logic-parity-audit for Rust repairs -> change-impact-review -> full-scope Phase 5 -> [loop if more failures]
 ```
 
 The loop terminates when:
@@ -414,17 +414,17 @@ The loop terminates when:
 
 | Skill | Role |
 |-------|------|
-| plan-duck | Pre-dispatch review for the diagnosis and repair plan files; skip it for Phase 5 mechanical reruns |
+| CLI user-review checkpoint | Required review for the diagnosis and repair plan files; skip it for Phase 5 mechanical reruns |
 | tiered-config-test | Expand nightly/sweep coverage and tier promotion across the 44-config matrix |
-| mismatch-repair | Phase 4 fix methodology for Port Engineer; Phase 3 canonical verification loop for the failing config-e2e test |
+| mismatch-repair | Phase 4 fix methodology; Phase 3 canonical verification loop for the failing config-e2e test |
 | module-parity-test | Phase 5 per-module regression check |
-| logic-parity-audit | Mandatory post-repair audit for proven Rust divergence repairs before Review Gate/full-scope acceptance |
+| logic-parity-audit | Mandatory post-repair audit for proven Rust divergence repairs before performance review/full-scope acceptance |
 
-## Agent Responsibilities
+## Skill-only Phase Responsibilities
 
-| Agent | Phases |
-|-------|--------|
-| Parity Verifier | Phases 1, 2, 3, 5 |
-| Port Engineer | Phase 4 |
-| Gerneral-Purpose Agent | Ad-hoc tasks |
-| Orchestrator | Coordinates phases, runs `plan-duck`, and enforces the full-scope contract |
+| Executor | Phases |
+|----------|--------|
+| Current Copilot CLI session | Phases 1, 2, 3, 5 |
+| Current Copilot CLI session using `mismatch-repair` | Phase 4 |
+| Current Copilot CLI session using `change-impact-review` | Terminal performance verdict |
+| User | Reviews and accepts diagnosis/repair plan checkpoints before execution continues |

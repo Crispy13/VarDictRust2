@@ -40,6 +40,17 @@ The Phase 1 workflow inventory tracks 16 current skills under `.github/skills/*/
 15. `workflow-management`
 16. `workflow-router`
 
+### Skill-only config E2E diagnosis path
+
+`config-e2e-diagnosis` is the Copilot CLI entry point for active config E2E
+parity diagnosis. It is intended to run as a skill-only workflow in the current
+CLI session: the session follows the config E2E skill directly, writes diagnosis
+and repair plan files under the current CLI session-state artifact path, asks the
+user to accept those checkpoints, and invokes related skills (`mismatch-repair`,
+`logic-parity-audit`, `module-parity-test`, `shard-diagnosis`, and
+`change-impact-review`) directly. The `.github/agents/` files remain present for
+other workflows, but this path does not require custom-agent dispatch.
+
 ## 3. Instructions
 
 The workflow-management Phase 1 inventory currently tracks four instruction files under `.github/instructions/`. For each file, capture the `description`, `applyTo`, any file-level purpose note, and the full rule body.

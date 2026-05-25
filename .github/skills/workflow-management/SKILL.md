@@ -184,7 +184,7 @@ every component being created or modified, trace its activation path.
 | Consumer | Examples |
 |----------|---------|
 | User-facing | Human invokes agent directly, selects a mode, runs a script manually |
-| Agent-facing | Orchestrator dispatches to agent; agent loads skill via description match |
+| Skill-facing | A Copilot CLI session follows one skill and invokes related skills directly |
 | CI-facing | GitHub event triggers workflow; workflow calls script |
 | Hybrid | Multiple activation paths (e.g., script used both by CI and manually) |
 
@@ -416,7 +416,7 @@ changed and why without re-reading the entire infrastructure.
 
 ### 6.1 File Location
 
-Write the report in workspace memory with file name: `wf-change-{short-slug}-{YYYYMMDD}.md`
+Write the report under the current CLI session-state artifact path with file name: `wf-change-{short-slug}-{YYYYMMDD}.md`
 
 where `{short-slug}` is a 2–4 word kebab-case summary of the change (e.g.
 `add-workflow-inspector-skill`, `rename-shard-debugger`, `add-somatic-parity-test`).

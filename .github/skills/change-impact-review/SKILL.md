@@ -30,7 +30,7 @@ Narrow exemptions are allowed only with explicit written rationale:
 - Isolated `#[cfg(test)]` / `tests/` changes that do not affect fixtures, harness behavior, runtime paths, or performance policy
 - Dependency-version-only `Cargo.toml` bumps that do not alter features, profiles, or runtime code paths
 
-Exception: after an E2E parity repair, Orchestrator may still route this skill for a
+Exception: after an E2E parity repair, the config-E2E workflow may still route this skill for a
 `PERF_PENDING` review even when the repair looks fixture/provenance-only. In that mode,
 verify the diff really has zero `.rs` source/test changes and zero `scripts/` changes
 before classifying it as low-risk/data-only.
@@ -38,26 +38,27 @@ before classifying it as low-risk/data-only.
 
 ## Caller Context
 
-This skill is used by two agents in different modes. The mode affects how the verdict is treated.
+This skill can be used in advisory or gate mode. The mode affects how the verdict is treated; custom agents are not required.
 
-### Self-Assessment Mode (Port Engineer)
-When the `Port Engineer` loads this skill during Step 5 (Verify Compilation and Performance):
+### Advisory Mode
+When this skill is loaded during implementation self-checks:
 - Classify risk using the decision tree
 - Gather the evidence required for the risk class
 - Include the verdict in your implementation report as **advisory**
-- The Review Gate's independent verdict takes precedence
+- A later gate-mode verdict takes precedence
 
-### Independent Gate Mode (Review Gate)
-When the `Review Gate` loads this skill during Section 3 (Performance Impact):
+### Gate Mode
+When this skill is loaded as the performance review checkpoint:
 - A performance verdict is **mandatory** for every non-exempt change — do not skip the section
 - Benchmark or telemetry evidence is **mandatory** whenever the selected risk class requires it
 - Your verdict is **binding** — it determines whether the change is approved
-- `PERF_REGRESSION` **blocks approval** and must be escalated via the orchestrator
+- `PERF_REGRESSION` **blocks approval** and must be escalated through the active workflow
 - `PERF_PENDING` is non-terminal and cannot be silently closed; it expires on the next code change to the same module/surface or at the next full-gate cycle, whichever comes first
 - `PERF_REGRESSION_ACCEPTED_PARITY_REQUIRED` may proceed only after explicit user acknowledgment and a tracked optimization follow-up
-- If the Port Engineer already included an advisory verdict, review it but produce your own independent classification
+- If an advisory verdict already exists, review it but produce a gate-mode classification
+- In the skill-only config-E2E workflow, the current Copilot CLI session records this gate-mode verdict. Because this is not independent custom-agent review, surface any non-`PERF_SAFE` verdict to the user before acceptance.
 
-### E2E Post-Repair Mode (Review Gate / Orchestrator)
+### E2E Post-Repair Mode
 After an E2E parity repair and successful verification rerun, the repair remains
 `PERF_PENDING` until this skill emits a terminal non-pending verdict:
 `PERF_SAFE`, `PERF_RISK`, `PERF_REGRESSION`, or
