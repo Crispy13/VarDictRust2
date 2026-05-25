@@ -711,6 +711,23 @@ pub fn is_reference_mismatch_and_not_n(
         .is_some_and(|candidate| reference_base != candidate)
 }
 
+pub fn is_reference_mismatch_and_not_n_at(
+    reference: &ReferenceSequenceMap,
+    index1: i32,
+    string: &[u8],
+    index2: usize,
+) -> bool {
+    let Some(reference_base) = reference.get(&index1) else {
+        return false;
+    };
+    if *reference_base == b'N' {
+        return false;
+    }
+    string
+        .get(index2)
+        .is_some_and(|candidate| reference_base != candidate)
+}
+
 /// Ported from: VariationUtils.java:L499-L505
 pub fn is_equals(ch1: Option<u8>, ch2: Option<u8>) -> bool {
     ch1 == ch2
