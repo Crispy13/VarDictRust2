@@ -60,6 +60,7 @@ Detects structural variants (DEL, INV, DUP) from soft-clipped read consensus seq
 10. **varsCount = 0 explicit reset**: Preserved after `get_variation()` for re-existing entries.
 11. **Partial-pipeline re-entry**: DEL, INV, and DUP boundary branches must stay guarded by Java-equivalent `isLoaded` checks and must thread live `non_insertion_variants`, `insertion_variants`, `ref_coverage`, and soft-clip maps through the re-entry.
 12. **DUP predicted-breakpoint reference prefetch**: In `findDUPdisc()`, Java prefetches `bp +/- 150` for forward DUP and `pe +/- 150` for reverse DUP, with extension `300`, before running the current-cluster partial pipeline when the predicted base is absent. This mutates loaded-reference state for later DUP clusters and prevents extra Rust-only partial-pipeline writebacks.
+13. **Forward DUP refined-end coverage handoff**: In `findDUPdisc()` forward DUP soft-clip realignment, Java mutates the local `end` after `pe` is left-aligned (`end = pe`) and then compares/promotes `refCoverage[end]` into `refCoverage[bp]`. Rust must update the same local `end`; reusing the original `dup.end` copies coverage from the wrong coordinate.
 
 ## Divergences
 
