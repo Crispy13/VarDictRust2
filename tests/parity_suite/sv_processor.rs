@@ -454,3 +454,80 @@ fn parity_sv_processor_config_cm_noreal_11_7717216_7717916() {
         "Parity mismatch for module=sv_processor, config={config_name}, region={region_str}"
     );
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn parity_sv_processor_config_cm_noreal_X_134988591_134989291() {
+    let config_name = "CM-NOREAL";
+    let region_str = "X:134988591-134989291";
+    let bam_path = std::path::PathBuf::from(
+        "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam",
+    );
+    let ref_path = std::path::PathBuf::from("testdata/hs37d5.fa");
+
+    let region = super::common::parse_region(region_str);
+    let fai_path = format!("{}.fai", ref_path.display());
+    let chr_lengths = load_chr_lengths(&fai_path);
+    let _guard = super::common::init_test_scope_with_config(
+        super::common::config_preset(config_name),
+        bam_path.to_str().unwrap(),
+        ref_path.to_str().unwrap(),
+        chr_lengths.clone(),
+    );
+
+    let reference_resource = Arc::new(ReferenceResource::new(
+        ref_path.to_str().unwrap(),
+        1200,
+        0,
+        chr_lengths,
+        false,
+    ));
+
+    let mut reference = reference_resource
+        .get_reference(&region)
+        .unwrap_or_else(|e| panic!("Failed to load reference for {region_str}: {e}"));
+
+    let r_golden =
+        super::common::load_golden_data_with_config("realigner", Some(config_name), region_str);
+    let mut data: RealignedVariationData = serde_json::from_str(&r_golden)
+        .unwrap_or_else(|e| panic!("Failed to deserialize realigner golden for {region_str}: {e}"));
+
+    let bam_str = bam_path.to_str().unwrap();
+    let bams: Option<Vec<String>> = Some(vec![bam_str.to_string()]);
+    let splice: Option<std::collections::BTreeSet<String>> = None;
+
+    let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
+    let mut prev_ref_coverage: PositionMap<i32> = PositionMap::default();
+    let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
+    let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
+    let prev_reference_sequences = ReferenceSequenceMap::default();
+    let prev_chr = "";
+    let prev_max_read_length: i32 = 0;
+
+    structural_variants_processor::process(
+        &mut data,
+        &mut reference,
+        &reference_resource,
+        &region,
+        &bams,
+        &splice,
+        &mut prev_non_insertion_variants,
+        &mut prev_ref_coverage,
+        &mut prev_soft_clips_3_end,
+        &mut prev_soft_clips_5_end,
+        &prev_reference_sequences,
+        prev_chr,
+        prev_max_read_length,
+    );
+
+    let result_json = serde_json::to_string(&data).unwrap_or_else(|e| {
+        panic!("Failed to serialize sv_processor output for {region_str}: {e}")
+    });
+    let golden =
+        super::common::load_golden_data_with_config("sv_processor", Some(config_name), region_str);
+
+    assert_eq!(
+        result_json, golden,
+        "Parity mismatch for module=sv_processor, config={config_name}, region={region_str}"
+    );
+}

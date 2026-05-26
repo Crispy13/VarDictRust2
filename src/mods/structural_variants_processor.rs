@@ -3070,7 +3070,7 @@ pub fn find_dup_disc(
             let ms = dup.mstart;
             let me = dup.mend;
             let cnt = dup.base.vars_count;
-            let end = dup.end;
+            let mut end = dup.end;
             let start = dup.start;
             let pmean = dup.base.mean_position;
             let qmean = dup.base.mean_quality;
@@ -3168,7 +3168,7 @@ pub fn find_dup_disc(
                     mlen = pe - tbp_local;
                     bp = tbp_local;
                     pe -= 1;
-                    let _end_local = pe;
+                    end = pe;
 
                     if soft_clips_5_end.contains_key(&bp) {
                         let current_sclip5 = soft_clips_5_end.get(&bp).unwrap();
