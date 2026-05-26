@@ -43,6 +43,12 @@ struct Cli {
     #[arg(short = 'B')]
     min_bias_reads: Option<i32>,
 
+    #[arg(short = 'k')]
+    realign: Option<i32>,
+
+    #[arg(long = "fisher")]
+    fisher: bool,
+
     #[arg(long = "th")]
     threads: Option<i32>,
 }
@@ -91,6 +97,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     }
     if let Some(min_bias_reads) = cli.min_bias_reads {
         config.min_bias_reads = min_bias_reads;
+    }
+    if let Some(realign) = cli.realign {
+        config.perform_local_realignment = realign != 0;
+    }
+    if cli.fisher {
+        config.fisher = true;
     }
     if let Some(threads) = cli.threads {
         config.threads = threads;

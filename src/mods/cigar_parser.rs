@@ -1406,9 +1406,10 @@ impl CigarParser {
                 // Java: CigarParser.java#L571-L577 — add variation if not trimmed
                 if !trim {
                     let pos = self.start - qbases + 1;
-                    let s_ref = s.as_deref().unwrap_or(base_description.expect(
-                        "non-owned matching descriptions should be known ASCII bases",
-                    ));
+                    let s_ref = s.as_deref().unwrap_or(
+                        base_description
+                            .expect("non-owned matching descriptions should be known ASCII bases"),
+                    );
                     let description_has_n = s.as_deref().is_some_and(|owned| owned.contains('N'));
                     if pos >= self.region.start && pos <= self.region.end && !description_has_n {
                         self.add_variation_for_matching_part(
@@ -2866,25 +2867,18 @@ impl CigarParser {
             // Java: CigarParser.java#L2215-L2260
             let mchr = get_mate_reference_name(record, header);
 
-            // Filter MC soft-clipped
+            // Java filters only fusion-SV creation here; nearby SV discordant counts below still run.
             let mc_tag: Option<String> = record.aux(b"MC").ok().and_then(|a| match a {
                 Aux::String(s) => Some(s.to_string()),
                 _ => None,
             });
-            if let Some(ref mc) = mc_tag {
-                if MC_Z_NUM_S_ANY_NUM_S.is_match(mc) {
-                    return;
-                }
-            }
-            // Filter low MQ mates
             let mq_tag: Option<i32> = record.aux(b"MQ").ok().and_then(|a| Self::aux_to_i32(&a));
-            if let Some(mq) = mq_tag {
-                if mq < 15 {
-                    return;
-                }
-            }
+            let skip_fusion_sv = matches!(mc_tag.as_deref(), Some(mc) if MC_Z_NUM_S_ANY_NUM_S.is_match(mc))
+                || matches!(mq_tag, Some(mq) if mq < 15);
 
-            if read_dir_num == 1 {
+            if skip_fusion_sv {
+                // Java's empty MC/MQ filter branches skip only the fusion addSV block.
+            } else if read_dir_num == 1 {
                 // Java: CigarParser.java#L2221-L2234
                 let need_new = self.sv_structures.svffus.get(&mchr).is_none()
                     || (position - *self.sv_structures.svfusfend.get(&mchr).unwrap_or(&0)) as f64

@@ -290,6 +290,7 @@ pub fn find_match_rev(
 
     let seq_bytes = seq_owned.as_bytes();
     let reference_sequences = &reference.reference_sequences;
+    let mut extra = String::new();
 
     // Java: StructuralVariantsProcessor.java#L1826-L1886
     let start_i = (seq_bytes.len() as i32) - seed_len;
@@ -321,13 +322,12 @@ pub fn find_match_rev(
                             dir, bp, first_seed, _position, seed, i, seq_owned
                         );
                     }
-                    return Match::new(bp, String::new());
+                    return Match::new(bp, extra);
                 } else {
                     // Java: StructuralVariantsProcessor.java#L1844-L1884
                     // Complex indel fallback
                     let mut sseq = seq_owned.clone();
                     let mut eqcnt = 0i32;
-                    let mut current_extra = String::new();
                     for j in 1..=15 {
                         bp -= dir;
                         sseq = if dir == -1 {
@@ -370,8 +370,7 @@ pub fn find_match_rev(
                             // Java: extra = substr(seq, 0, j)
                             // Note: seq here is the complemented seq_owned
                             let e_end = std::cmp::min(j as usize, seq_bytes.len());
-                            current_extra =
-                                String::from_utf8_lossy(&seq_bytes[..e_end]).to_string();
+                            extra = String::from_utf8_lossy(&seq_bytes[..e_end]).to_string();
                         } else {
                             // dir == 1
                             // Java: StructuralVariantsProcessor.java#L1861-L1869
@@ -397,8 +396,7 @@ pub fn find_match_rev(
                             } else {
                                 seq_bytes.len() - j as usize
                             };
-                            current_extra =
-                                String::from_utf8_lossy(&seq_bytes[start..]).to_string();
+                            extra = String::from_utf8_lossy(&seq_bytes[start..]).to_string();
                         }
                         // Java: StructuralVariantsProcessor.java#L1871
                         if eqcnt >= 3 && (eqcnt as f64) / (j as f64) > 0.5 {
@@ -407,12 +405,12 @@ pub fn find_match_rev(
                         if instance.conf.y {
                             eprintln!(
                                 "      FoundSEED SV BP (reverse): {} BP: {} SEEDpos{} {} {} {} {} EXTRA: {}",
-                                dir, bp, first_seed, _position, seed, i, seq_owned, current_extra
+                                dir, bp, first_seed, _position, seed, i, seq_owned, extra
                             );
                         }
                         // Java: StructuralVariantsProcessor.java#L1878
                         if ismatchref_with_mm(&sseq, reference_sequences, bp, -1 * dir, 1) {
-                            return Match::new(bp, current_extra);
+                            return Match::new(bp, extra);
                         }
                     }
                 }
@@ -690,6 +688,27 @@ pub fn fill_and_sort_tmp_sv(
     tmp.sort_by(|a, b| b.count.cmp(&a.count).then(a.position.cmp(&b.position)));
 
     tmp
+}
+
+fn java_hashmap_capacity_for_len(len: usize) -> usize {
+    let mut capacity = 16usize;
+    while len > (capacity * 3) / 4 {
+        capacity *= 2;
+    }
+    capacity
+}
+
+fn java_hashmap_bucket_index_i32(key: i32, capacity: usize) -> usize {
+    let hash = (key as u32) ^ ((key as u32) >> 16);
+    (hash as usize) & (capacity - 1)
+}
+
+fn java_hashmap_i32_keys(map: &HashMap<i32, Sclip>) -> Vec<i32> {
+    let mut keys: Vec<i32> = map.keys().copied().collect();
+    keys.sort();
+    let capacity = java_hashmap_capacity_for_len(map.len());
+    keys.sort_by_key(|key| java_hashmap_bucket_index_i32(*key, capacity));
+    keys
 }
 
 // ─── Cluster B–D stubs ──────────────────────────────────────────────
@@ -1389,13 +1408,11 @@ pub fn find_del(
                 region,
             );
 
-            let mut sc5_keys: Vec<i32> = soft_clips_5_end.keys().cloned().collect();
-            sc5_keys.sort();
-            let mut found = false;
-            for &i in &sc5_keys {
-                if found {
-                    break;
-                }
+            // Java scans the raw HashMap entrySet here and breaks on the first
+            // matching soft clip. Reproduce that bucket traversal order instead
+            // of sorting numerically, otherwise the wrong breakpoint wins.
+            let sc5_keys = java_hashmap_i32_keys(soft_clips_5_end);
+            for i in sc5_keys {
                 let scv = match soft_clips_5_end.get_mut(&i) {
                     Some(s) => s,
                     None => continue,
@@ -1412,6 +1429,8 @@ pub fn find_del(
                     continue;
                 }
                 let mut softp = i;
+                let scv_vc = scv.base.vars_count;
+                let scv_clone = scv.base.clone();
 
                 // Java: StructuralVariantsProcessor.java#L443-L453
                 let m = find_match_default(&seq, reference, softp, -1);
@@ -1440,12 +1459,10 @@ pub fn find_del(
                 let sv = get_sv(non_insertion_variants, bp);
                 sv.type_ = Some("DEL".to_string());
                 sv.pairs += del_vars_count;
-                let scv_vc = soft_clips_5_end.get(&i).map_or(0, |s| s.base.vars_count);
                 sv.splits += scv_vc;
                 sv.clusters += 1;
 
                 // Java: StructuralVariantsProcessor.java#L475 — adjCnt (no reference var)
-                let scv_clone = soft_clips_5_end.get(&i).unwrap().base.clone();
                 let variation = get_variation(non_insertion_variants, bp, &vn);
                 adj_cnt(variation, &scv_clone);
 
@@ -1487,7 +1504,7 @@ pub fn find_del(
                     );
                 }
                 // Java: StructuralVariantsProcessor.java#L508 — break after first match
-                found = true;
+                break;
             }
         }
     }

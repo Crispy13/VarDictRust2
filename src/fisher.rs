@@ -117,6 +117,36 @@ fn round_as_r(value: f64) -> f64 {
     }
 }
 
+fn java_double_string(value: f64) -> String {
+    if value.is_finite() && value.fract() == 0.0 {
+        format!("{value:.1}")
+    } else {
+        value.to_string()
+    }
+}
+
+// Java: DoubleStream.sum() uses Collectors.sumWithCompensation().
+fn java_double_stream_sum(values: impl IntoIterator<Item = f64>) -> f64 {
+    let mut high_order_sum = 0.0;
+    let mut low_order_sum = 0.0;
+    let mut simple_sum = 0.0;
+
+    for value in values {
+        simple_sum += value;
+        let adjusted = value - low_order_sum;
+        let next_sum = high_order_sum + adjusted;
+        low_order_sum = (next_sum - high_order_sum) - adjusted;
+        high_order_sum = next_sum;
+    }
+
+    let compensated = high_order_sum + low_order_sum;
+    if compensated.is_nan() && simple_sum.is_infinite() {
+        simple_sum
+    } else {
+        compensated
+    }
+}
+
 // Java: UnirootZeroIn.zeroinC() L22-L101
 fn zeroin_c<F>(ax: f64, bx: f64, function: F, tolerance: f64) -> f64
 where
@@ -132,7 +162,6 @@ where
 
     loop {
         let prev_step = b - a;
-        let mut new_step = (c - b) / 2.0;
 
         if fc.abs() < fb.abs() {
             a = b;
@@ -144,6 +173,7 @@ where
         }
 
         let tolerance_active = 2.0 * epsilon * b.abs() + tolerance / 2.0;
+        let mut new_step = (c - b) / 2.0;
 
         if new_step.abs() <= tolerance_active || fb == 0.0 {
             return b;
@@ -283,12 +313,13 @@ impl FisherExact {
         if non_centrality_parameter.is_infinite() {
             return f64::from(self.hi);
         }
-
-        self.support
-            .iter()
-            .zip(self.dnhyper(non_centrality_parameter))
-            .map(|(&support_value, probability)| f64::from(support_value) * probability)
-            .sum()
+        let distribution = self.dnhyper(non_centrality_parameter);
+        java_double_stream_sum(
+            self.support
+                .iter()
+                .zip(distribution)
+                .map(|(support_value, probability)| f64::from(*support_value) * probability),
+        )
     }
 
     // Java: FisherExact.dnhyper() L117-L134
@@ -312,7 +343,7 @@ impl FisherExact {
             .iter()
             .map(|value| (value - max_weighted_log).exp())
             .collect::<Vec<_>>();
-        let sum: f64 = exponentiated.iter().sum();
+        let sum = java_double_stream_sum(exponentiated.iter().copied());
 
         exponentiated.into_iter().map(|value| value / sum).collect()
     }
@@ -325,7 +356,7 @@ impl FisherExact {
         } else if odd_ratio == odd_ratio.round() {
             format!("{odd_ratio:.0}")
         } else {
-            round_as_r(odd_ratio).to_string()
+            java_double_string(round_as_r(odd_ratio))
         }
     }
 
@@ -654,6 +685,24 @@ mod tests {
         0.0,
         "87.68597"
     );
+
+    #[test]
+    fn fixture_hg002_cm_fisher_integerish_odds_ratio_formats_like_java() {
+        let fisher = FisherExact::new(8, 1, 1, 1);
+        assert_eq!(fisher.get_odd_ratio(), "6.0");
+    }
+
+    #[test]
+    fn fixture_hg002_cm_fisher_chr14_odds_ratio_rounds_like_java() {
+        let fisher = FisherExact::new(10, 1, 8, 3);
+        assert_eq!(fisher.get_odd_ratio(), "3.53775");
+    }
+
+    #[test]
+    fn fixture_hg002_cm_fisher_chr12_odds_ratio_rounds_like_java() {
+        let fisher = FisherExact::new(6, 4, 1, 3);
+        assert_eq!(fisher.get_odd_ratio(), "4.03195");
+    }
 
     mod pbt {
         use super::*;

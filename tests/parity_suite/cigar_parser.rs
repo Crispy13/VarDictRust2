@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use rust_htslib::bam::{self, Read as BamRead};
 
-use vardict_rs::data::InitialData;
+use vardict_rs::data::{InitialData, PositionMap, VariationMap};
 use vardict_rs::mods::cigar_parser::CigarParser;
 use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::{Scope, VariantPrinter};
@@ -52,9 +52,9 @@ fn parity_cigar_parser_all_regions() {
         // Build RecordPreprocessor through SAMFileParser pipeline
         let bam_str = bam_path.to_str().unwrap();
         let initial_data = InitialData::new(
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
+            PositionMap::<VariationMap>::default(),
+            PositionMap::<VariationMap>::default(),
+            PositionMap::<i32>::default(),
             HashMap::new(),
             HashMap::new(),
         );
@@ -81,9 +81,9 @@ fn parity_cigar_parser_all_regions() {
             &reference,
             &HashSet::new(),
             0,
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
+            PositionMap::<VariationMap>::default(),
+            PositionMap::<VariationMap>::default(),
+            PositionMap::<i32>::default(),
             HashMap::new(),
             HashMap::new(),
             0,
@@ -132,13 +132,8 @@ fn parity_cigar_parser_config_t1_02_10_116065606_116065839() {
         chr_lengths.clone(),
     );
 
-    let reference_resource = ReferenceResource::new(
-        ref_path.to_str().unwrap(),
-        1200,
-        0,
-        chr_lengths,
-        false,
-    );
+    let reference_resource =
+        ReferenceResource::new(ref_path.to_str().unwrap(), 1200, 0, chr_lengths, false);
 
     let reference = reference_resource
         .get_reference(&region)
@@ -147,9 +142,9 @@ fn parity_cigar_parser_config_t1_02_10_116065606_116065839() {
 
     let bam_str = bam_path.to_str().unwrap();
     let initial_data = InitialData::new(
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        PositionMap::<VariationMap>::default(),
+        PositionMap::<VariationMap>::default(),
+        PositionMap::<i32>::default(),
         HashMap::new(),
         HashMap::new(),
     );
@@ -174,9 +169,9 @@ fn parity_cigar_parser_config_t1_02_10_116065606_116065839() {
         &reference,
         &HashSet::new(),
         0,
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        PositionMap::<VariationMap>::default(),
+        PositionMap::<VariationMap>::default(),
+        PositionMap::<i32>::default(),
         HashMap::new(),
         HashMap::new(),
         0,
@@ -196,9 +191,8 @@ fn parity_cigar_parser_config_t1_02_10_116065606_116065839() {
     let mut record_iter = records.into_iter();
     let result = parser.process(&mut record_iter, &header, &chr_name);
 
-    let result_json = serde_json::to_string(&result).unwrap_or_else(|e| {
-        panic!("Failed to serialize CigarParser output for {region_str}: {e}")
-    });
+    let result_json = serde_json::to_string(&result)
+        .unwrap_or_else(|e| panic!("Failed to serialize CigarParser output for {region_str}: {e}"));
     let golden =
         super::common::load_golden_data_with_config("cigar_parser", Some(config_name), region_str);
 

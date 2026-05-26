@@ -724,7 +724,7 @@ const _: fn(&str) -> String = config_name_to_slug;
 
 #[allow(dead_code)]
 pub fn run_cell(config_name: &str, region_idx: usize) -> Result<(), String> {
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     let regions = load_region_config();
     let (region_str, bam_path, ref_path) = regions

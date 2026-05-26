@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use vardict_rs::data::{InitialData, Region};
+use vardict_rs::data::{InitialData, PositionMap, Region, VariationMap};
 use vardict_rs::mods::sam_file_parser::sam_file_parser_process;
 use vardict_rs::reference::{Reference, ReferenceResource};
 use vardict_rs::scope::{Scope, VariantPrinter};
@@ -29,9 +29,9 @@ fn collect_sam_file_parser_result(
     reference_resource: Arc<ReferenceResource>,
 ) -> SamFileParserResult {
     let initial_data = InitialData::new(
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        PositionMap::<VariationMap>::default(),
+        PositionMap::<VariationMap>::default(),
+        PositionMap::<i32>::default(),
         HashMap::new(),
         HashMap::new(),
     );

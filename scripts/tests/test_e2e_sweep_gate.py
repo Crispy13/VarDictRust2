@@ -288,18 +288,20 @@ class GateSmokeTest(unittest.TestCase):
             source_tsv = source_root / "hg002_1.tsv.zst"
             source_chunks = source_root / "hg002_1.chunks.json"
             bed_path = bed_root / "hg002" / "1.bed"
+            other_bed_path = bed_root / "hg002" / "2.bed"
             other_cwd.mkdir(parents=True)
             staged_tsv.parent.mkdir(parents=True, exist_ok=True)
             source_root.mkdir(parents=True, exist_ok=True)
             bed_path.parent.mkdir(parents=True, exist_ok=True)
             _write_zstd_file(source_tsv, payload_bytes)
             bed_path.write_text("1\t10\t20\n", encoding="utf-8")
+            other_bed_path.write_text("2\t30\t40\n", encoding="utf-8")
             payload = {
                 "monolithic_md5": hashlib.md5(payload_bytes).hexdigest(),
                 "monolithic_bytes": len(payload_bytes),
-                "generator_flags": f"--output-only --config T1-01 --tags hg002 --sweep-bed-root {bed_root}",
+                "generator_flags": f"--output-only --config T1-01 --tags hg002 --sweep-bed-root {bed_root.resolve()}",
                 "preset": "T1-01",
-                "bed_sha256": e2e_sweep_gate.bed_sha256(bed_root, "hg002"),
+                "bed_sha256": hashlib.sha256(bed_path.read_bytes()).hexdigest(),
                 "vardict_commit": "deadbeef",
             }
             source_chunks.write_text(json.dumps(payload), encoding="utf-8")
@@ -351,7 +353,7 @@ class GateSmokeTest(unittest.TestCase):
         )
 
         self.assertEqual(warning[0], "mismatch_bed_sha256")
-        self.assertIn("expected_aggregate=", warning[1])
+        self.assertIn("expected_bed=", warning[1])
         self.assertIn("normalized_actual=", warning[1])
 
     def test_run_provenance_check_missing_generator_flags_and_bed_sha256_warn(self) -> None:

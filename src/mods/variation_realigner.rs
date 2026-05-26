@@ -4316,7 +4316,6 @@ fn realignlgins(
 
     // Java: VariationRealigner.java#L1623
     for &(p, _) in &tmp {
-
         let (cnt, seq) = {
             let sc5v = match soft_clips_5_end.get_mut(&p) {
                 Some(s) => s,

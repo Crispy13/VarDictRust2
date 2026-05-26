@@ -319,6 +319,7 @@ def sweep_test_reproducer(
     exact: bool = True,
 ) -> str:
     return (
+        f"VARDICT_E2E_SWEEP_FIXTURE_ROOT={CANONICAL_FIXTURE_ROOT.resolve()} "
         f"VARDICT_E2E_SWEEP_CONFIG={preset} "
         f"VARDICT_E2E_SWEEP_BED_ROOT={sweep_bed_root} "
         f"CI=true {' '.join(sweep_test_command(args, selector, exact=exact))}"
@@ -1523,6 +1524,10 @@ def bed_sha256(sweep_bed_root: Path, tag: str) -> str:
     return sha256_concat(bed_paths)
 
 
+def single_bed_sha256(sweep_bed_root: Path, tag: str, chrom: str) -> str:
+    return sha256_concat([sweep_bed_root / tag / f"{chrom}.bed"])
+
+
 def decompressed_tsv_md5_and_bytes(path: Path) -> tuple[str, int]:
     _original_path, resolved_path = validation_path_pair(path)
     digest = hashlib.md5()
@@ -1603,7 +1608,7 @@ def provenance_metadata_warning(
         actual_bed_sha256 = normalize_bed_sha256(actual_value)
         if expected_bed_sha256 is not None and actual_bed_sha256 == expected_bed_sha256:
             return None
-        detail = f"{chunks_label} expected_aggregate={expected_value} actual={actual_value}"
+        detail = f"{chunks_label} expected_bed={expected_value} actual={actual_value}"
         if actual_bed_sha256 is not None:
             detail += f" normalized_actual={actual_bed_sha256}"
         else:
@@ -1993,7 +1998,7 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
             optional_checks = {
                 "generator_flags": expected_flags,
                 "preset": preset,
-                "bed_sha256": bed_sha256(active_sweep_bed_root, tag),
+                "bed_sha256": single_bed_sha256(active_sweep_bed_root, tag, chrom),
             }
             backfilled_missing = set(missing_backfilled_provenance_keys(payload))
             for key, expected_value in optional_checks.items():
@@ -2271,6 +2276,7 @@ def run_tests_and_report(
         test_name, exact_selector = sweep_test_selection(tag, pair_chroms)
         reproducer = sweep_test_reproducer(args, preset, sweep_bed_root, test_name, exact=exact_selector)
         env = dict(os.environ)
+        env["VARDICT_E2E_SWEEP_FIXTURE_ROOT"] = str(CANONICAL_FIXTURE_ROOT.resolve())
         env["VARDICT_E2E_SWEEP_CONFIG"] = preset
         env["VARDICT_E2E_SWEEP_BED_ROOT"] = str(sweep_bed_root)
         env["CI"] = "true"
