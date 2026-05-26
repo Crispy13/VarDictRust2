@@ -3,6 +3,7 @@ use std::hash::BuildHasher;
 use std::hash::Hash;
 use std::sync::RwLock;
 
+use indexmap::map::{RawEntryApiV1, raw_entry_v1::RawEntryMut};
 use once_cell::sync::Lazy;
 
 use crate::config::{ADSEED, Configuration, SEED_2};
@@ -586,18 +587,18 @@ where
     H: BuildHasher,
 {
     let map = hash.entry(start).or_default();
+    let entries = &mut map.entries;
 
-    let description_ref = description_string.as_ref();
-    if let Some(index) = map.entries.get_index_of(description_ref) {
-        return map
-            .entries
-            .get_index_mut(index)
-            .map(|(_key, variation)| variation)
-            .expect("variation entry should exist after get_index_of");
+    match entries
+        .raw_entry_mut_v1()
+        .from_key(description_string.as_ref())
+    {
+        RawEntryMut::Occupied(entry) => entry.into_mut(),
+        RawEntryMut::Vacant(entry) => {
+            let (_, variation) = entry.insert(description_string.into(), Variation::default());
+            variation
+        }
     }
-
-    let description_string = description_string.into();
-    map.entries.entry(description_string).or_default()
 }
 
 /// Ported from: VariationUtils.java:L446-L458
