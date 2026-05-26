@@ -846,6 +846,9 @@ impl CigarParser {
             goodq,
             vext,
             has_amplicon_based_calling,
+            trim_bases_after,
+            unique_mode_alignment_enabled,
+            unique_mode_second_in_pair_enabled,
         ) = GlobalReadOnlyScope::with_instance(|instance| {
             let conf = &instance.conf;
             (
@@ -858,6 +861,9 @@ impl CigarParser {
                 conf.goodq,
                 conf.vext,
                 instance.amplicon_based_calling.is_some(),
+                conf.trim_bases_after,
+                conf.unique_mode_alignment_enabled,
+                conf.unique_mode_second_in_pair_enabled,
             )
         });
 
@@ -1000,6 +1006,8 @@ impl CigarParser {
 
         // Java: CigarParser.java#L336
         let mate_alignment_start = record.mpos() as i32 + 1; // 0-based to 1-based
+        let should_check_overlapping_reads =
+            unique_mode_alignment_enabled || unique_mode_second_in_pair_enabled;
 
         // Take a clone of reference sequences to avoid borrow conflicts
         let reference = Arc::clone(&self.reference);
@@ -1010,13 +1018,17 @@ impl CigarParser {
         let mut ci: usize = 0;
         'process_cigar: while ci < num_cigar_elements {
             // Java: CigarParser.java#L340
-            if self.skip_overlapping_reads(
-                record,
-                header,
-                position,
-                direction,
-                mate_alignment_start,
-            ) {
+            if should_check_overlapping_reads
+                && self.skip_overlapping_reads(
+                    record,
+                    header,
+                    position,
+                    direction,
+                    mate_alignment_start,
+                    unique_mode_alignment_enabled,
+                    unique_mode_second_in_pair_enabled,
+                )
+            {
                 break;
             }
 
@@ -1105,8 +1117,17 @@ impl CigarParser {
             let mut i = self.offset;
             while i < self.cigar_element_length {
                 // Java: CigarParser.java#L373
-                let trim =
-                    self.is_trim_at_opt_t_bases(direction, total_length_including_soft_clipped);
+                let trim = if trim_bases_after != 0 {
+                    if !direction {
+                        self.read_position_including_soft_clipped > trim_bases_after
+                    } else {
+                        total_length_including_soft_clipped
+                            - self.read_position_including_soft_clipped
+                            > trim_bases_after
+                    }
+                } else {
+                    false
+                };
 
                 // Java: CigarParser.java#L376
                 let n = self.read_position_including_soft_clipped as usize;
@@ -1445,13 +1466,17 @@ impl CigarParser {
                     self.read_position_excluding_soft_clipped += 1;
                 }
                 // Java: CigarParser.java#L591 — skip overlap at end of inner loop
-                if self.skip_overlapping_reads(
-                    record,
-                    header,
-                    position,
-                    direction,
-                    mate_alignment_start,
-                ) {
+                if should_check_overlapping_reads
+                    && self.skip_overlapping_reads(
+                        record,
+                        header,
+                        position,
+                        direction,
+                        mate_alignment_start,
+                        unique_mode_alignment_enabled,
+                        unique_mode_second_in_pair_enabled,
+                    )
+                {
                     break 'process_cigar;
                 }
                 i += 1;
@@ -3425,14 +3450,9 @@ impl CigarParser {
         position: i32,
         direction: bool,
         mate_alignment_start: i32,
+        unique_mode_alignment_enabled: bool,
+        unique_mode_second_in_pair_enabled: bool,
     ) -> bool {
-        let (unique_mode_alignment_enabled, unique_mode_second_in_pair_enabled) =
-            GlobalReadOnlyScope::with_instance(|scope| {
-                (
-                    scope.conf.unique_mode_alignment_enabled,
-                    scope.conf.unique_mode_second_in_pair_enabled,
-                )
-            });
         // Java: CigarParser.java#L1896-L1898
         if unique_mode_alignment_enabled
             && self.is_paired_and_same_chromosome(record, header)
