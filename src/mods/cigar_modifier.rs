@@ -1106,7 +1106,9 @@ mod tests {
         init_test_scope();
 
         let mut reference = make_reference(&[]);
-        reference.seed.insert("TTTTTTTTTTTT".to_string(), vec![100]);
+        reference
+            .seed
+            .insert("TTTTTTTTTTTT".to_string(), smallvec::smallvec![100]);
         let region = Region::new("chr1", 1, 1000, "gene");
         let query_sequence = format!("{}{}", "A".repeat(35), "C".repeat(66));
         let query_quality = "I".repeat(101);
@@ -1137,7 +1139,9 @@ mod tests {
         init_test_scope();
 
         let mut reference = make_reference(&[]);
-        reference.seed.insert("TTTTTTTTTTTT".to_string(), vec![100]);
+        reference
+            .seed
+            .insert("TTTTTTTTTTTT".to_string(), smallvec::smallvec![100]);
         let region = Region::new("chr1", 1, 1000, "gene");
         let query_sequence = format!("{}{}{}", "C".repeat(66), "G".repeat(31), "A".repeat(35));
         let query_quality = "I".repeat(132);

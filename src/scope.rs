@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::io::Write;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -9,12 +10,29 @@ use crate::config::{Configuration, PrinterType};
 use crate::data::Region;
 use crate::reference::{Reference, ReferenceResource};
 
+pub type VariantLineSink = dyn Fn(&str) + Send + Sync + 'static;
+pub type VariantOwnedLineSink = dyn Fn(String) + Send + Sync + 'static;
+
 /// Ported from: VariantPrinter.java placeholder for Scope.java:L14-L24 consumers.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum VariantPrinter {
     Out,
     Err,
     Buffer(Arc<Mutex<String>>),
+    LineSink(Arc<VariantLineSink>),
+    OwnedLineSink(Arc<VariantOwnedLineSink>),
+}
+
+impl fmt::Debug for VariantPrinter {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Out => formatter.write_str("Out"),
+            Self::Err => formatter.write_str("Err"),
+            Self::Buffer(_) => formatter.write_str("Buffer(..)"),
+            Self::LineSink(_) => formatter.write_str("LineSink(..)"),
+            Self::OwnedLineSink(_) => formatter.write_str("OwnedLineSink(..)"),
+        }
+    }
 }
 
 impl PartialEq for VariantPrinter {
@@ -22,6 +40,8 @@ impl PartialEq for VariantPrinter {
         match (self, other) {
             (Self::Out, Self::Out) | (Self::Err, Self::Err) => true,
             (Self::Buffer(left), Self::Buffer(right)) => Arc::ptr_eq(left, right),
+            (Self::LineSink(left), Self::LineSink(right)) => Arc::ptr_eq(left, right),
+            (Self::OwnedLineSink(left), Self::OwnedLineSink(right)) => Arc::ptr_eq(left, right),
             _ => false,
         }
     }
@@ -64,6 +84,15 @@ impl VariantPrinter {
                 output.push_str(line);
                 output.push('\n');
             }
+            Self::LineSink(sink) => sink(line),
+            Self::OwnedLineSink(sink) => sink(line.to_string()),
+        }
+    }
+
+    pub fn print_owned_line(&self, line: String) {
+        match self {
+            Self::OwnedLineSink(sink) => sink(line),
+            _ => self.print_line(&line),
         }
     }
 }
@@ -590,6 +619,22 @@ mod tests {
             GlobalReadOnlyScope::instance().variant_printer,
             local_printer
         );
+    }
+
+    #[test]
+    fn line_sink_printer_receives_printed_lines() {
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let sink_lines = lines.clone();
+        let printer = VariantPrinter::LineSink(Arc::new(move |line| {
+            let mut lines = sink_lines.lock().unwrap_or_else(|error| error.into_inner());
+            lines.push(line.to_string());
+        }));
+
+        printer.print_line("first");
+        printer.print_line("second");
+
+        let lines = lines.lock().unwrap_or_else(|error| error.into_inner());
+        assert_eq!(&*lines, &["first".to_string(), "second".to_string()]);
     }
 
     #[test]

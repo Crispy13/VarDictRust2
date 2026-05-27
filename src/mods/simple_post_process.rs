@@ -42,7 +42,7 @@ pub fn simple_post_process(scope: Scope<AlignedVarsData>) {
                 } else {
                     let output_variant =
                         SimpleOutputVariant::new(None, &region, &variants_on_position.sv, position);
-                    out.print_line(&output_variant.to_tsv_line(&conf));
+                    out.print_owned_line(output_variant.to_tsv_line(&conf));
                     return;
                 }
             } else {
@@ -65,7 +65,7 @@ pub fn simple_post_process(scope: Scope<AlignedVarsData>) {
                                 &variants_on_position.sv,
                                 position,
                             );
-                            out.print_line(&output_variant.to_tsv_line(&conf));
+                            out.print_owned_line(output_variant.to_tsv_line(&conf));
                             let mut ref_var = Variant::default();
                             ref_var.vartype.clear();
                             vrefs.push(ref_var);
@@ -101,7 +101,7 @@ pub fn simple_post_process(scope: Scope<AlignedVarsData>) {
                     &variants_on_position.sv,
                     position,
                 );
-                out.print_line(&output_variant.to_tsv_line(&conf));
+                out.print_owned_line(output_variant.to_tsv_line(&conf));
             }
         }));
     }

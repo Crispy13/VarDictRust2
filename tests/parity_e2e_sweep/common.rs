@@ -97,12 +97,15 @@ pub struct TileKey {
     pub(crate) end: u32,
 }
 
+type Row = Box<str>;
+type RowsByTile = BTreeMap<TileKey, Vec<Row>>;
+
 #[derive(Clone, Debug)]
 struct TileMismatch {
     config: String,
     key: TileKey,
-    java: Vec<String>,
-    rust: Vec<String>,
+    java: Vec<Row>,
+    rust: Vec<Row>,
 }
 
 struct SweepScopeGuard;
@@ -592,7 +595,7 @@ fn heartbeat_escape(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join("_")
 }
 
-fn count_rows(rows_by_tile: &BTreeMap<TileKey, Vec<String>>) -> usize {
+fn count_rows(rows_by_tile: &RowsByTile) -> usize {
     rows_by_tile.values().map(Vec::len).sum()
 }
 
@@ -820,21 +823,34 @@ fn load_java_tsv_chunk(
     chrom: &str,
     config: &str,
     chunk_tiles: &[TileKey],
-) -> io::Result<BTreeMap<TileKey, Vec<String>>> {
+) -> io::Result<RowsByTile> {
     let path = java_tsv_path(tag, chrom, config);
     let decoder = zstd::stream::read::Decoder::new(File::open(&path)?)?;
     let reader = BufReader::new(decoder);
-    let mut rows_by_tile = empty_tile_map(chunk_tiles);
+    let mut rows_by_tile = ChunkRowBuckets::new(chunk_tiles);
     let mut region_index = None;
+    let mut line = String::new();
 
-    for line in reader.lines() {
-        let line = line?;
+    let mut reader = reader;
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        strip_line_ending(&mut line);
         if line.trim().is_empty() {
             continue;
         }
 
-        let columns: Vec<&str> = line.split('\t').collect();
-        if region_index.is_none() {
+        let region = if let Some(region_index) = region_index {
+            tab_field(&line, region_index).ok_or_else(|| {
+                invalid_data(format!(
+                    "Missing Region column {region_index} in {} row: {line}",
+                    path.display()
+                ))
+            })?
+        } else {
+            let columns: Vec<&str> = line.split('\t').collect();
             if let Some(index) = columns
                 .iter()
                 .position(|field| field.eq_ignore_ascii_case("Region"))
@@ -842,21 +858,137 @@ fn load_java_tsv_chunk(
                 region_index = Some(index);
                 continue;
             }
-            region_index = Some(detect_region_column(&columns).ok_or_else(|| {
+            let index = detect_region_column(&columns).ok_or_else(|| {
                 invalid_data(format!(
                     "Could not locate Region column in {} from row: {line}",
                     path.display()
                 ))
-            })?);
-        }
-
-        let tile = parse_region_column_value(columns[region_index.unwrap()])?;
-        if let Some(rows) = rows_by_tile.get_mut(&tile) {
-            rows.push(line);
+            })?;
+            region_index = Some(index);
+            columns[index]
+        };
+        let row_index = rows_by_tile.tile_index_for_region(region)?;
+        if let Some(row_index) = row_index {
+            rows_by_tile.push_owned_at(row_index, std::mem::take(&mut line));
         }
     }
 
-    Ok(rows_by_tile)
+    Ok(rows_by_tile.into_btree_map())
+}
+
+struct ChunkRowBuckets {
+    tiles: Vec<TileKey>,
+    rows: Vec<Vec<Row>>,
+    tile_index_by_region: HashMap<String, usize>,
+}
+
+impl ChunkRowBuckets {
+    fn new(chunk_tiles: &[TileKey]) -> Self {
+        let unique_tiles: Vec<_> = chunk_tiles
+            .iter()
+            .cloned()
+            .map(|tile| (tile, ()))
+            .collect::<BTreeMap<_, _>>()
+            .into_keys()
+            .collect();
+        let mut tile_index_by_region = HashMap::with_capacity(unique_tiles.len());
+        for (index, tile) in unique_tiles.iter().enumerate() {
+            tile_index_by_region.insert(tile.to_region_string(), index);
+        }
+
+        Self {
+            rows: (0..unique_tiles.len()).map(|_| Vec::new()).collect(),
+            tiles: unique_tiles,
+            tile_index_by_region,
+        }
+    }
+
+    fn push_owned_at(&mut self, index: usize, line: String) {
+        self.rows[index].push(line.into_boxed_str());
+    }
+
+    fn tile_index_for_region(&self, region: &str) -> io::Result<Option<usize>> {
+        if !looks_like_tile_key(region) {
+            return Err(invalid_data(format!(
+                "Invalid Region column value: {region}"
+            )));
+        }
+        Ok(self.tile_index_by_region.get(region).copied())
+    }
+
+    fn into_btree_map(self) -> RowsByTile {
+        self.tiles.into_iter().zip(self.rows).collect()
+    }
+}
+
+impl TileKey {
+    fn to_region_string(&self) -> String {
+        format!("{}:{}-{}", self.chrom, self.start, self.end)
+    }
+}
+
+struct RustChunkRows {
+    rows_by_tile: ChunkRowBuckets,
+    region_index: Option<usize>,
+    error: Option<String>,
+}
+
+impl RustChunkRows {
+    fn new(tiles: &[TileKey]) -> Self {
+        Self {
+            rows_by_tile: ChunkRowBuckets::new(tiles),
+            region_index: None,
+            error: None,
+        }
+    }
+
+    fn push_owned_line(&mut self, line: String) {
+        if self.error.is_some() {
+            return;
+        }
+        if let Err(error) = self.try_push_owned_line(line) {
+            self.error = Some(error.to_string());
+        }
+    }
+
+    fn try_push_owned_line(&mut self, line: String) -> io::Result<()> {
+        if line.trim().is_empty() {
+            return Ok(());
+        }
+
+        let row_index = {
+            let region = if let Some(region_index) = self.region_index {
+                tab_field(&line, region_index).ok_or_else(|| {
+                    invalid_data(format!(
+                        "Missing Region column {region_index} in Rust output row: {line}"
+                    ))
+                })?
+            } else {
+                let columns: Vec<&str> = line.split('\t').collect();
+                let region_index = detect_region_column(&columns).ok_or_else(|| {
+                    invalid_data(format!(
+                        "Could not locate Region column in Rust output row: {line}"
+                    ))
+                })?;
+                self.region_index = Some(region_index);
+                columns[region_index]
+            };
+            self.rows_by_tile.tile_index_for_region(region)?
+        };
+
+        if let Some(row_index) = row_index {
+            self.rows_by_tile.push_owned_at(row_index, line);
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> io::Result<RowsByTile> {
+        if let Some(error) = self.error {
+            Err(invalid_data(error))
+        } else {
+            Ok(self.rows_by_tile.into_btree_map())
+        }
+    }
 }
 
 fn run_rust_chunk(
@@ -865,16 +997,22 @@ fn run_rust_chunk(
     trial_name: &str,
     chrom: &str,
     ordinal: usize,
-) -> io::Result<BTreeMap<TileKey, Vec<String>>> {
+) -> io::Result<RowsByTile> {
     let regions = build_regions(tiles)?;
     let _guard = init_sweep_scope(
         context.scope_config.clone(),
         context.chr_lengths.clone(),
         &context.sample,
     );
-    let captured = Arc::new(Mutex::new(String::new()));
+    let rows = Arc::new(Mutex::new(RustChunkRows::new(tiles)));
+    let sink_rows = rows.clone();
     let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
-    GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Buffer(captured.clone()));
+    GlobalReadOnlyScope::set_variant_printer(VariantPrinter::OwnedLineSink(Arc::new(
+        move |line| {
+            let mut rows = sink_rows.lock().unwrap_or_else(|error| error.into_inner());
+            rows.push_owned_line(line);
+        },
+    )));
     emit_chunk_heartbeat(
         context,
         trial_name,
@@ -886,41 +1024,17 @@ fn run_rust_chunk(
     simple_mode.not_parallel();
     emit_chunk_heartbeat(context, trial_name, chrom, ordinal, "rust-simple-end", None);
 
-    let output = super::common::take_captured_output(&captured);
-    let mut rows_by_tile = empty_tile_map(tiles);
-    if output.trim().is_empty() {
-        return Ok(rows_by_tile);
-    }
-
-    let mut region_index = None;
-    for line in output.lines() {
-        if line.trim().is_empty() {
-            continue;
+    let rows = match Arc::try_unwrap(rows) {
+        Ok(rows) => rows.into_inner().unwrap_or_else(|error| error.into_inner()),
+        Err(rows) => {
+            let mut rows = rows.lock().unwrap_or_else(|error| error.into_inner());
+            std::mem::replace(&mut *rows, RustChunkRows::new(&[]))
         }
-
-        let columns: Vec<&str> = line.split('\t').collect();
-        if region_index.is_none() {
-            region_index = Some(detect_region_column(&columns).ok_or_else(|| {
-                invalid_data(format!(
-                    "Could not locate Region column in Rust output row: {line}"
-                ))
-            })?);
-        }
-
-        let tile = parse_region_column_value(columns[region_index.unwrap()])?;
-        if let Some(rows) = rows_by_tile.get_mut(&tile) {
-            rows.push(line.to_string());
-        }
-    }
-
-    Ok(rows_by_tile)
+    };
+    rows.finish()
 }
 
-fn diff_chunk(
-    java: &BTreeMap<TileKey, Vec<String>>,
-    rust: &BTreeMap<TileKey, Vec<String>>,
-    config: &str,
-) -> Vec<TileMismatch> {
+fn diff_chunk(java: &RowsByTile, rust: &RowsByTile, config: &str) -> Vec<TileMismatch> {
     let mut failures = Vec::new();
     let keys: BTreeSet<_> = java.keys().chain(rust.keys()).cloned().collect();
 
@@ -1016,12 +1130,28 @@ fn init_sweep_scope(
     SweepScopeGuard
 }
 
-fn empty_tile_map(chunk_tiles: &[TileKey]) -> BTreeMap<TileKey, Vec<String>> {
-    chunk_tiles
-        .iter()
-        .cloned()
-        .map(|tile| (tile, Vec::new()))
-        .collect()
+fn tab_field(line: &str, index: usize) -> Option<&str> {
+    let mut field_start = 0;
+    let mut field_index = 0;
+    for (position, byte) in line.bytes().enumerate() {
+        if byte == b'\t' {
+            if field_index == index {
+                return Some(&line[field_start..position]);
+            }
+            field_index += 1;
+            field_start = position + 1;
+        }
+    }
+    (field_index == index).then(|| &line[field_start..])
+}
+
+fn strip_line_ending(line: &mut String) {
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
 }
 
 pub(crate) fn detect_region_column(columns: &[&str]) -> Option<usize> {
@@ -1030,19 +1160,34 @@ pub(crate) fn detect_region_column(columns: &[&str]) -> Option<usize> {
         .position(|field| parse_tile_key(field).is_some())
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_region_column_value(value: &str) -> io::Result<TileKey> {
     parse_tile_key(value)
         .ok_or_else(|| invalid_data(format!("Invalid Region column value: {value}")))
 }
 
 pub(crate) fn parse_tile_key(value: &str) -> Option<TileKey> {
-    let (chrom, range) = value.split_once(':')?;
-    let (start, end) = range.split_once('-')?;
+    let (chrom, start, end) = parse_tile_key_parts(value)?;
     Some(TileKey {
         chrom: chrom.to_string(),
-        start: start.parse().ok()?,
-        end: end.parse().ok()?,
+        start,
+        end,
     })
+}
+
+fn looks_like_tile_key(value: &str) -> bool {
+    parse_tile_key_parts(value).is_some()
+}
+
+fn parse_tile_key_parts(value: &str) -> Option<(&str, u32, u32)> {
+    let (chrom, range) = split_once_byte(value, b':')?;
+    let (start, end) = split_once_byte(range, b'-')?;
+    Some((chrom, start.parse().ok()?, end.parse().ok()?))
+}
+
+fn split_once_byte(value: &str, needle: u8) -> Option<(&str, &str)> {
+    let position = value.bytes().position(|byte| byte == needle)?;
+    Some((&value[..position], &value[position + 1..]))
 }
 
 pub(crate) fn live_vardictjava_commit() -> Result<String, String> {
@@ -1145,11 +1290,19 @@ fn is_ci() -> bool {
     matches!(std::env::var("CI"), Ok(value) if value == "true")
 }
 
-fn format_rows(rows: &[String]) -> String {
+fn format_rows(rows: &[Row]) -> String {
     if rows.is_empty() {
         "<empty>".to_string()
     } else {
-        rows.join("\n")
+        let total_len = rows.iter().map(|row| row.len()).sum::<usize>() + rows.len() - 1;
+        let mut output = String::with_capacity(total_len);
+        for (index, row) in rows.iter().enumerate() {
+            if index > 0 {
+                output.push('\n');
+            }
+            output.push_str(row);
+        }
+        output
     }
 }
 
