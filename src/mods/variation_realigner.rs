@@ -1095,7 +1095,7 @@ pub fn findbp(
         .chr_lengths
         .get(chr)
         .copied()
-        .or_else(|| ref_map.keys().copied().max())
+        .or_else(|| ref_map.max_position())
         .unwrap_or(0);
     let seq_bytes = sequence.as_bytes();
     let seq_len = seq_bytes.len() as i32;

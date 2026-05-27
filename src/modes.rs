@@ -50,6 +50,18 @@ fn write_mode_output(printer: &VariantPrinter, buffer: &[u8]) {
             let mut output = captured.lock().unwrap_or_else(|error| error.into_inner());
             output.push_str(rendered);
         }
+        VariantPrinter::LineSink(sink) => {
+            let rendered = std::str::from_utf8(buffer).expect("mode output must be valid UTF-8");
+            for line in rendered.split_terminator('\n') {
+                sink(line);
+            }
+        }
+        VariantPrinter::OwnedLineSink(sink) => {
+            let rendered = std::str::from_utf8(buffer).expect("mode output must be valid UTF-8");
+            for line in rendered.split_terminator('\n') {
+                sink(line.to_string());
+            }
+        }
     }
 }
 
@@ -194,6 +206,12 @@ pub trait ParallelMode: AbstractMode + Sync {
 
     fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>);
 
+    fn process_region_to_printer(&self, region: &Region, printer: VariantPrinter) {
+        let mut buffer = Vec::new();
+        self.process_region_to_buffer(region, &mut buffer);
+        write_mode_output(&printer, &buffer);
+    }
+
     fn post_parallel_hook(&self) {}
 
     fn parallel(&self, threads: usize) {
@@ -239,9 +257,16 @@ pub trait ParallelMode: AbstractMode + Sync {
     fn not_parallel(&self) {
         let printer = GlobalReadOnlyScope::instance().variant_printer.clone();
         for region in self.regions() {
-            let mut buffer = Vec::new();
-            self.process_region_to_buffer(region, &mut buffer);
-            write_mode_output(&printer, &buffer);
+            if matches!(
+                printer,
+                VariantPrinter::LineSink(_) | VariantPrinter::OwnedLineSink(_)
+            ) {
+                self.process_region_to_printer(region, printer.clone());
+            } else {
+                let mut buffer = Vec::new();
+                self.process_region_to_buffer(region, &mut buffer);
+                write_mode_output(&printer, &buffer);
+            }
         }
         self.post_parallel_hook();
     }
@@ -264,6 +289,10 @@ impl ParallelMode for SimpleMode {
     fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>) {
         SimpleMode::process_region_to_buffer(self, region, out);
     }
+
+    fn process_region_to_printer(&self, region: &Region, printer: VariantPrinter) {
+        SimpleMode::process_region_to_printer(self, region, printer);
+    }
 }
 
 impl SimpleMode {
@@ -285,6 +314,14 @@ impl SimpleMode {
     pub fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>) {
         let buffer = Arc::new(Mutex::new(String::new()));
         let printer = VariantPrinter::Buffer(buffer.clone());
+        self.process_region_to_printer(region, printer);
+
+        let mut rendered = buffer.lock().unwrap_or_else(|error| error.into_inner());
+        let mut bytes = std::mem::take(&mut *rendered).into_bytes();
+        out.append(&mut bytes);
+    }
+
+    fn process_region_to_printer(&self, region: &Region, printer: VariantPrinter) {
         let reference = try_to_get_reference(&self.reference_resource, region);
         let bam1 = GlobalReadOnlyScope::with_instance(|scope| {
             scope
@@ -306,10 +343,6 @@ impl SimpleMode {
             InitialData::default(),
         );
         simple_post_process(run_pipeline(initial_scope));
-
-        let mut rendered = buffer.lock().unwrap_or_else(|error| error.into_inner());
-        let mut bytes = std::mem::take(&mut *rendered).into_bytes();
-        out.append(&mut bytes);
     }
 
     pub fn parallel(&self, threads: usize) {

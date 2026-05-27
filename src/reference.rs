@@ -1,11 +1,16 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::ops::Index;
 use std::time::SystemTime;
 
 use rust_htslib::faidx;
 use rustc_hash::FxHashMap;
+use serde::de::Deserializer;
+use serde::ser::{SerializeMap, Serializer};
+use smallvec::SmallVec;
 
 use crate::data::Region;
 use crate::patterns::{UNABLE_FIND_CONTIG, WRONG_START_OR_END};
@@ -45,8 +50,144 @@ fn region_boundaries_message(chr: &str, start: i32, end: i32) -> String {
 }
 
 // Java: Reference L9-L49
-pub type ReferenceSequenceMap = FxHashMap<i32, u8>;
-pub type ReferenceSeedMap = FxHashMap<String, Vec<i32>>;
+#[derive(Clone, Debug, Default)]
+pub struct ReferenceSequenceMap {
+    spans: Vec<ReferenceSequenceSpan>,
+}
+
+#[derive(Clone, Debug)]
+struct ReferenceSequenceSpan {
+    start: i32,
+    bases: Vec<u8>,
+}
+
+impl ReferenceSequenceMap {
+    pub fn get(&self, position: &i32) -> Option<&u8> {
+        self.spans.iter().find_map(|span| span.get(*position))
+    }
+
+    pub fn contains_key(&self, position: &i32) -> bool {
+        self.get(position).is_some()
+    }
+
+    pub fn max_position(&self) -> Option<i32> {
+        self.spans
+            .iter()
+            .filter_map(|span| span.end_exclusive().checked_sub(1))
+            .max()
+    }
+
+    pub fn insert(&mut self, position: i32, base: u8) -> Option<u8> {
+        for span in &mut self.spans {
+            if let Some(previous) = span.replace(position, base) {
+                return Some(previous);
+            }
+            if span.try_extend(position, base) {
+                return None;
+            }
+        }
+        self.spans.push(ReferenceSequenceSpan {
+            start: position,
+            bases: vec![base],
+        });
+        None
+    }
+}
+
+impl Extend<(i32, u8)> for ReferenceSequenceMap {
+    fn extend<T: IntoIterator<Item = (i32, u8)>>(&mut self, iter: T) {
+        for (position, base) in iter {
+            self.insert(position, base);
+        }
+    }
+}
+
+impl FromIterator<(i32, u8)> for ReferenceSequenceMap {
+    fn from_iter<T: IntoIterator<Item = (i32, u8)>>(iter: T) -> Self {
+        let mut map = Self::default();
+        map.extend(iter);
+        map
+    }
+}
+
+impl Index<&i32> for ReferenceSequenceMap {
+    type Output = u8;
+
+    fn index(&self, index: &i32) -> &Self::Output {
+        self.get(index)
+            .expect("reference sequence position is not loaded")
+    }
+}
+
+impl ReferenceSequenceSpan {
+    fn end_exclusive(&self) -> i32 {
+        self.start + i32::try_from(self.bases.len()).expect("reference span length exceeds i32")
+    }
+
+    fn index_of(&self, position: i32) -> Option<usize> {
+        (position >= self.start && position < self.end_exclusive()).then(|| {
+            usize::try_from(position - self.start)
+                .expect("validated reference offset is non-negative")
+        })
+    }
+
+    fn get(&self, position: i32) -> Option<&u8> {
+        self.index_of(position).map(|index| &self.bases[index])
+    }
+
+    fn replace(&mut self, position: i32, base: u8) -> Option<u8> {
+        let index = self.index_of(position)?;
+        Some(std::mem::replace(&mut self.bases[index], base))
+    }
+
+    fn try_extend(&mut self, position: i32, base: u8) -> bool {
+        if position == self.end_exclusive() {
+            self.bases.push(base);
+            true
+        } else if position + 1 == self.start {
+            self.start = position;
+            self.bases.insert(0, base);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl serde::Serialize for ReferenceSequenceMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let len = self.spans.iter().map(|span| span.bases.len()).sum();
+        let mut map = serializer.serialize_map(Some(len))?;
+        for span in &self.spans {
+            for (offset, base) in span.bases.iter().enumerate() {
+                let position =
+                    span.start + i32::try_from(offset).expect("reference span offset exceeds i32");
+                map.serialize_entry(&position, base)?;
+            }
+        }
+        map.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ReferenceSequenceMap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries = BTreeMap::<i32, u8>::deserialize(deserializer)?;
+        let mut map = Self::default();
+        for (position, base) in entries {
+            map.insert(position, base);
+        }
+        Ok(map)
+    }
+}
+
+pub type ReferenceSeedPositions = SmallVec<[i32; 1]>;
+pub type ReferenceSeedMap = FxHashMap<String, ReferenceSeedPositions>;
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Reference {
@@ -352,7 +493,7 @@ impl ReferenceResource {
         let seed_positions = reference
             .seed
             .entry(key_sequence)
-            .or_insert_with(|| Vec::with_capacity(1));
+            .or_insert_with(ReferenceSeedPositions::new);
         seed_positions.push(i + sequence_start);
     }
 
