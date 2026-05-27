@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use vardict_rs::config::{BamNames, Configuration};
 use vardict_rs::data::Region;
 use vardict_rs::modes::SimpleMode;
@@ -688,6 +688,7 @@ pub const CONFIG_PRESETS: &[&str] = &[
     "T2-02",
     "T2-03",
     "CM-FISHER",
+    "CM-TH4",
     "T2-05",
     "CM-PILEUP",
     "T2-07",
@@ -812,6 +813,7 @@ pub fn run_simple_mode_region_with_config(
     chr_lengths: HashMap<String, i32>,
     config: Configuration,
 ) -> String {
+    let thread_count = configured_thread_count(config.threads);
     let _guard = init_test_scope_with_config(config, bam_path, ref_path, chr_lengths.clone());
     let mut region = parse_region(region_str);
 
@@ -821,7 +823,11 @@ pub fn run_simple_mode_region_with_config(
     let simple_mode = SimpleMode::new(vec![vec![region]], reference_resource);
     let captured = Arc::new(std::sync::Mutex::new(String::new()));
     GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Buffer(captured.clone()));
-    simple_mode.not_parallel();
+    if let Some(thread_count) = thread_count {
+        simple_mode.parallel(thread_count);
+    } else {
+        simple_mode.not_parallel();
+    }
     take_captured_output(&captured)
 }
 
@@ -1039,6 +1045,9 @@ pub fn config_preset(name: &str) -> Configuration {
         "CM-FISHER" => {
             config.fisher = true;
         }
+        "CM-TH4" => {
+            config.threads = 4;
+        }
         "T2-05" => {
             config.minr = 4;
             config.goodq = 30.0;
@@ -1159,6 +1168,105 @@ pub fn config_preset(name: &str) -> Configuration {
     }
 
     config
+}
+
+#[allow(dead_code)]
+pub fn configured_thread_count(threads: i32) -> Option<usize> {
+    usize::try_from(threads).ok().filter(|&threads| threads > 1)
+}
+
+#[allow(dead_code)]
+pub fn config_thread_cost_from_threads(threads: i32) -> usize {
+    usize::try_from(threads)
+        .ok()
+        .filter(|&threads| threads > 0)
+        .unwrap_or(1)
+}
+
+#[allow(dead_code)]
+pub fn effective_test_thread_count(test_threads: Option<usize>) -> usize {
+    test_threads
+        .or_else(|| std::thread::available_parallelism().ok().map(usize::from))
+        .unwrap_or(1)
+}
+
+#[allow(dead_code)]
+struct ThreadBudgetState {
+    available: usize,
+}
+
+#[allow(dead_code)]
+pub struct ThreadBudget {
+    total: usize,
+    state: Mutex<ThreadBudgetState>,
+    ready: Condvar,
+}
+
+impl ThreadBudget {
+    fn new(total: usize) -> Self {
+        let total = total.max(1);
+        Self {
+            total,
+            state: Mutex::new(ThreadBudgetState { available: total }),
+            ready: Condvar::new(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn acquire(self: &Arc<Self>, requested: usize) -> ThreadBudgetGuard {
+        let requested = requested.max(1).min(self.total);
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        while state.available < requested {
+            state = self
+                .ready
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        state.available -= requested;
+        drop(state);
+        ThreadBudgetGuard {
+            budget: Arc::clone(self),
+            acquired: requested,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub struct ThreadBudgetGuard {
+    budget: Arc<ThreadBudget>,
+    acquired: usize,
+}
+
+impl Drop for ThreadBudgetGuard {
+    fn drop(&mut self) {
+        let mut state = self
+            .budget
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.available += self.acquired;
+        drop(state);
+        self.budget.ready.notify_all();
+    }
+}
+
+static THREAD_BUDGET: OnceLock<Arc<ThreadBudget>> = OnceLock::new();
+
+#[allow(dead_code)]
+pub fn init_thread_budget(test_threads: Option<usize>) -> Arc<ThreadBudget> {
+    Arc::clone(
+        THREAD_BUDGET
+            .get_or_init(|| Arc::new(ThreadBudget::new(effective_test_thread_count(test_threads)))),
+    )
+}
+
+#[allow(dead_code)]
+pub fn thread_budget() -> Arc<ThreadBudget> {
+    Arc::clone(
+        THREAD_BUDGET
+            .get()
+            .expect("thread budget must be initialized before use by the harness main"),
+    )
 }
 
 #[allow(dead_code)]

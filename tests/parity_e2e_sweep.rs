@@ -29,6 +29,7 @@ fn main() {
     sweep_common::reset_failure_count();
 
     let args = Arguments::from_iter(rewrite_legacy_exact_filter(std::env::args_os()));
+    common::init_thread_budget(args.test_threads);
     let mut trials = Vec::new();
     trials.extend(hg002_sweep::build_trials());
     trials.extend(na12878_exome_sweep::build_trials());

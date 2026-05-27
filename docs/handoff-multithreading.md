@@ -1,7 +1,10 @@
 # Handoff: Multi-Threaded Execution (Rust `parallel()` Port)
 
-**Status:** Not started. Out of scope for the "100% parity v1" release.  
-**Blocking:** Only single-threaded parity can be claimed until this lands.  
+**Status:** Partial acceptance. `parallel()` is implemented and determinism-tested; the
+fixed `CM-TH4` preset now exercises bounded SimpleMode multi-thread coverage in the
+config matrix.  
+**Blocking:** Full multi-thread parity still requires broader sweep acceptance beyond
+`CM-TH4`.  
 **Depends on:** Single-threaded SimpleMode + SomaticMode parity complete (current state as of commit `3bd1115`).
 
 ---
@@ -58,12 +61,19 @@ Per-mode `produceTasks()` implementations vary:
 
 ## 2. What's in Rust
 
-**Nothing.** `grep -rn 'parallel\|rayon\|tokio\|thread_pool' src/modes.rs` → 0 hits.
+`parallel()` support is now present for the ported threaded modes, and the CLI/test
+harnesses can exercise it.
 
-- [src/bin/vardict_rs.rs](src/bin/vardict_rs.rs) accepts `-th`/`--threads` but always calls `simple_mode.not_parallel()` regardless of value.
-- [src/modes.rs](src/modes.rs) defines `SimpleMode` and `SomaticMode` structs with `not_parallel()` methods. No `parallel()` method on either.
-- No `AbstractParallelMode` equivalent, no task queue, no producer/consumer split.
-- The singleton `GlobalReadOnlyScope` in [src/scope.rs](src/scope.rs) is `OnceLock`-based and thread-safe for reads — this part is already correct.
+- [src/bin/vardict_rs.rs](src/bin/vardict_rs.rs) accepts both `--th` and Java-style
+  `-th` and dispatches SimpleMode to `parallel()` when `threads > 1`.
+- [src/modes.rs](src/modes.rs) exposes `parallel()` for the ported modes used by the
+  determinism harness.
+- The parity harness now includes `CM-TH4` in
+  [scripts/config_presets.tsv](scripts/config_presets.tsv) and applies a bounded
+  thread budget in config/sweep harnesses so `parallel()` coverage is real without
+  unconstrained oversubscription.
+- The singleton `GlobalReadOnlyScope` in [src/scope.rs](src/scope.rs) remains
+  `OnceLock`-based and thread-safe for reads.
 
 ---
 
@@ -161,7 +171,9 @@ These must hold for **both** SimpleMode and SomaticMode on **all** existing swee
 ### Test scaffold to add
 
 - `tests/parity_parallel_determinism.rs` — asserts parallel(N) == not_parallel for N ∈ {1, 4, 8} across all 4 tags × default config. Use a single tile to keep runtime small.
-- Add `-th 4` preset to `scripts/config_presets.tsv` (e.g., `CM-TH4`) — but only after the port is complete. Without a working parallel path, the preset would route to not_parallel anyway and silently pass.
+- `CM-TH4` (`-th 4`) is now present in `scripts/config_presets.tsv` and exercises the
+  real bounded `parallel()` path in the config matrix. Broader thread-count acceptance
+  remains future work.
 
 ---
 

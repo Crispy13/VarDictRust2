@@ -31,8 +31,11 @@ Non-goals are listed below. Behavior outside this scope is explicitly unclaimed.
 - **SomaticMode** — tumor/normal paired calling.
 
 ### Execution model
-- **Single-threaded only.** The `-th` / `--threads` flag is accepted but currently
-  ignored in Rust. Multi-threaded parity is **out of scope** — see
+- **Single-threaded by default, plus bounded `CM-TH4` coverage.** The parity matrix
+  now includes `CM-TH4` (`-th 4`) for SimpleMode and the in-process config/sweep
+  harnesses dispatch the real Rust `parallel()` path behind a harness-level thread
+  budget. Broader thread counts, broader execution modes, and unbounded multi-thread
+  sweeps remain out of scope — see
   [docs/handoff-multithreading.md](docs/handoff-multithreading.md).
 
 ### Input format
@@ -44,7 +47,7 @@ Non-goals are listed below. Behavior outside this scope is explicitly unclaimed.
 - **GRCh38** via `testdata/GRCh38.d1.vd1.fa` (somatic lane only).
 
 ### Flag surface
-The 44 presets in [scripts/config_presets.tsv](scripts/config_presets.tsv) cover the
+The 45 presets in [scripts/config_presets.tsv](scripts/config_presets.tsv) cover the
 following flags. Any flag not in this list is unclaimed:
 
 | Flag | Axis | Coverage |
@@ -55,11 +58,13 @@ following flags. Any flag not in this list is unclaimed:
 | `-m` | Mismatch limit | T1-04, T1-11, T1-12 + T2/T3/PW combinations |
 | `-X` | Vext (realignment window) | T1-04, T1-13 + T2/T3/PW combinations |
 | `-B` | Bias-read requirement | T1-05, T1-14 + T2/T3/PW combinations |
+| `-th` | SimpleMode worker count | `CM-TH4` only (`-th 4`) |
 
-Additional single-threaded flags exercised via dedicated **call-mode presets**:
-`--fisher` (CM-FISHER), `-p` (CM-PILEUP), `-U` (CM-NOSV), `-k 0` (CM-NOREAL),
-`--chimeric` (CM-CHIMERIC), `-Q 30` (CM-MAPQ30). Somatic-only flags `-M`, `-V`,
-`-I` are exercised by the somatic default config on the `wes_il_pair` tag.
+Additional dedicated presets exercise execution-model and call-mode flags:
+`--fisher` (CM-FISHER), `-th 4` (CM-TH4), `-p` (CM-PILEUP), `-U` (CM-NOSV),
+`-k 0` (CM-NOREAL), `--chimeric` (CM-CHIMERIC), `-Q 30` (CM-MAPQ30).
+Somatic-only flags `-M`, `-V`, `-I` are exercised by the somatic default config on
+the `wes_il_pair` tag.
 
 ### Sweep lanes
 | Tag | Mode | Reference | BAM(s) |
@@ -72,16 +77,15 @@ Additional single-threaded flags exercised via dedicated **call-mode presets**:
 ### Preset tiers
 - **T1-01..T1-14** (14 rows) — single-axis threshold variation.
 - **T2-\***, **T3-\*** — dual- and three-to-five-axis threshold combinations
-  (7 rows each after the CM-* swap; tier counts preserved at 10 via `tier`
-  column when CM rows are included, see below).
+  (7 rows each after the CM-* swap; tier-column totals are listed below).
 - **PW-000..PW-009** (10 rows) — pairwise interaction coverage across 6 threshold
   flags.
-- **CM-\*** (6 rows, named `CM-FISHER`, `CM-PILEUP`, `CM-NOSV`, `CM-NOREAL`,
-  `CM-CHIMERIC`, `CM-MAPQ30`) — call-mode presets exercising distinct execution
-  branches. Each CM row inherits `tier=2` or `tier=3` to preserve the tier-
-  column distribution at T1=14 / T2=10 / T3=10 / PW=10.
+- **CM-\*** (7 rows, named `CM-FISHER`, `CM-TH4`, `CM-PILEUP`, `CM-NOSV`,
+  `CM-NOREAL`, `CM-CHIMERIC`, `CM-MAPQ30`) — call-mode and bounded multi-thread
+  presets exercising distinct execution branches. The current tier-column
+  distribution is T1=14 / T2=11 / T3=10 / PW=10.
 
-**Total: 44 rows.**
+**Total: 45 rows.**
 
 Drift between the TSV, the `CONFIG_PRESETS` constant in
 [tests/common/mod.rs](tests/common/mod.rs), and the
@@ -102,8 +106,10 @@ These are acknowledged gaps. They do **not** count against the parity claim.
   [SplicingMode.java](VarDictJava/src/main/java/com/astrazeneca/vardict/modes/SplicingMode.java).
 
 ### Execution
-- **Multi-threaded execution** (`parallel()` path). Rust has no implementation.
-  Port plan: [docs/handoff-multithreading.md](docs/handoff-multithreading.md).
+- **Broader multi-threaded execution** beyond the fixed `CM-TH4` SimpleMode coverage.
+  Broader thread counts, unbounded harness concurrency, and broader mode acceptance
+  remain out of scope. Status and follow-up plan:
+  [docs/handoff-multithreading.md](docs/handoff-multithreading.md).
 - **Distributed / multi-process execution** — not in Java either.
 
 ### Input
@@ -137,7 +143,7 @@ A claim of "100% parity" is substantiated by the following CI gates, **all green
 | E2E full sweep (somatic) | `sweep.yml` nightly | `parity_e2e_sweep_somatic` with `--include-ignored` on `wes_il_pair` |
 | Preset drift gate | `parity.yml` pre-test | `scripts/check_preset_drift.sh` |
 
-Full parity claim requires all rows × all covered chromosomes × all 44 presets to be
+Full parity claim requires all rows × all covered chromosomes × all 45 presets to be
 green in at least one `sweep.yml` nightly run. Partial coverage (e.g., smoke tier
 only) does **not** support the full claim.
 

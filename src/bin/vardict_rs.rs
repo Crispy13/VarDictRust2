@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, ErrorKind};
 
 use clap::Parser;
@@ -63,7 +64,9 @@ impl Drop for ScopeCleanup {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    run(Cli::parse())
+    run(Cli::parse_from(normalize_java_thread_flag(
+        std::env::args_os(),
+    )))
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
@@ -197,4 +200,21 @@ fn parse_region(region_str: &str) -> Result<Region, io::Error> {
     })?;
 
     Ok(Region::new(chr, start, end, ""))
+}
+
+fn normalize_java_thread_flag<I>(iter: I) -> Vec<OsString>
+where
+    I: IntoIterator,
+    I::Item: Into<OsString>,
+{
+    iter.into_iter()
+        .map(Into::into)
+        .map(|arg| {
+            if arg.as_os_str() == OsStr::new("-th") {
+                OsString::from("--th")
+            } else {
+                arg
+            }
+        })
+        .collect()
 }

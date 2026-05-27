@@ -48,25 +48,26 @@ Does not block the multithreading port. Does not affect Binary B. Only relevant 
 
 ## 0. Add `CM-TH4` preset to `scripts/config_presets.tsv`
 
-**Status:** 🟡 Blocked on multithreading port (handoff-multithreading.md)
+**Status:** 🟢 Complete
 **Location:** [scripts/config_presets.tsv](scripts/config_presets.tsv)
 **Java counterpart:** `-th 4` command-line flag, exercised in Java parity sweeps.
 **Introduced:** 2026-04-23, during multithreading port planning.
 
 ### Current Rust Behavior
 
-`-th` is accepted in [src/bin/vardict_rs.rs](src/bin/vardict_rs.rs) but always routes to `not_parallel()` regardless of value. Adding a CM-TH4 preset now would silently pass through the same code path as `default`, giving false coverage.
+`CM-TH4` now exists in [scripts/config_presets.tsv](scripts/config_presets.tsv), Rust
+CLI parsing accepts both `--th` and Java-style `-th`, and the in-process config/sweep
+harnesses dispatch the real `parallel()` path under a bounded thread budget.
 
 ### Unblock Path
 
-1. Complete the multithreading port (Stages 1–5 of plan in [docs/handoff-multithreading.md](docs/handoff-multithreading.md)).
-2. Add `CM-TH4\t-th 4\tFour-thread parallel execution.` row to `scripts/config_presets.tsv`.
-3. Regenerate goldens for the new preset via `scripts/gen_e2e_golden_tsv.sh --push-only --all-configs`.
-4. Confirm Binary B 4400 → 4840 cells and baseline stays at zero failures.
+1. Regenerate goldens for the new preset via `scripts/gen_e2e_golden_tsv.sh --push-only --all-configs`.
+2. Confirm Binary B expands by one preset row (currently 45 × 100 = 4500 listed cells) and baseline stays at zero failures.
 
 ### Detection
 
-If added before the port is complete, every CM-TH4 cell will be byte-identical to default — parity passes but coverage is fake. The handoff doc (§5) calls this out explicitly.
+The original blocker is resolved. Remaining work is fixture regeneration and broader
+acceptance coverage, not preset wiring.
 
 **Multithreading port status (2026-04-23):** Stages 1–5 complete (commits `9248efc` → `a4c7916`). SimpleMode + SomaticMode `parallel()` are both byte-identical to `not_parallel()` across 16 determinism test cases including `-B 4` (TLS-scope guard). The port is functionally complete; this item is now an optional *validation* step rather than a blocker.
 
@@ -80,10 +81,9 @@ If added before the port is complete, every CM-TH4 cell will be byte-identical t
 
 ### Unblock Path
 
-1. Run Binary A + Binary B full sweep with `-th 1,4,8` against all 44 configs × all regions. Confirm byte-identical across thread counts.
-2. Add `CM-TH4\t-th 4\tFour-thread parallel execution\t2\tboth` row to `scripts/config_presets.tsv`.
-3. Regenerate goldens via `scripts/gen_e2e_golden_tsv.sh --push-only --all-configs`.
-4. Confirm Binary B 4400 → 4840 cells, baseline stays at zero failures.
+1. Run broader Binary A + Binary B validation with `-th 1,4,8` across the current preset matrix, confirming byte-identical output across thread counts where coverage is intended.
+2. Regenerate goldens via `scripts/gen_e2e_golden_tsv.sh --push-only --all-configs`.
+3. Confirm Binary B reflects the current preset count (currently 45 × 100 = 4500 listed cells) and the baseline stays at zero failures.
 
 ### Why Not Blocking
 

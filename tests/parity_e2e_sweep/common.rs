@@ -875,6 +875,9 @@ fn run_rust_chunk(
     let captured = Arc::new(Mutex::new(String::new()));
     let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
     GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Buffer(captured.clone()));
+    let _budget_guard = super::common::thread_budget().acquire(
+        super::common::config_thread_cost_from_threads(context.scope_config.threads),
+    );
     emit_chunk_heartbeat(
         context,
         trial_name,
@@ -883,7 +886,12 @@ fn run_rust_chunk(
         "rust-simple-start",
         None,
     );
-    simple_mode.not_parallel();
+    if let Some(thread_count) = super::common::configured_thread_count(context.scope_config.threads)
+    {
+        simple_mode.parallel(thread_count);
+    } else {
+        simple_mode.not_parallel();
+    }
     emit_chunk_heartbeat(context, trial_name, chrom, ordinal, "rust-simple-end", None);
 
     let output = super::common::take_captured_output(&captured);
