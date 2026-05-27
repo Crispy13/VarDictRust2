@@ -4,93 +4,15 @@ Deferred work items in the VarDict-rs port that must be resolved before full pro
 
 ---
 # Planned
-## E2E parity sweep log: need human readable progress
-HEARTBEAT ts=1779370206 ..
+## Do we really need dynamic dispatch for line sinks?
+```rust
+pub type VariantLineSink = dyn Fn(&str) + Send + Sync + 'static;
+pub type VariantOwnedLineSink = dyn Fn(String) + Send + Sync + 'static;
+```
+we can use enum or just one function.
 
-good. but ts, this is for agent. not human. 
-human readable time, and progress (10/N) are needed.
-also it should show elapsed time for step. e.g. rust-run: 10 secs, diff check: 2 secs.
-
-## E2E sweep is very slow.
-T1-01 preset, for all regions in a bam takes more than 2200 seconds.
-This is not acceptable. We need to find the bottleneck and optimize it.
 
 # Deferred
-## 0.5 Complete CM-* call-mode test expansion
-
-**Status:** 🟡 Deferred during multithreading Stage 1.5
-**Location:** [tests/parity_config_e2e.rs](tests/parity_config_e2e.rs#L411) + missing golden fixtures under [tmp/e2e_fixtures](tmp/e2e_fixtures)
-**Introduced:** 2026-04-23, commit `3d738bb test-infra(B2,B4): swap 6 threshold-redundant presets for call-mode CM-*`
-
-### Context
-
-Commit `3d738bb` swapped 6 threshold-redundant T2/T3 presets for call-mode `CM-*` presets (`CM-FISHER`, `CM-PILEUP`, `CM-NOSV`, `CM-NOREAL`, `CM-CHIMERIC`, `CM-MAPQ30`) in `scripts/config_presets.tsv` and `tests/common/mod.rs::CONFIG_PRESETS`, but left the downstream test-matrix expansion incomplete.
-
-Commits `ab0e9a7` + `f3e55b6` (Stage 1.5 of the multithreading port) finished the helper wiring — test function identifiers, `parse_java_flags` accepting bare flags, and `config_preset()` match arms for each CM-* → correct `Configuration` field mutation.
-
-### Remaining Gaps
-
-1. **`config_preset_alignment` assertion (L411 of `tests/parity_config_e2e.rs`)** — still asserts CM-* presets leave `fisher`, `do_pileup`, `disable_sv`, `chimeric`, `perform_local_realignment`, `mapping_quality` at defaults. It must be updated to assert the expected CM-* field values per the TSV flag mapping.
-2. **Golden JSONL fixtures** for 6 CM-* presets do not exist under `tmp/e2e_fixtures/`. The 6 CM-* push tests in `tests/parity_config_e2e.rs` compile and dispatch correctly but bail out on missing golden files before any byte comparison. No real parity failure observed.
-
-### Unblock Path
-
-1. Rewrite `config_preset_alignment` to assert the field values each CM-* preset is expected to set (per TSV column 2).
-2. Run Java VarDictJava E2E sweep with each CM-* flag set against the E2E fixture regions to generate the 6 missing golden JSONLs.
-3. Commit goldens under `tmp/e2e_fixtures/CM-{FISHER,PILEUP,NOSV,NOREAL,CHIMERIC,MAPQ30}/`.
-4. Run `cargo test --profile debug-release --test parity_config_e2e -- --test-threads=1` → expect 46/46 pass.
-
-### Blast Radius
-
-Does not block the multithreading port. Does not affect Binary B. Only relevant to Binary A (`parity_config_e2e`) 6 push tests + 1 alignment test. Determinism tests (Stages 3–4 of multithreading port) use `-B 4` (= T1-14), unaffected.
-
----
-
-## 0. Add `CM-TH4` preset to `scripts/config_presets.tsv`
-
-**Status:** 🟢 Complete
-**Location:** [scripts/config_presets.tsv](scripts/config_presets.tsv)
-**Java counterpart:** `-th 4` command-line flag, exercised in Java parity sweeps.
-**Introduced:** 2026-04-23, during multithreading port planning.
-
-### Current Rust Behavior
-
-`CM-TH4` now exists in [scripts/config_presets.tsv](scripts/config_presets.tsv), Rust
-CLI parsing accepts both `--th` and Java-style `-th`, and the in-process config/sweep
-harnesses dispatch the real `parallel()` path under a bounded thread budget.
-
-### Unblock Path
-
-1. Regenerate goldens for the new preset via `scripts/gen_e2e_golden_tsv.sh --push-only --all-configs`.
-2. Confirm Binary B expands by one preset row (currently 45 × 100 = 4500 listed cells) and baseline stays at zero failures.
-
-### Detection
-
-The original blocker is resolved. Remaining work is fixture regeneration and broader
-acceptance coverage, not preset wiring.
-
-**Multithreading port status (2026-04-23):** Stages 1–5 complete (commits `9248efc` → `a4c7916`). SimpleMode + SomaticMode `parallel()` are both byte-identical to `not_parallel()` across 16 determinism test cases including `-B 4` (TLS-scope guard). The port is functionally complete; this item is now an optional *validation* step rather than a blocker.
-
----
-
-## 0.7 Multithreading Stage 6: full sweep validation + CM-TH4 preset
-
-**Status:** 🟢 Optional validation step (multithreading port complete)
-**Location:** [scripts/config_presets.tsv](scripts/config_presets.tsv) + [scripts/gen_e2e_golden_tsv.sh](scripts/gen_e2e_golden_tsv.sh)
-**Introduced:** 2026-04-23, handoff-multithreading.md §§ Stage 6
-
-### Unblock Path
-
-1. Run broader Binary A + Binary B validation with `-th 1,4,8` across the current preset matrix, confirming byte-identical output across thread counts where coverage is intended.
-2. Regenerate goldens via `scripts/gen_e2e_golden_tsv.sh --push-only --all-configs`.
-3. Confirm Binary B reflects the current preset count (currently 45 × 100 = 4500 listed cells) and the baseline stays at zero failures.
-
-### Why Not Blocking
-
-The 16 determinism test cases (`tests/parity_parallel_determinism.rs`) already gate nondeterminism across both modes including the `-B 4` TLS-scope regression guard. Stage 6 would increase config × region breadth but is not required for correctness.
-
----
-
 ## 0.8 SomaticMode CLI dispatch in `src/bin/vardict_rs.rs`
 
 **Status:** ⛔ Blocked on M5 / combine_analysis (TODO #1)

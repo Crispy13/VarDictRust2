@@ -33,6 +33,6 @@ applyTo: '**'
 
 ## Prohibited Skills
 - **rubberduck-review**  
-    Prefer CLI's plan mode
+    Use CLI's `rubber-duck` mode instead.
 - **plan-duck**  
-    Prefer CLI's plan mode  
+    Use CLI's `plan` mode instead.
