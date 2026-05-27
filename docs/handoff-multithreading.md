@@ -71,7 +71,10 @@ harnesses can exercise it.
 - The parity harness now includes `CM-TH4` in
   [scripts/config_presets.tsv](scripts/config_presets.tsv) and applies a bounded
   thread budget in config/sweep harnesses so `parallel()` coverage is real without
-  unconstrained oversubscription.
+  unconstrained oversubscription. The shared budget now models both configured worker
+  threads and pileup memory pressure: normal presets cost `1`, `CM-TH4` costs `4`,
+  and `CM-PILEUP` costs `2`, with future combined presets charged as
+  `max(thread_cost, pileup_memory_cost)`.
 - The singleton `GlobalReadOnlyScope` in [src/scope.rs](src/scope.rs) remains
   `OnceLock`-based and thread-safe for reads.
 

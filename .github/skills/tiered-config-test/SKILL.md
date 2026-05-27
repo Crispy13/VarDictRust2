@@ -133,8 +133,10 @@ bash <harness> --tier 1 --all-chr --rust-only --parallel 5
 
 | Setting | Value | Reason |
 |---------|-------|--------|
-| Pileup parallelism | 5 | Java can OOM above this on a 23 GB RAM machine |
-| Non-pileup parallelism | 10 | Usually remains under 4 GB |
+| Harness budget units | 10 by default (`--test-threads=10`) | The libtest/libtest-mimic thread count is the shared concurrency budget |
+| Normal config cost | 1 | Single-thread, non-pileup presets consume one budget unit |
+| `CM-TH4` cost | 4 | Matches the four Rust worker threads exercised by the preset |
+| `CM-PILEUP` cost | 2 | Pileup cells/chunks are memory-heavy, so `--test-threads=10` permits at most five concurrent pileup trials |
 | Disk budget (full release) | 10-50 GB | Full-matrix artifacts and diffs accumulate quickly |
 | Java cache | Preserve always | Deterministic and expensive to regenerate |
 | Rust cache | Auto-invalidates on binary change | `.verified` markers track binary mtime |
@@ -143,6 +145,8 @@ bash <harness> --tier 1 --all-chr --rust-only --parallel 5
 
 - Stale Rust cache can invalidate conclusions. Clear `rust/` and `diff/` after code changes when re-testing the same scope.
 - Empty Java shard outputs usually mean OOM or interrupted generation. Delete 0-byte `.tsv` files before re-running.
-- Pileup-heavy presets can exceed memory budgets if parallelism drifts above `5`.
+- The harness budget is automatic, not a separate manual pileup cap: future pileup +
+  worker configs should charge `max(thread_cost, pileup_cost)` so memory-heavy presets
+  still throttle correctly.
 - Pairwise configs may expose unimplemented option interactions. Treat failures as real unless a config is explicitly quarantined in `BLOCKED_CONFIGS` after triage.
 - `full-gate` stops on the first failing tier, so switch to the individual tier preset when you need finer debugging.

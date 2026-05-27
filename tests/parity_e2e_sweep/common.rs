@@ -1013,9 +1013,8 @@ fn run_rust_chunk(
             rows.push_owned_line(line);
         },
     )));
-    let _budget_guard = super::common::thread_budget().acquire(
-        super::common::config_thread_cost_from_threads(context.scope_config.threads),
-    );
+    let _budget_guard = super::common::thread_budget()
+        .acquire(super::common::config_budget_cost(&context.scope_config));
     emit_chunk_heartbeat(
         context,
         trial_name,

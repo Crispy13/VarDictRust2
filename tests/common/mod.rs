@@ -1184,6 +1184,13 @@ pub fn config_thread_cost_from_threads(threads: i32) -> usize {
 }
 
 #[allow(dead_code)]
+pub fn config_budget_cost(config: &Configuration) -> usize {
+    let thread_cost = config_thread_cost_from_threads(config.threads);
+    let memory_cost = if config.do_pileup { 2 } else { 1 };
+    thread_cost.max(memory_cost)
+}
+
+#[allow(dead_code)]
 pub fn effective_test_thread_count(test_threads: Option<usize>) -> usize {
     test_threads
         .or_else(|| std::thread::available_parallelism().ok().map(usize::from))
