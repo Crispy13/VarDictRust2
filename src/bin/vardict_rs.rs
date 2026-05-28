@@ -32,6 +32,9 @@ struct Cli {
     #[arg(short = 'r')]
     minr: Option<i32>,
 
+    #[arg(short = 'p')]
+    pileup: bool,
+
     #[arg(short = 'q')]
     goodq: Option<f64>,
 
@@ -88,6 +91,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     }
     if let Some(minr) = cli.minr {
         config.minr = minr;
+    }
+    if cli.pileup {
+        config.do_pileup = true;
     }
     if let Some(goodq) = cli.goodq {
         config.goodq = goodq;
