@@ -927,6 +927,12 @@ def append_timing_rows(timings_path: Path, results: list[ShardResult]) -> None:
             )
 
 
+def default_thread_flags(config_flags: tuple[str, ...]) -> list[str]:
+    """Return the generator's default thread flag unless the preset owns it."""
+
+    return [] if "-th" in config_flags else ["-th", "1"]
+
+
 def execute_shard_run(
     shard: Shard,
     force: bool,
@@ -1009,8 +1015,7 @@ def execute_shard_run(
                 str(reference),
                 "-b",
                 bam_arg,
-                "-th",
-                "1",
+                *default_thread_flags(config_flags),
                 "-c",
                 "1",
                 "-S",

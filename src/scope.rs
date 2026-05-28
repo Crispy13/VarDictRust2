@@ -236,6 +236,18 @@ fn write_global_mode(mode: Option<SharedMode>) {
     }
 }
 
+pub struct ThreadLocalContextGuard {
+    previous_scope: Option<Arc<GlobalReadOnlyScope>>,
+    previous_mode: Option<SharedMode>,
+}
+
+impl Drop for ThreadLocalContextGuard {
+    fn drop(&mut self) {
+        write_local_scope(self.previous_scope.take());
+        write_local_mode(self.previous_mode.take());
+    }
+}
+
 impl GlobalReadOnlyScope {
     /// Ported from: GlobalReadOnlyScope.GlobalReadOnlyScope(...)
     /// Java source: GlobalReadOnlyScope.java:L54-L69
@@ -270,6 +282,24 @@ impl GlobalReadOnlyScope {
 
     pub fn try_thread_local_instance() -> Option<Arc<GlobalReadOnlyScope>> {
         read_local_scope()
+    }
+
+    pub fn try_thread_local_mode() -> Option<SharedMode> {
+        read_local_mode()
+    }
+
+    pub fn enter_thread_local_context(
+        scope: Option<Arc<GlobalReadOnlyScope>>,
+        mode: Option<SharedMode>,
+    ) -> ThreadLocalContextGuard {
+        let previous_scope = read_local_scope();
+        let previous_mode = read_local_mode();
+        write_local_scope(scope);
+        write_local_mode(mode);
+        ThreadLocalContextGuard {
+            previous_scope,
+            previous_mode,
+        }
     }
 
     pub fn with_thread_local_instance<R>(f: impl FnOnce(Option<&GlobalReadOnlyScope>) -> R) -> R {
@@ -704,5 +734,81 @@ mod tests {
         assert!(Arc::ptr_eq(&parent_mode, &local_mode));
         assert_eq!(child_sample, "global");
         assert!(Arc::ptr_eq(&child_mode, &global_mode));
+    }
+
+    #[test]
+    fn enter_thread_local_context_installs_and_restores_previous_values() {
+        let _guard = ScopeStateGuard::new();
+
+        install_global_scope("global");
+        let global_mode: SharedMode = Arc::new(DummyMode);
+        GlobalReadOnlyScope::set_mode(global_mode);
+
+        init_thread_local_scope("previous");
+        let previous_mode: SharedMode = Arc::new(AlternateDummyMode);
+        GlobalReadOnlyScope::set_mode_thread_local(previous_mode.clone());
+
+        let next_scope = Arc::new(GlobalReadOnlyScope::new(
+            Configuration::default(),
+            HashMap::new(),
+            "next",
+            None,
+            None,
+            HashMap::new(),
+            HashMap::new(),
+        ));
+        let next_mode: SharedMode = Arc::new(DummyMode);
+
+        {
+            let _context_guard = GlobalReadOnlyScope::enter_thread_local_context(
+                Some(next_scope),
+                Some(next_mode.clone()),
+            );
+
+            assert_eq!(GlobalReadOnlyScope::instance().sample, "next");
+            let active_mode =
+                GlobalReadOnlyScope::get_mode().expect("entered thread-local mode should exist");
+            assert!(Arc::ptr_eq(&active_mode, &next_mode));
+        }
+
+        assert_eq!(GlobalReadOnlyScope::instance().sample, "previous");
+        let restored_mode =
+            GlobalReadOnlyScope::get_mode().expect("previous thread-local mode should be restored");
+        assert!(Arc::ptr_eq(&restored_mode, &previous_mode));
+    }
+
+    #[test]
+    fn enter_thread_local_context_restores_empty_thread_local_state() {
+        let _guard = ScopeStateGuard::new();
+
+        install_global_scope("global");
+        let global_mode: SharedMode = Arc::new(DummyMode);
+        GlobalReadOnlyScope::set_mode(global_mode.clone());
+
+        let local_scope = Arc::new(GlobalReadOnlyScope::new(
+            Configuration::default(),
+            HashMap::new(),
+            "local",
+            None,
+            None,
+            HashMap::new(),
+            HashMap::new(),
+        ));
+        let local_mode: SharedMode = Arc::new(AlternateDummyMode);
+
+        {
+            let _context_guard = GlobalReadOnlyScope::enter_thread_local_context(
+                Some(local_scope),
+                Some(local_mode),
+            );
+
+            assert_eq!(GlobalReadOnlyScope::instance().sample, "local");
+        }
+
+        assert!(GlobalReadOnlyScope::try_thread_local_instance().is_none());
+        assert!(GlobalReadOnlyScope::try_thread_local_mode().is_none());
+        assert_eq!(GlobalReadOnlyScope::instance().sample, "global");
+        let active_mode = GlobalReadOnlyScope::get_mode().expect("global mode should be visible");
+        assert!(Arc::ptr_eq(&active_mode, &global_mode));
     }
 }

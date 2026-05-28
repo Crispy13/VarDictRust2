@@ -224,6 +224,8 @@ pub trait ParallelMode: AbstractMode + Sync {
             .expect("failed to build simple-mode rayon pool");
         let (outer_tx, outer_rx) = bounded::<Receiver<Vec<u8>>>(threads.max(10));
         let printer = GlobalReadOnlyScope::instance().variant_printer.clone();
+        let worker_scope = GlobalReadOnlyScope::try_thread_local_instance();
+        let worker_mode = GlobalReadOnlyScope::try_thread_local_mode();
 
         let consumer = std::thread::spawn(move || {
             while let Ok(inner_rx) = outer_rx.recv() {
@@ -239,7 +241,11 @@ pub trait ParallelMode: AbstractMode + Sync {
                     .send(inner_rx)
                     .expect("consumer dropped outer simple-mode queue");
                 let self_ref = self;
+                let worker_scope = worker_scope.clone();
+                let worker_mode = worker_mode.clone();
                 scope.spawn(move |_| {
+                    let _context_guard =
+                        GlobalReadOnlyScope::enter_thread_local_context(worker_scope, worker_mode);
                     let mut buffer = Vec::new();
                     self_ref.process_region_to_buffer(region, &mut buffer);
                     inner_tx
