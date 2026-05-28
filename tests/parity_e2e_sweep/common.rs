@@ -49,7 +49,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -70,7 +70,9 @@ pub const MAX_FAILURES: usize = 10;
 pub const CHUNK_SIZE: usize = 20_000;
 
 static FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static SPOOL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static HEARTBEAT_LOG: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+static MEMORY_PROFILE_LOG: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 
 fn sweep_bed_root() -> PathBuf {
     if let Ok(root) = std::env::var("VARDICT_E2E_SWEEP_BED_ROOT") {
@@ -335,70 +337,27 @@ fn run_chunk_trial(
         emit_chunk_heartbeat(&context, &trial_name, &chrom, ordinal, "cache-ok", None);
 
         let window = &tiles[start..end];
-        emit_chunk_heartbeat(
-            &context,
-            &trial_name,
-            &chrom,
-            ordinal,
-            "java-load-start",
-            Some(&format!("tiles={}", window.len())),
-        );
-        let java_started = Instant::now();
-        let java_result = load_java_tsv_chunk(&context.tag, &chrom, &context.config_name, window);
-        timings.java_load_ms = Some(elapsed_ms(java_started));
-        let java = java_result.map_err(|error| {
-            final_status = "failed";
-            format!(
-                "Failed to load cached Java TSV chunk for {}/{chrom} chunk {ordinal}: {error}",
-                context.tag
+        let failures = if use_disk_backed_diff(&context.scope_config) {
+            run_spooled_chunk_diff(
+                &context,
+                window,
+                &trial_name,
+                &chrom,
+                ordinal,
+                &mut timings,
+                &mut final_status,
             )
-        })?;
-        emit_chunk_heartbeat(
-            &context,
-            &trial_name,
-            &chrom,
-            ordinal,
-            "java-load-ok",
-            Some(&format!("rows={}", count_rows(&java))),
-        );
-        emit_chunk_heartbeat(
-            &context,
-            &trial_name,
-            &chrom,
-            ordinal,
-            "rust-run-start",
-            None,
-        );
-        let rust_started = Instant::now();
-        let rust_result = run_rust_chunk(&context, window, &trial_name, &chrom, ordinal);
-        timings.rust_run_ms = Some(elapsed_ms(rust_started));
-        let rust = rust_result.map_err(|error| {
-            final_status = "failed";
-            format!(
-                "Failed to run Rust chunk for {}/{chrom} chunk {ordinal}: {error}",
-                context.tag
+        } else {
+            run_in_memory_chunk_diff(
+                &context,
+                window,
+                &trial_name,
+                &chrom,
+                ordinal,
+                &mut timings,
+                &mut final_status,
             )
-        })?;
-        emit_chunk_heartbeat(
-            &context,
-            &trial_name,
-            &chrom,
-            ordinal,
-            "rust-run-ok",
-            Some(&format!("rows={}", count_rows(&rust))),
-        );
-        emit_chunk_heartbeat(&context, &trial_name, &chrom, ordinal, "diff-start", None);
-        let diff_started = Instant::now();
-        let failures = diff_chunk(&java, &rust, &context.config_name);
-        timings.diff_ms = Some(elapsed_ms(diff_started));
-        emit_chunk_heartbeat(
-            &context,
-            &trial_name,
-            &chrom,
-            ordinal,
-            "diff-complete",
-            Some(&format!("mismatches={}", failures.len())),
-        );
+        }?;
         if failures.is_empty() {
             return Ok(());
         }
@@ -555,6 +514,127 @@ fn heartbeat_log() -> Option<&'static Mutex<File>> {
             }
         })
         .as_ref()
+}
+
+fn memory_profile_log() -> Option<&'static Mutex<File>> {
+    MEMORY_PROFILE_LOG
+        .get_or_init(|| {
+            let path = std::env::var("VARDICT_E2E_SWEEP_MEMORY_PROFILE").ok()?;
+            let path = path.trim();
+            if path.is_empty() {
+                return None;
+            }
+            let path = PathBuf::from(path);
+            if let Some(parent) = path.parent() {
+                if let Err(error) = fs::create_dir_all(parent) {
+                    eprintln!(
+                        "MEMORY_PROFILE phase=init status=disabled reason=create-dir-failed path={} error={}",
+                        path.display(),
+                        heartbeat_escape(&error.to_string())
+                    );
+                    return None;
+                }
+            }
+            match OpenOptions::new().create(true).append(true).open(&path) {
+                Ok(file) => Some(Mutex::new(file)),
+                Err(error) => {
+                    eprintln!(
+                        "MEMORY_PROFILE phase=init status=disabled reason=open-failed path={} error={}",
+                        path.display(),
+                        heartbeat_escape(&error.to_string())
+                    );
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+fn emit_memory_profile(
+    context: &TagContext,
+    trial_name: &str,
+    chrom: &str,
+    ordinal: usize,
+    phase: &str,
+    java: Option<&RowsByTile>,
+    rust: Option<&RowsByTile>,
+    mismatches: Option<usize>,
+) {
+    emit_memory_profile_stats(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        phase,
+        java.map(row_stats).unwrap_or_default(),
+        rust.map(row_stats).unwrap_or_default(),
+        mismatches,
+    );
+}
+
+fn emit_memory_profile_stats(
+    context: &TagContext,
+    trial_name: &str,
+    chrom: &str,
+    ordinal: usize,
+    phase: &str,
+    java_stats: RowStats,
+    rust_stats: RowStats,
+    mismatches: Option<usize>,
+) {
+    let Some(handle) = memory_profile_log() else {
+        return;
+    };
+
+    let mut line = format!(
+        "MEMORY_PROFILE ts={} phase={phase} config={} tag={} chrom={chrom} chunk={ordinal} trial={trial_name} vmrss_kib={} java_tiles={} java_rows={} java_row_bytes={} rust_tiles={} rust_rows={} rust_row_bytes={}",
+        heartbeat_timestamp(),
+        context.config_name,
+        context.tag,
+        current_rss_kib()
+            .map(|rss| rss.to_string())
+            .unwrap_or_else(|| "unavailable".to_string()),
+        java_stats.tiles,
+        java_stats.rows,
+        java_stats.row_bytes,
+        rust_stats.tiles,
+        rust_stats.rows,
+        rust_stats.row_bytes,
+    );
+    if let Some(mismatches) = mismatches {
+        line.push_str(&format!(" mismatches={mismatches}"));
+    }
+
+    if let Ok(mut file) = handle.lock() {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RowStats {
+    tiles: usize,
+    rows: usize,
+    row_bytes: usize,
+}
+
+fn row_stats(rows_by_tile: &RowsByTile) -> RowStats {
+    RowStats {
+        tiles: rows_by_tile.len(),
+        rows: count_rows(rows_by_tile),
+        row_bytes: rows_by_tile
+            .values()
+            .flat_map(|rows| rows.iter())
+            .map(|row| row.len())
+            .sum(),
+    }
+}
+
+fn current_rss_kib() -> Option<usize> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|line| {
+        let value = line.strip_prefix("VmRSS:")?;
+        value.split_whitespace().next()?.parse().ok()
+    })
 }
 
 fn emit_chunk_heartbeat(
@@ -818,6 +898,247 @@ fn java_tsv_path(tag: &str, chrom: &str, config: &str) -> PathBuf {
         .join(format!("{tag}_{chrom}.tsv.zst"))
 }
 
+fn use_disk_backed_diff(config: &Configuration) -> bool {
+    config.do_pileup
+}
+
+fn run_in_memory_chunk_diff(
+    context: &TagContext,
+    window: &[TileKey],
+    trial_name: &str,
+    chrom: &str,
+    ordinal: usize,
+    timings: &mut ChunkRuntimeTimings,
+    final_status: &mut &str,
+) -> Result<Vec<TileMismatch>, String> {
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "java-load-start",
+        Some(&format!("tiles={}", window.len())),
+    );
+    let java_started = Instant::now();
+    let java_result = load_java_tsv_chunk(&context.tag, chrom, &context.config_name, window);
+    timings.java_load_ms = Some(elapsed_ms(java_started));
+    let java = java_result.map_err(|error| {
+        *final_status = "failed";
+        format!(
+            "Failed to load cached Java TSV chunk for {}/{chrom} chunk {ordinal}: {error}",
+            context.tag
+        )
+    })?;
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "java-load-ok",
+        Some(&format!("rows={}", count_rows(&java))),
+    );
+    emit_memory_profile(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "java-load-ok",
+        Some(&java),
+        None,
+        None,
+    );
+
+    emit_chunk_heartbeat(context, trial_name, chrom, ordinal, "rust-run-start", None);
+    let rust_started = Instant::now();
+    let rust_result = run_rust_chunk(context, window, trial_name, chrom, ordinal);
+    timings.rust_run_ms = Some(elapsed_ms(rust_started));
+    let rust = rust_result.map_err(|error| {
+        *final_status = "failed";
+        format!(
+            "Failed to run Rust chunk for {}/{chrom} chunk {ordinal}: {error}",
+            context.tag
+        )
+    })?;
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "rust-run-ok",
+        Some(&format!("rows={}", count_rows(&rust))),
+    );
+    emit_memory_profile(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "rust-run-ok",
+        Some(&java),
+        Some(&rust),
+        None,
+    );
+
+    emit_chunk_heartbeat(context, trial_name, chrom, ordinal, "diff-start", None);
+    emit_memory_profile(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "diff-start",
+        Some(&java),
+        Some(&rust),
+        None,
+    );
+    let diff_started = Instant::now();
+    let failures = diff_chunk(&java, &rust, &context.config_name);
+    timings.diff_ms = Some(elapsed_ms(diff_started));
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "diff-complete",
+        Some(&format!("mismatches={}", failures.len())),
+    );
+    emit_memory_profile(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "diff-complete",
+        Some(&java),
+        Some(&rust),
+        Some(failures.len()),
+    );
+    Ok(failures)
+}
+
+fn run_spooled_chunk_diff(
+    context: &TagContext,
+    window: &[TileKey],
+    trial_name: &str,
+    chrom: &str,
+    ordinal: usize,
+    timings: &mut ChunkRuntimeTimings,
+    final_status: &mut &str,
+) -> Result<Vec<TileMismatch>, String> {
+    let spool = ChunkSpool::new(&context.tag, chrom, ordinal, window).map_err(|error| {
+        *final_status = "failed";
+        format!(
+            "Failed to initialize disk-backed diff spool for {}/{chrom} chunk {ordinal}: {error}",
+            context.tag
+        )
+    })?;
+
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "java-load-start",
+        Some(&format!("tiles={} mode=disk-spool", window.len())),
+    );
+    let java_started = Instant::now();
+    let java_stats = spool
+        .spool_java_tsv_chunk(&context.tag, chrom, &context.config_name)
+        .map_err(|error| {
+            *final_status = "failed";
+            format!(
+                "Failed to spool cached Java TSV chunk for {}/{chrom} chunk {ordinal}: {error}",
+                context.tag
+            )
+        })?;
+    timings.java_load_ms = Some(elapsed_ms(java_started));
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "java-load-ok",
+        Some(&format!("rows={} mode=disk-spool", java_stats.rows)),
+    );
+    emit_memory_profile_stats(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "java-load-ok",
+        java_stats,
+        RowStats::default(),
+        None,
+    );
+
+    emit_chunk_heartbeat(context, trial_name, chrom, ordinal, "rust-run-start", None);
+    let rust_started = Instant::now();
+    let rust_stats = run_rust_chunk_to_spool(context, window, trial_name, chrom, ordinal, &spool)
+        .map_err(|error| {
+        *final_status = "failed";
+        format!(
+            "Failed to run Rust chunk for {}/{chrom} chunk {ordinal}: {error}",
+            context.tag
+        )
+    })?;
+    timings.rust_run_ms = Some(elapsed_ms(rust_started));
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "rust-run-ok",
+        Some(&format!("rows={} mode=disk-spool", rust_stats.rows)),
+    );
+    emit_memory_profile_stats(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "rust-run-ok",
+        java_stats,
+        rust_stats,
+        None,
+    );
+
+    emit_chunk_heartbeat(context, trial_name, chrom, ordinal, "diff-start", None);
+    emit_memory_profile_stats(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "diff-start",
+        java_stats,
+        rust_stats,
+        None,
+    );
+    let diff_started = Instant::now();
+    let failures = spool.diff_sorted(&context.config_name).map_err(|error| {
+        *final_status = "failed";
+        format!(
+            "Failed to diff disk-backed rows for {}/{chrom} chunk {ordinal}: {error}",
+            context.tag
+        )
+    })?;
+    timings.diff_ms = Some(elapsed_ms(diff_started));
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "diff-complete",
+        Some(&format!("mismatches={} mode=disk-spool", failures.len())),
+    );
+    emit_memory_profile_stats(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "diff-complete",
+        java_stats,
+        rust_stats,
+        Some(failures.len()),
+    );
+    Ok(failures)
+}
+
 fn load_java_tsv_chunk(
     tag: &str,
     chrom: &str,
@@ -927,6 +1248,348 @@ impl TileKey {
     }
 }
 
+struct ChunkSpool {
+    root: PathBuf,
+    java_unsorted: PathBuf,
+    java_sorted: PathBuf,
+    rust_unsorted: PathBuf,
+    rust_sorted: PathBuf,
+    buckets: ChunkRowBuckets,
+    keep_files: bool,
+}
+
+impl ChunkSpool {
+    fn new(tag: &str, chrom: &str, ordinal: usize, chunk_tiles: &[TileKey]) -> io::Result<Self> {
+        let root = spool_root(tag, chrom, ordinal);
+        fs::create_dir_all(&root)?;
+        Ok(Self {
+            java_unsorted: root.join("java.unsorted.tsv"),
+            java_sorted: root.join("java.sorted.tsv"),
+            rust_unsorted: root.join("rust.unsorted.tsv"),
+            rust_sorted: root.join("rust.sorted.tsv"),
+            buckets: ChunkRowBuckets::new(chunk_tiles),
+            keep_files: matches!(
+                std::env::var("VARDICT_E2E_SWEEP_KEEP_SPOOL"),
+                Ok(value) if value == "1" || value.eq_ignore_ascii_case("true")
+            ),
+            root,
+        })
+    }
+
+    fn spool_java_tsv_chunk(&self, tag: &str, chrom: &str, config: &str) -> io::Result<RowStats> {
+        let path = java_tsv_path(tag, chrom, config);
+        let decoder = zstd::stream::read::Decoder::new(File::open(&path)?)?;
+        let mut reader = BufReader::new(decoder);
+        let mut writer = BufWriter::new(File::create(&self.java_unsorted)?);
+        let mut stats = RowStats {
+            tiles: self.buckets.tiles.len(),
+            ..RowStats::default()
+        };
+        let mut region_index = None;
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            if reader.read_line(&mut line)? == 0 {
+                break;
+            }
+            strip_line_ending(&mut line);
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let region = if let Some(region_index) = region_index {
+                tab_field(&line, region_index).ok_or_else(|| {
+                    invalid_data(format!(
+                        "Missing Region column {region_index} in {} row: {line}",
+                        path.display()
+                    ))
+                })?
+            } else {
+                let columns: Vec<&str> = line.split('\t').collect();
+                if let Some(index) = columns
+                    .iter()
+                    .position(|field| field.eq_ignore_ascii_case("Region"))
+                {
+                    region_index = Some(index);
+                    continue;
+                }
+                let index = detect_region_column(&columns).ok_or_else(|| {
+                    invalid_data(format!(
+                        "Could not locate Region column in {} from row: {line}",
+                        path.display()
+                    ))
+                })?;
+                region_index = Some(index);
+                columns[index]
+            };
+
+            if self.buckets.tile_index_for_region(region)?.is_some() {
+                write_spool_record(&mut writer, region, &line)?;
+                stats.rows += 1;
+                stats.row_bytes += line.len();
+            }
+        }
+
+        writer.flush()?;
+        sort_spool_file(&self.java_unsorted, &self.java_sorted, &self.root)?;
+        Ok(stats)
+    }
+
+    fn open_rust_writer(&self) -> io::Result<BufWriter<File>> {
+        File::create(&self.rust_unsorted).map(BufWriter::new)
+    }
+
+    fn sort_rust(&self) -> io::Result<()> {
+        sort_spool_file(&self.rust_unsorted, &self.rust_sorted, &self.root)
+    }
+
+    fn diff_sorted(&self, config: &str) -> io::Result<Vec<TileMismatch>> {
+        let mut java = SortedSpoolReader::new(&self.java_sorted)?;
+        let mut rust = SortedSpoolReader::new(&self.rust_sorted)?;
+        let mut java_group = java.next_group()?;
+        let mut rust_group = rust.next_group()?;
+        let mut failures = Vec::new();
+
+        while failures.len() < MAX_FAILURES {
+            match (java_group.take(), rust_group.take()) {
+                (Some((java_key, java_rows)), Some((rust_key, rust_rows))) => {
+                    match java_key.cmp(&rust_key) {
+                        std::cmp::Ordering::Equal => {
+                            if java_rows != rust_rows {
+                                failures.push(TileMismatch {
+                                    config: config.to_string(),
+                                    key: java_key,
+                                    java: java_rows,
+                                    rust: rust_rows,
+                                });
+                            }
+                            java_group = java.next_group()?;
+                            rust_group = rust.next_group()?;
+                        }
+                        std::cmp::Ordering::Less => {
+                            failures.push(TileMismatch {
+                                config: config.to_string(),
+                                key: java_key,
+                                java: java_rows,
+                                rust: Vec::new(),
+                            });
+                            java_group = java.next_group()?;
+                            rust_group = Some((rust_key, rust_rows));
+                        }
+                        std::cmp::Ordering::Greater => {
+                            failures.push(TileMismatch {
+                                config: config.to_string(),
+                                key: rust_key,
+                                java: Vec::new(),
+                                rust: rust_rows,
+                            });
+                            java_group = Some((java_key, java_rows));
+                            rust_group = rust.next_group()?;
+                        }
+                    }
+                }
+                (Some((java_key, java_rows)), None) => {
+                    failures.push(TileMismatch {
+                        config: config.to_string(),
+                        key: java_key,
+                        java: java_rows,
+                        rust: Vec::new(),
+                    });
+                    java_group = java.next_group()?;
+                }
+                (None, Some((rust_key, rust_rows))) => {
+                    failures.push(TileMismatch {
+                        config: config.to_string(),
+                        key: rust_key,
+                        java: Vec::new(),
+                        rust: rust_rows,
+                    });
+                    rust_group = rust.next_group()?;
+                }
+                (None, None) => break,
+            }
+        }
+
+        Ok(failures)
+    }
+}
+
+impl Drop for ChunkSpool {
+    fn drop(&mut self) {
+        if !self.keep_files {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+}
+
+struct SortedSpoolReader {
+    reader: BufReader<File>,
+    pending: Option<String>,
+}
+
+impl SortedSpoolReader {
+    fn new(path: &Path) -> io::Result<Self> {
+        Ok(Self {
+            reader: BufReader::new(File::open(path)?),
+            pending: None,
+        })
+    }
+
+    fn next_group(&mut self) -> io::Result<Option<(TileKey, Vec<Row>)>> {
+        let mut line = match self.pending.take() {
+            Some(line) => line,
+            None => {
+                let mut line = String::new();
+                if self.reader.read_line(&mut line)? == 0 {
+                    return Ok(None);
+                }
+                strip_line_ending(&mut line);
+                line
+            }
+        };
+
+        let (key, row) = split_spool_record(&line)?;
+        let key = key.to_string();
+        let tile = parse_region_column_value(&key)?;
+        let mut rows = vec![row.to_string().into_boxed_str()];
+
+        loop {
+            line.clear();
+            if self.reader.read_line(&mut line)? == 0 {
+                break;
+            }
+            strip_line_ending(&mut line);
+            let (next_key, next_row) = split_spool_record(&line)?;
+            if next_key == key {
+                rows.push(next_row.to_string().into_boxed_str());
+            } else {
+                self.pending = Some(line);
+                break;
+            }
+        }
+
+        Ok(Some((tile, rows)))
+    }
+}
+
+struct RustChunkSpool {
+    writer: BufWriter<File>,
+    buckets: ChunkRowBuckets,
+    region_index: Option<usize>,
+    stats: RowStats,
+    error: Option<String>,
+}
+
+impl RustChunkSpool {
+    fn new(spool: &ChunkSpool) -> io::Result<Self> {
+        Ok(Self {
+            writer: spool.open_rust_writer()?,
+            buckets: ChunkRowBuckets::new(&spool.buckets.tiles),
+            region_index: None,
+            stats: RowStats {
+                tiles: spool.buckets.tiles.len(),
+                ..RowStats::default()
+            },
+            error: None,
+        })
+    }
+
+    fn push_owned_line(&mut self, line: String) {
+        if self.error.is_some() {
+            return;
+        }
+        if let Err(error) = self.try_push_owned_line(&line) {
+            self.error = Some(error.to_string());
+        }
+    }
+
+    fn try_push_owned_line(&mut self, line: &str) -> io::Result<()> {
+        if line.trim().is_empty() {
+            return Ok(());
+        }
+
+        let region = if let Some(region_index) = self.region_index {
+            tab_field(line, region_index).ok_or_else(|| {
+                invalid_data(format!(
+                    "Missing Region column {region_index} in Rust output row: {line}"
+                ))
+            })?
+        } else {
+            let columns: Vec<&str> = line.split('\t').collect();
+            let region_index = detect_region_column(&columns).ok_or_else(|| {
+                invalid_data(format!(
+                    "Could not locate Region column in Rust output row: {line}"
+                ))
+            })?;
+            self.region_index = Some(region_index);
+            columns[region_index]
+        };
+
+        if self.buckets.tile_index_for_region(region)?.is_some() {
+            write_spool_record(&mut self.writer, region, line)?;
+            self.stats.rows += 1;
+            self.stats.row_bytes += line.len();
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> io::Result<RowStats> {
+        self.writer.flush()?;
+        if let Some(error) = self.error {
+            Err(invalid_data(error))
+        } else {
+            Ok(self.stats)
+        }
+    }
+}
+
+fn spool_root(tag: &str, chrom: &str, ordinal: usize) -> PathBuf {
+    let counter = SPOOL_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let base = std::env::var_os("VARDICT_E2E_SWEEP_SPOOL_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("tmp/parity_e2e_sweep_spool"));
+    base.join(format!(
+        "{}-{}-{}-{}-{}-{}",
+        std::process::id(),
+        heartbeat_timestamp(),
+        counter,
+        heartbeat_escape(tag),
+        heartbeat_escape(chrom),
+        ordinal
+    ))
+}
+
+fn write_spool_record(writer: &mut BufWriter<File>, region: &str, row: &str) -> io::Result<()> {
+    writer.write_all(region.as_bytes())?;
+    writer.write_all(b"\t")?;
+    writer.write_all(row.as_bytes())?;
+    writer.write_all(b"\n")
+}
+
+fn sort_spool_file(input: &Path, output: &Path, temp_dir: &Path) -> io::Result<()> {
+    let output_status = Command::new("sort")
+        .env("LC_ALL", "C")
+        .env("TMPDIR", temp_dir)
+        .arg(input)
+        .arg("-o")
+        .arg(output)
+        .status()?;
+    if output_status.success() {
+        Ok(())
+    } else {
+        Err(invalid_data(format!(
+            "sort failed for {} with status {output_status}",
+            input.display()
+        )))
+    }
+}
+
+fn split_spool_record(line: &str) -> io::Result<(&str, &str)> {
+    split_once_byte(line, b'\t')
+        .ok_or_else(|| invalid_data(format!("Invalid spool record without tab: {line}")))
+}
+
 struct RustChunkRows {
     rows_by_tile: ChunkRowBuckets,
     region_index: Option<usize>,
@@ -1031,6 +1694,7 @@ fn run_rust_chunk(
     }
     emit_chunk_heartbeat(context, trial_name, chrom, ordinal, "rust-simple-end", None);
 
+    GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Err);
     let rows = match Arc::try_unwrap(rows) {
         Ok(rows) => rows.into_inner().unwrap_or_else(|error| error.into_inner()),
         Err(rows) => {
@@ -1039,6 +1703,67 @@ fn run_rust_chunk(
         }
     };
     rows.finish()
+}
+
+fn run_rust_chunk_to_spool(
+    context: &TagContext,
+    tiles: &[TileKey],
+    trial_name: &str,
+    chrom: &str,
+    ordinal: usize,
+    spool: &ChunkSpool,
+) -> io::Result<RowStats> {
+    let regions = build_regions(tiles)?;
+    let _guard = init_sweep_scope(
+        context.scope_config.clone(),
+        context.chr_lengths.clone(),
+        &context.sample,
+    );
+    let rows = Arc::new(Mutex::new(RustChunkSpool::new(spool)?));
+    let sink_rows = rows.clone();
+    let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
+    GlobalReadOnlyScope::set_variant_printer(VariantPrinter::OwnedLineSink(Arc::new(
+        move |line| {
+            let mut rows = sink_rows.lock().unwrap_or_else(|error| error.into_inner());
+            rows.push_owned_line(line);
+        },
+    )));
+    let _budget_guard = super::common::thread_budget()
+        .acquire(super::common::config_budget_cost(&context.scope_config));
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "rust-simple-start",
+        Some("mode=disk-spool"),
+    );
+    if let Some(thread_count) = super::common::configured_thread_count(context.scope_config.threads)
+    {
+        simple_mode.parallel(thread_count);
+    } else {
+        simple_mode.not_parallel();
+    }
+    emit_chunk_heartbeat(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "rust-simple-end",
+        Some("mode=disk-spool"),
+    );
+
+    GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Err);
+    let rows = match Arc::try_unwrap(rows) {
+        Ok(rows) => rows.into_inner().unwrap_or_else(|error| error.into_inner()),
+        Err(rows) => {
+            let mut rows = rows.lock().unwrap_or_else(|error| error.into_inner());
+            std::mem::replace(&mut *rows, RustChunkSpool::new(spool)?)
+        }
+    };
+    let stats = rows.finish()?;
+    spool.sort_rust()?;
+    Ok(stats)
 }
 
 fn diff_chunk(java: &RowsByTile, rust: &RowsByTile, config: &str) -> Vec<TileMismatch> {
