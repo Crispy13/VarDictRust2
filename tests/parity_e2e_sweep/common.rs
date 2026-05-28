@@ -336,6 +336,25 @@ fn run_chunk_trial(
         timings.cache_ms = Some(elapsed_ms(cache_started));
         emit_chunk_heartbeat(&context, &trial_name, &chrom, ordinal, "cache-ok", None);
 
+        let budget_cost = super::common::config_budget_cost(&context.scope_config);
+        emit_chunk_heartbeat(
+            &context,
+            &trial_name,
+            &chrom,
+            ordinal,
+            "budget-wait-start",
+            Some(&format!("cost={budget_cost}")),
+        );
+        let _budget_guard = super::common::thread_budget().acquire(budget_cost);
+        emit_chunk_heartbeat(
+            &context,
+            &trial_name,
+            &chrom,
+            ordinal,
+            "budget-acquired",
+            Some(&format!("cost={budget_cost}")),
+        );
+
         let window = &tiles[start..end];
         let failures = if use_disk_backed_diff(&context.scope_config) {
             run_spooled_chunk_diff(
@@ -1676,8 +1695,6 @@ fn run_rust_chunk(
             rows.push_owned_line(line);
         },
     )));
-    let _budget_guard = super::common::thread_budget()
-        .acquire(super::common::config_budget_cost(&context.scope_config));
     emit_chunk_heartbeat(
         context,
         trial_name,
