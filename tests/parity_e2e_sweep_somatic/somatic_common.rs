@@ -135,7 +135,13 @@ pub fn run_pair(tag: &str) {
             )
             .unwrap_or_else(|error| panic!("Failed to run Rust chunk for {tag}/{chrom}: {error}"));
 
-            failures.extend(diff_chunk_somatic(&java, &rust, &config));
+            let java_presorted =
+                has_presorted_java_fixture(tag, &chrom, &config).unwrap_or_else(|error| {
+                    panic!(
+                        "Failed to inspect cached Java TSV provenance for {tag}/{chrom}: {error}"
+                    )
+                });
+            failures.extend(diff_chunk_somatic(&java, &rust, &config, java_presorted));
             if failures.len() >= super::r2_common::MAX_FAILURES {
                 panic!("{}", format_report(&failures));
             }
@@ -318,6 +324,38 @@ fn java_tsv_path(tag: &str, chrom: &str, config: &str) -> PathBuf {
         .join(format!("{tag}_{chrom}.tsv.zst"))
 }
 
+fn java_chunks_path(tag: &str, chrom: &str, config: &str) -> PathBuf {
+    super::r2_common::sweep_fixture_root()
+        .join("output")
+        .join(config_path_segment(config))
+        .join(chrom)
+        .join(format!("{tag}_{chrom}.chunks.json"))
+}
+
+fn has_presorted_java_fixture(tag: &str, chrom: &str, config: &str) -> io::Result<bool> {
+    let path = java_chunks_path(tag, chrom, config);
+    let payload: Value = serde_json::from_reader(File::open(&path)?).map_err(|error| {
+        super::r2_common::invalid_data(format!(
+            "Failed to parse fixture provenance {}: {error}",
+            path.display()
+        ))
+    })?;
+    let Some(output_order) = payload.get("output_order") else {
+        return Ok(false);
+    };
+    let mode = output_order.get("mode").and_then(Value::as_str);
+    let key = output_order.get("key").and_then(Value::as_str);
+    let lc_all = output_order.get("lc_all").and_then(Value::as_str);
+    if mode == Some("sorted") && key == Some("Region<TAB>row") && lc_all == Some("C") {
+        Ok(true)
+    } else {
+        Err(super::r2_common::invalid_data(format!(
+            "Fixture {} has incompatible output_order provenance; expected mode=sorted key=Region<TAB>row lc_all=C",
+            path.display()
+        )))
+    }
+}
+
 fn load_java_tsv_chunk_somatic(
     tag: &str,
     chrom: &str,
@@ -435,6 +473,7 @@ fn diff_chunk_somatic(
     java: &BTreeMap<super::r2_common::TileKey, Vec<String>>,
     rust: &BTreeMap<super::r2_common::TileKey, Vec<String>>,
     config: &str,
+    java_presorted: bool,
 ) -> Vec<TileMismatch> {
     let mut failures = Vec::new();
     let keys: BTreeSet<_> = java.keys().chain(rust.keys()).cloned().collect();
@@ -442,7 +481,9 @@ fn diff_chunk_somatic(
     for key in keys {
         let mut java_rows = java.get(&key).cloned().unwrap_or_default();
         let mut rust_rows = rust.get(&key).cloned().unwrap_or_default();
-        java_rows.sort();
+        if !java_presorted {
+            java_rows.sort();
+        }
         rust_rows.sort();
 
         if java_rows != rust_rows {

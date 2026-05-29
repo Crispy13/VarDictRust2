@@ -75,7 +75,8 @@ class SweepFixturesChunkParallelTest(unittest.TestCase):
 
     def test_parallel_chunk_merge_preserves_chunk_index_order(self) -> None:
         with self.chunk_parallel_fixture() as fixture:
-            result = fixture.run(chunk_workers=3)
+            with mock.patch.dict(os.environ, {"REGION_OUTPUT": "1"}, clear=False):
+                result = fixture.run(chunk_workers=3)
             output_path, chunks_path = base.shard_output_paths(
                 base.output_dir(fixture.output_root, None, fixture.shard.chrom),
                 fixture.shard.tag,
@@ -85,19 +86,23 @@ class SweepFixturesChunkParallelTest(unittest.TestCase):
             self.assertEqual(result.status, "success", result.error)
             self.assertTrue(output_path.exists())
             self.assertTrue(chunks_path.exists())
-            self.assertEqual(output_path.read_bytes(), b"chunk-0\nchunk-1\nchunk-2\n")
+            self.assertEqual(
+                output_path.read_bytes(),
+                b"chr1:0-10\tchunk-1\nchr1:20-30\tchunk-2\nchr1:40-50\tchunk-0\n",
+            )
 
             payload = json.loads(chunks_path.read_text(encoding="utf-8"))
-            self.assertEqual([chunk["idx"] for chunk in payload["chunks"]], [0, 1, 2])
-            self.assertEqual(payload["num_chunks"], 3)
+            self.assertEqual(payload["output_order"]["mode"], "sorted")
+            self.assertEqual(payload["num_chunks"], 1)
+            self.assertEqual([chunk["idx"] for chunk in payload["source_chunks"]], [0, 1, 2])
             self.assertFalse(base.output_staging_dir(fixture.output_root, None, fixture.shard).exists())
 
-    def test_cm_pileup_parallel_chunk_output_is_sorted_before_promotion(self) -> None:
+    def test_parallel_chunk_output_is_sorted_before_promotion_for_any_config(self) -> None:
         with self.chunk_parallel_fixture() as fixture:
             with mock.patch.dict(os.environ, {"REGION_OUTPUT": "1"}, clear=False):
-                result = fixture.run(chunk_workers=3, config_name="CM-PILEUP")
+                result = fixture.run(chunk_workers=3, config_name="T1-01")
             output_path, chunks_path = base.shard_output_paths(
-                base.output_dir(fixture.output_root, "CM-PILEUP", fixture.shard.chrom),
+                base.output_dir(fixture.output_root, "T1-01", fixture.shard.chrom),
                 fixture.shard.tag,
                 fixture.shard.chrom,
             )

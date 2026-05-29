@@ -61,7 +61,6 @@ REF_REL = Path("testdata/hs37d5.fa")
 VARDICT_BIN_REL = Path("VarDictJava/build/install/VarDict/bin/VarDict")
 DEFAULT_SHM_ROOT = Path("/dev/shm/sweep_fixtures")
 FALLBACK_SHM_ROOT = Path("/tmp/sweep_fixtures_shm")
-CM_PILEUP_CONFIG = "CM-PILEUP"
 DEFAULT_SORT_BUFFER_SIZE = "128M"
 SORT_ENV = "C"
 SORT_KEY = "Region<TAB>row"
@@ -401,7 +400,7 @@ def fixture_sort_buffer_size() -> str:
 
 
 def should_sort_final_output(config_name: str | None) -> bool:
-    return config_name == CM_PILEUP_CONFIG
+    return True
 
 
 def looks_like_tile_key(value: bytes) -> bool:

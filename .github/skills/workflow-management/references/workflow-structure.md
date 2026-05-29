@@ -189,9 +189,10 @@ Workflow-management Phase 1 tracks parity-related shell scripts, Python scripts,
 4. `io_backend_bench.py`
 5. `pilot_generate.py`
 6. `sample_regions.py`
-7. `sweep_fixtures_chunk_parallel.py`
-8. `sweep_fixtures_parallel.py`
-9. `sweep_generate_v2.py`
+7. `sort_sweep_fixtures.py`
+8. `sweep_fixtures_chunk_parallel.py`
+9. `sweep_fixtures_parallel.py`
+10. `sweep_generate_v2.py`
 
 ### Library helpers and policy files
 
