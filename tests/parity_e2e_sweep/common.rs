@@ -18,6 +18,11 @@
 //! - `VARDICT_E2E_SWEEP_HEARTBEAT_LOG=<path>` appends diagnostic phase markers and runtime
 //!   telemetry to a side-channel file while also echoing them to stderr. Heartbeats never enter
 //!   captured variant buffers, TSV rows, JSONL fixtures, or parity comparisons.
+//! - `VARDICT_E2E_SWEEP_MEMORY_PROFILE=<path>` appends opt-in RSS and row-retention diagnostics.
+//! - `VARDICT_E2E_SWEEP_SORTEDNESS_PROFILE=true` adds opt-in row sortedness counters to memory
+//!   profile lines; it is diagnostic-only.
+//! - `VARDICT_E2E_SWEEP_SORT_BUFFER_SIZE=<size>` overrides the disk-backed comparator's GNU
+//!   sort buffer cap. The default is intentionally bounded to keep CM-PILEUP harness RSS stable.
 //! - `CI=true` converts missing-cache handling into a hard panic instead of a local skip.
 //!
 //! Run with:
@@ -55,7 +60,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use libtest_mimic::{Failed, Trial};
 use serde_json::Value;
@@ -73,6 +79,9 @@ static FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static SPOOL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static HEARTBEAT_LOG: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 static MEMORY_PROFILE_LOG: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+static SORTEDNESS_PROFILE: OnceLock<bool> = OnceLock::new();
+static SORT_BUFFER_SIZE: OnceLock<String> = OnceLock::new();
+const DEFAULT_SORT_BUFFER_SIZE: &str = "128M";
 
 fn sweep_bed_root() -> PathBuf {
     if let Ok(root) = std::env::var("VARDICT_E2E_SWEEP_BED_ROOT") {
@@ -606,7 +615,7 @@ fn emit_memory_profile_stats(
     };
 
     let mut line = format!(
-        "MEMORY_PROFILE ts={} phase={phase} config={} tag={} chrom={chrom} chunk={ordinal} trial={trial_name} vmrss_kib={} java_tiles={} java_rows={} java_row_bytes={} rust_tiles={} rust_rows={} rust_row_bytes={}",
+        "MEMORY_PROFILE ts={} phase={phase} config={} tag={} chrom={chrom} chunk={ordinal} trial={trial_name} vmrss_kib={} java_tiles={} java_rows={} java_row_bytes={} java_sortedness_checked={} java_out_of_order_rows={} java_first_out_of_order_row={} rust_tiles={} rust_rows={} rust_row_bytes={} rust_sortedness_checked={} rust_out_of_order_rows={} rust_first_out_of_order_row={}",
         heartbeat_timestamp(),
         context.config_name,
         context.tag,
@@ -616,9 +625,15 @@ fn emit_memory_profile_stats(
         java_stats.tiles,
         java_stats.rows,
         java_stats.row_bytes,
+        java_stats.sortedness_checked,
+        java_stats.out_of_order_rows,
+        java_stats.first_out_of_order_row.unwrap_or(0),
         rust_stats.tiles,
         rust_stats.rows,
         rust_stats.row_bytes,
+        rust_stats.sortedness_checked,
+        rust_stats.out_of_order_rows,
+        rust_stats.first_out_of_order_row.unwrap_or(0),
     );
     if let Some(mismatches) = mismatches {
         line.push_str(&format!(" mismatches={mismatches}"));
@@ -629,11 +644,150 @@ fn emit_memory_profile_stats(
     }
 }
 
+fn emit_memory_phase_event(
+    context: &TagContext,
+    trial_name: &str,
+    chrom: &str,
+    ordinal: usize,
+    phase: &str,
+    event: &str,
+    detail: Option<&str>,
+) {
+    let Some(handle) = memory_profile_log() else {
+        return;
+    };
+
+    let mut line = format!(
+        "MEMORY_PHASE ts={} event={event} phase={phase} config={} tag={} chrom={chrom} chunk={ordinal} trial={trial_name} vmrss_kib={}",
+        heartbeat_timestamp(),
+        context.config_name,
+        context.tag,
+        current_rss_kib()
+            .map(|rss| rss.to_string())
+            .unwrap_or_else(|| "unavailable".to_string()),
+    );
+    if let Some(detail) = detail {
+        line.push(' ');
+        line.push_str(detail);
+    }
+
+    if let Ok(mut file) = handle.lock() {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+struct MemoryPhaseSampler {
+    enabled: bool,
+    stop: Arc<AtomicBool>,
+    max_self_rss_kib: Arc<AtomicUsize>,
+    max_child_rss_kib: AtomicUsize,
+    handle: Option<JoinHandle<()>>,
+    started: Instant,
+}
+
+impl MemoryPhaseSampler {
+    fn start(
+        context: &TagContext,
+        trial_name: &str,
+        chrom: &str,
+        ordinal: usize,
+        phase: &str,
+    ) -> Self {
+        let enabled = memory_profile_log().is_some();
+        emit_memory_phase_event(context, trial_name, chrom, ordinal, phase, "start", None);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let max_self_rss_kib = Arc::new(AtomicUsize::new(current_rss_kib().unwrap_or(0)));
+        let handle = if enabled {
+            let stop = stop.clone();
+            let max_self_rss_kib = max_self_rss_kib.clone();
+            Some(thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if let Some(rss) = current_rss_kib() {
+                        update_max(&max_self_rss_kib, rss);
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+                if let Some(rss) = current_rss_kib() {
+                    update_max(&max_self_rss_kib, rss);
+                }
+            }))
+        } else {
+            None
+        };
+
+        Self {
+            enabled,
+            stop,
+            max_self_rss_kib,
+            max_child_rss_kib: AtomicUsize::new(0),
+            handle,
+            started: Instant::now(),
+        }
+    }
+
+    fn observe_child(&self, pid: u32) {
+        if !self.enabled {
+            return;
+        }
+        if let Some(rss) = process_rss_kib(pid) {
+            update_max(&self.max_child_rss_kib, rss);
+        }
+    }
+
+    fn finish(
+        mut self,
+        context: &TagContext,
+        trial_name: &str,
+        chrom: &str,
+        ordinal: usize,
+        phase: &str,
+        detail: Option<&str>,
+    ) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+
+        let detail = format!(
+            "duration_ms={} max_self_rss_kib={} max_child_rss_kib={}{}",
+            elapsed_ms(self.started),
+            self.max_self_rss_kib.load(Ordering::Relaxed),
+            self.max_child_rss_kib.load(Ordering::Relaxed),
+            detail
+                .map(|detail| format!(" {detail}"))
+                .unwrap_or_default()
+        );
+        emit_memory_phase_event(
+            context,
+            trial_name,
+            chrom,
+            ordinal,
+            phase,
+            "end",
+            Some(&detail),
+        );
+    }
+}
+
+fn update_max(max: &AtomicUsize, value: usize) {
+    let mut current = max.load(Ordering::Relaxed);
+    while value > current {
+        match max.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct RowStats {
     tiles: usize,
     rows: usize,
     row_bytes: usize,
+    sortedness_checked: bool,
+    out_of_order_rows: usize,
+    first_out_of_order_row: Option<usize>,
 }
 
 fn row_stats(rows_by_tile: &RowsByTile) -> RowStats {
@@ -645,15 +799,60 @@ fn row_stats(rows_by_tile: &RowsByTile) -> RowStats {
             .flat_map(|rows| rows.iter())
             .map(|row| row.len())
             .sum(),
+        ..RowStats::default()
     }
 }
 
 fn current_rss_kib() -> Option<usize> {
-    let status = fs::read_to_string("/proc/self/status").ok()?;
+    process_rss_kib(std::process::id())
+}
+
+fn process_rss_kib(pid: u32) -> Option<usize> {
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     status.lines().find_map(|line| {
         let value = line.strip_prefix("VmRSS:")?;
         value.split_whitespace().next()?.parse().ok()
     })
+}
+
+fn sortedness_profile_enabled() -> bool {
+    *SORTEDNESS_PROFILE.get_or_init(|| {
+        matches!(
+            std::env::var("VARDICT_E2E_SWEEP_SORTEDNESS_PROFILE"),
+            Ok(value) if value == "1" || value.eq_ignore_ascii_case("true")
+        )
+    })
+}
+
+fn sort_buffer_size() -> &'static str {
+    SORT_BUFFER_SIZE
+        .get_or_init(|| {
+            std::env::var("VARDICT_E2E_SWEEP_SORT_BUFFER_SIZE")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_SORT_BUFFER_SIZE.to_string())
+        })
+        .as_str()
+}
+
+fn observe_sortedness(
+    stats: &mut RowStats,
+    previous: &mut Option<(String, String)>,
+    region: &str,
+    row: &str,
+) {
+    if !stats.sortedness_checked {
+        return;
+    }
+    if let Some((previous_region, previous_row)) = previous.as_ref() {
+        if (previous_region.as_str(), previous_row.as_str()) > (region, row) {
+            stats.out_of_order_rows += 1;
+            if stats.first_out_of_order_row.is_none() {
+                stats.first_out_of_order_row = Some(stats.rows + 1);
+            }
+        }
+    }
+    *previous = Some((region.to_string(), row.to_string()));
 }
 
 fn emit_chunk_heartbeat(
@@ -1059,7 +1258,7 @@ fn run_spooled_chunk_diff(
     );
     let java_started = Instant::now();
     let java_stats = spool
-        .spool_java_tsv_chunk(&context.tag, chrom, &context.config_name)
+        .spool_java_tsv_chunk(context, trial_name, chrom, ordinal)
         .map_err(|error| {
             *final_status = "failed";
             format!(
@@ -1128,6 +1327,7 @@ fn run_spooled_chunk_diff(
         rust_stats,
         None,
     );
+    let diff_phase = MemoryPhaseSampler::start(context, trial_name, chrom, ordinal, "diff-spooled");
     let diff_started = Instant::now();
     let failures = spool.diff_sorted(&context.config_name).map_err(|error| {
         *final_status = "failed";
@@ -1137,6 +1337,14 @@ fn run_spooled_chunk_diff(
         )
     })?;
     timings.diff_ms = Some(elapsed_ms(diff_started));
+    diff_phase.finish(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "diff-spooled",
+        Some(&format!("mismatches={}", failures.len())),
+    );
     emit_chunk_heartbeat(
         context,
         trial_name,
@@ -1295,17 +1503,27 @@ impl ChunkSpool {
         })
     }
 
-    fn spool_java_tsv_chunk(&self, tag: &str, chrom: &str, config: &str) -> io::Result<RowStats> {
-        let path = java_tsv_path(tag, chrom, config);
+    fn spool_java_tsv_chunk(
+        &self,
+        context: &TagContext,
+        trial_name: &str,
+        chrom: &str,
+        ordinal: usize,
+    ) -> io::Result<RowStats> {
+        let path = java_tsv_path(&context.tag, chrom, &context.config_name);
         let decoder = zstd::stream::read::Decoder::new(File::open(&path)?)?;
         let mut reader = BufReader::new(decoder);
         let mut writer = BufWriter::new(File::create(&self.java_unsorted)?);
         let mut stats = RowStats {
             tiles: self.buckets.tiles.len(),
+            sortedness_checked: sortedness_profile_enabled(),
             ..RowStats::default()
         };
+        let mut previous_record = None;
         let mut region_index = None;
         let mut line = String::new();
+        let spool_phase =
+            MemoryPhaseSampler::start(context, trial_name, chrom, ordinal, "fixture-spool");
 
         loop {
             line.clear();
@@ -1344,6 +1562,7 @@ impl ChunkSpool {
             };
 
             if self.buckets.tile_index_for_region(region)?.is_some() {
+                observe_sortedness(&mut stats, &mut previous_record, region, &line);
                 write_spool_record(&mut writer, region, &line)?;
                 stats.rows += 1;
                 stats.row_bytes += line.len();
@@ -1351,7 +1570,27 @@ impl ChunkSpool {
         }
 
         writer.flush()?;
-        sort_spool_file(&self.java_unsorted, &self.java_sorted, &self.root)?;
+        spool_phase.finish(
+            context,
+            trial_name,
+            chrom,
+            ordinal,
+            "fixture-spool",
+            Some(&format!(
+                "rows={} row_bytes={} sortedness_checked={} out_of_order_rows={}",
+                stats.rows, stats.row_bytes, stats.sortedness_checked, stats.out_of_order_rows
+            )),
+        );
+        sort_spool_file(
+            &self.java_unsorted,
+            &self.java_sorted,
+            &self.root,
+            context,
+            trial_name,
+            chrom,
+            ordinal,
+            "fixture-sort",
+        )?;
         Ok(stats)
     }
 
@@ -1359,8 +1598,23 @@ impl ChunkSpool {
         File::create(&self.rust_unsorted).map(BufWriter::new)
     }
 
-    fn sort_rust(&self) -> io::Result<()> {
-        sort_spool_file(&self.rust_unsorted, &self.rust_sorted, &self.root)
+    fn sort_rust_profiled(
+        &self,
+        context: &TagContext,
+        trial_name: &str,
+        chrom: &str,
+        ordinal: usize,
+    ) -> io::Result<()> {
+        sort_spool_file(
+            &self.rust_unsorted,
+            &self.rust_sorted,
+            &self.root,
+            context,
+            trial_name,
+            chrom,
+            ordinal,
+            "rust-sort",
+        )
     }
 
     fn diff_sorted(&self, config: &str) -> io::Result<Vec<TileMismatch>> {
@@ -1497,6 +1751,7 @@ struct RustChunkSpool {
     buckets: ChunkRowBuckets,
     region_index: Option<usize>,
     stats: RowStats,
+    previous_record: Option<(String, String)>,
     error: Option<String>,
 }
 
@@ -1508,8 +1763,10 @@ impl RustChunkSpool {
             region_index: None,
             stats: RowStats {
                 tiles: spool.buckets.tiles.len(),
+                sortedness_checked: sortedness_profile_enabled(),
                 ..RowStats::default()
             },
+            previous_record: None,
             error: None,
         })
     }
@@ -1546,6 +1803,7 @@ impl RustChunkSpool {
         };
 
         if self.buckets.tile_index_for_region(region)?.is_some() {
+            observe_sortedness(&mut self.stats, &mut self.previous_record, region, line);
             write_spool_record(&mut self.writer, region, line)?;
             self.stats.rows += 1;
             self.stats.row_bytes += line.len();
@@ -1586,22 +1844,57 @@ fn write_spool_record(writer: &mut BufWriter<File>, region: &str, row: &str) -> 
     writer.write_all(b"\n")
 }
 
-fn sort_spool_file(input: &Path, output: &Path, temp_dir: &Path) -> io::Result<()> {
-    let output_status = Command::new("sort")
+fn sort_spool_file(
+    input: &Path,
+    output: &Path,
+    temp_dir: &Path,
+    context: &TagContext,
+    trial_name: &str,
+    chrom: &str,
+    ordinal: usize,
+    phase: &str,
+) -> io::Result<()> {
+    let phase_sampler = MemoryPhaseSampler::start(context, trial_name, chrom, ordinal, phase);
+    let mut child = Command::new("sort")
         .env("LC_ALL", "C")
         .env("TMPDIR", temp_dir)
+        .arg(format!("--buffer-size={}", sort_buffer_size()))
+        .arg("--parallel=1")
+        .arg(format!("--temporary-directory={}", temp_dir.display()))
         .arg(input)
         .arg("-o")
         .arg(output)
-        .status()?;
-    if output_status.success() {
-        Ok(())
-    } else {
-        Err(invalid_data(format!(
-            "sort failed for {} with status {output_status}",
-            input.display()
-        )))
+        .spawn()?;
+    loop {
+        phase_sampler.observe_child(child.id());
+        if let Some(output_status) = child.try_wait()? {
+            phase_sampler.finish(
+                context,
+                trial_name,
+                chrom,
+                ordinal,
+                phase,
+                Some(&format!(
+                    "sort_buffer_size={} sort_parallel=1 input_bytes={} output_bytes={}",
+                    sort_buffer_size(),
+                    file_len(input).unwrap_or(0),
+                    file_len(output).unwrap_or(0)
+                )),
+            );
+            if output_status.success() {
+                return Ok(());
+            }
+            return Err(invalid_data(format!(
+                "sort failed for {} with status {output_status}",
+                input.display()
+            )));
+        }
+        thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn file_len(path: &Path) -> io::Result<u64> {
+    Ok(fs::metadata(path)?.len())
 }
 
 fn split_spool_record(line: &str) -> io::Result<(&str, &str)> {
@@ -1695,6 +1988,7 @@ fn run_rust_chunk(
             rows.push_owned_line(line);
         },
     )));
+    let rust_phase = MemoryPhaseSampler::start(context, trial_name, chrom, ordinal, "rust-simple");
     emit_chunk_heartbeat(
         context,
         trial_name,
@@ -1710,6 +2004,7 @@ fn run_rust_chunk(
         simple_mode.not_parallel();
     }
     emit_chunk_heartbeat(context, trial_name, chrom, ordinal, "rust-simple-end", None);
+    rust_phase.finish(context, trial_name, chrom, ordinal, "rust-simple", None);
 
     GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Err);
     let rows = match Arc::try_unwrap(rows) {
@@ -1745,8 +2040,8 @@ fn run_rust_chunk_to_spool(
             rows.push_owned_line(line);
         },
     )));
-    let _budget_guard = super::common::thread_budget()
-        .acquire(super::common::config_budget_cost(&context.scope_config));
+    let rust_phase =
+        MemoryPhaseSampler::start(context, trial_name, chrom, ordinal, "rust-simple-spooled");
     emit_chunk_heartbeat(
         context,
         trial_name,
@@ -1769,6 +2064,14 @@ fn run_rust_chunk_to_spool(
         "rust-simple-end",
         Some("mode=disk-spool"),
     );
+    rust_phase.finish(
+        context,
+        trial_name,
+        chrom,
+        ordinal,
+        "rust-simple-spooled",
+        None,
+    );
 
     GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Err);
     let rows = match Arc::try_unwrap(rows) {
@@ -1779,7 +2082,7 @@ fn run_rust_chunk_to_spool(
         }
     };
     let stats = rows.finish()?;
-    spool.sort_rust()?;
+    spool.sort_rust_profiled(context, trial_name, chrom, ordinal)?;
     Ok(stats)
 }
 

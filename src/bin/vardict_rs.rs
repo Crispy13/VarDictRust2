@@ -36,9 +36,6 @@ struct Cli {
     #[arg(short = 'r')]
     minr: Option<i32>,
 
-    #[arg(short = 'p')]
-    pileup: bool,
-
     #[arg(short = 'q')]
     goodq: Option<f64>,
 
