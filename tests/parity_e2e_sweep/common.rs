@@ -22,7 +22,9 @@
 //! - `VARDICT_E2E_SWEEP_SORTEDNESS_PROFILE=true` adds opt-in row sortedness counters to memory
 //!   profile lines; it is diagnostic-only.
 //! - `VARDICT_E2E_SWEEP_SORT_BUFFER_SIZE=<size>` overrides the disk-backed comparator's GNU
-//!   sort buffer cap. The default is intentionally bounded to keep CM-PILEUP harness RSS stable.
+//!   sort buffer cap. The default is intentionally bounded to keep CM-PILEUP Rust-sort RSS stable.
+//!   Canonical CM-PILEUP Java fixtures are generated sorted-by-default and must carry matching
+//!   `.chunks.json` provenance before the harness skips fixture-sort.
 //! - `CI=true` converts missing-cache handling into a hard panic instead of a local skip.
 //!
 //! Run with:
@@ -1116,6 +1118,45 @@ fn java_tsv_path(tag: &str, chrom: &str, config: &str) -> PathBuf {
         .join(format!("{tag}_{chrom}.tsv.zst"))
 }
 
+fn java_chunks_path(tag: &str, chrom: &str, config: &str) -> PathBuf {
+    sweep_fixture_root()
+        .join("output")
+        .join(config_path_segment(config))
+        .join(chrom)
+        .join(format!("{tag}_{chrom}.chunks.json"))
+}
+
+fn requires_presorted_java_fixture(config: &str) -> bool {
+    config == "CM-PILEUP"
+}
+
+fn validate_presorted_java_fixture(tag: &str, chrom: &str, config: &str) -> io::Result<()> {
+    let path = java_chunks_path(tag, chrom, config);
+    let payload: Value = serde_json::from_reader(File::open(&path)?).map_err(|error| {
+        invalid_data(format!(
+            "Failed to parse CM-PILEUP fixture provenance {}: {error}",
+            path.display()
+        ))
+    })?;
+    let output_order = payload.get("output_order").ok_or_else(|| {
+        invalid_data(format!(
+            "CM-PILEUP fixture {} is missing sorted output provenance; regenerate with scripts/gen_e2e_sweep_golden.sh --config CM-PILEUP --force before running the harness",
+            path.display()
+        ))
+    })?;
+    let mode = output_order.get("mode").and_then(Value::as_str);
+    let key = output_order.get("key").and_then(Value::as_str);
+    let lc_all = output_order.get("lc_all").and_then(Value::as_str);
+    if mode == Some("sorted") && key == Some("Region<TAB>row") && lc_all == Some("C") {
+        Ok(())
+    } else {
+        Err(invalid_data(format!(
+            "CM-PILEUP fixture {} has incompatible output_order provenance; expected mode=sorted key=Region<TAB>row lc_all=C",
+            path.display()
+        )))
+    }
+}
+
 fn use_disk_backed_diff(config: &Configuration) -> bool {
     config.do_pileup
 }
@@ -1510,10 +1551,19 @@ impl ChunkSpool {
         chrom: &str,
         ordinal: usize,
     ) -> io::Result<RowStats> {
+        let presorted_fixture = requires_presorted_java_fixture(&context.config_name);
+        if presorted_fixture {
+            validate_presorted_java_fixture(&context.tag, chrom, &context.config_name)?;
+        }
         let path = java_tsv_path(&context.tag, chrom, &context.config_name);
         let decoder = zstd::stream::read::Decoder::new(File::open(&path)?)?;
         let mut reader = BufReader::new(decoder);
-        let mut writer = BufWriter::new(File::create(&self.java_unsorted)?);
+        let java_spool_path = if presorted_fixture {
+            &self.java_sorted
+        } else {
+            &self.java_unsorted
+        };
+        let mut writer = BufWriter::new(File::create(java_spool_path)?);
         let mut stats = RowStats {
             tiles: self.buckets.tiles.len(),
             sortedness_checked: sortedness_profile_enabled(),
@@ -1577,10 +1627,17 @@ impl ChunkSpool {
             ordinal,
             "fixture-spool",
             Some(&format!(
-                "rows={} row_bytes={} sortedness_checked={} out_of_order_rows={}",
-                stats.rows, stats.row_bytes, stats.sortedness_checked, stats.out_of_order_rows
+                "rows={} row_bytes={} sortedness_checked={} out_of_order_rows={} presorted_fixture={}",
+                stats.rows,
+                stats.row_bytes,
+                stats.sortedness_checked,
+                stats.out_of_order_rows,
+                presorted_fixture
             )),
         );
+        if presorted_fixture {
+            return Ok(stats);
+        }
         sort_spool_file(
             &self.java_unsorted,
             &self.java_sorted,

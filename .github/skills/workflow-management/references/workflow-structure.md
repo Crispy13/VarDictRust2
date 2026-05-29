@@ -11,6 +11,8 @@ The current workflow agent set lives under `.github/agents/`. Each agent file ca
 | File | Notes |
 |------|-------|
 | `orchestrator.agent.md` | Main routing agent for the parity workflow. |
+| `cli-orchestrator.agent.md` | Copilot CLI-oriented orchestration baseline. |
+| `opt-orchestrator.agent.md` | Optimization-oriented orchestration agent. |
 | `module-analyst.agent.md` | Analysis agent for module-level diagnosis and planning. |
 | `port-engineer.agent.md` | Implementation agent for focused code changes. |
 | `parity-verifier.agent.md` | Verification agent for parity and validation steps. |

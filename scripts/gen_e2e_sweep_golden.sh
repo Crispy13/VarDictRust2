@@ -68,6 +68,8 @@ Notes:
   - The wrapper keeps cache fingerprints in tmp/sweep_fixtures/manifest.json.
   - Unknown configs are validated by scripts/sweep_fixtures_parallel.py.
   - Wrapper-level "default" maps to Python's legacy no-flag default layout.
+  - CM-PILEUP canonical TSV fixtures are sorted during generation and old unsorted
+    CM-PILEUP caches must be regenerated before the parity_e2e_sweep harness can use them.
     - --somatic writes cache_entries under {config}:somatic:{tag}.
 EOF
 }

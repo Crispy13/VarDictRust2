@@ -92,6 +92,29 @@ class SweepFixturesChunkParallelTest(unittest.TestCase):
             self.assertEqual(payload["num_chunks"], 3)
             self.assertFalse(base.output_staging_dir(fixture.output_root, None, fixture.shard).exists())
 
+    def test_cm_pileup_parallel_chunk_output_is_sorted_before_promotion(self) -> None:
+        with self.chunk_parallel_fixture() as fixture:
+            with mock.patch.dict(os.environ, {"REGION_OUTPUT": "1"}, clear=False):
+                result = fixture.run(chunk_workers=3, config_name="CM-PILEUP")
+            output_path, chunks_path = base.shard_output_paths(
+                base.output_dir(fixture.output_root, "CM-PILEUP", fixture.shard.chrom),
+                fixture.shard.tag,
+                fixture.shard.chrom,
+            )
+
+            self.assertEqual(result.status, "success", result.error)
+            self.assertEqual(
+                output_path.read_bytes(),
+                b"chr1:0-10\tchunk-1\nchr1:20-30\tchunk-2\nchr1:40-50\tchunk-0\n",
+            )
+
+            payload = json.loads(chunks_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["output_order"]["mode"], "sorted")
+            self.assertEqual(payload["output_order"]["key"], "Region<TAB>row")
+            self.assertEqual(payload["num_chunks"], 1)
+            self.assertEqual(payload["source_num_chunks"], 3)
+            self.assertEqual([chunk["idx"] for chunk in payload["source_chunks"]], [0, 1, 2])
+
     def test_parallel_chunk_failure_preserves_staging_and_skips_final_outputs(self) -> None:
         with self.chunk_parallel_fixture() as fixture:
             with mock.patch.dict(os.environ, {"FAIL_CHUNK": "1"}, clear=False):
@@ -155,6 +178,12 @@ class ChunkParallelFixture:
                 if os.environ.get("FAIL_CHUNK") == str(chunk_idx):
                     sys.stderr.write(f"fail-{chunk_idx}\\n")
                     sys.exit(7)
+                if os.environ.get("REGION_OUTPUT") == "1":
+                    starts = {0: 40, 1: 0, 2: 20}
+                    start = starts.get(chunk_idx, chunk_idx * 20)
+                    sys.stdout.write(f"chr1:{start}-{start + 10}\\tchunk-{chunk_idx}\\n")
+                    sys.stderr.write(f"log-{chunk_idx}\\n")
+                    sys.exit(0)
                 sys.stdout.write(f"chunk-{chunk_idx}\\n")
                 sys.stderr.write(f"log-{chunk_idx}\\n")
                 """
@@ -170,7 +199,7 @@ class ChunkParallelFixture:
     def __exit__(self, exc_type, exc, tb) -> None:
         self._tempdir.cleanup()
 
-    def run(self, *, chunk_workers: int) -> base.ShardResult:
+    def run(self, *, chunk_workers: int, config_name: str | None = None) -> base.ShardResult:
         with mock.patch.object(base, "VARDICT_BIN_REL", self.vardict_rel), mock.patch.object(
             base,
             "compress_path",
@@ -180,7 +209,7 @@ class ChunkParallelFixture:
                 shard=self.shard,
                 force=False,
                 output_only=True,
-                config_name=None,
+                config_name=config_name,
                 config_flags=(),
                 root=self.root,
                 output_root=self.output_root,

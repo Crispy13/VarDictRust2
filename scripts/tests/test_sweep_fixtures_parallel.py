@@ -86,6 +86,39 @@ class SweepFixturesParallelSmokeTest(unittest.TestCase):
         self.assertEqual(guard.non_empty_count, 0)
         self.assertEqual(sweep_fixtures_parallel.output_guard_failures(guard), [])
 
+    def test_cm_pileup_final_output_is_sorted_by_region_and_row(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            output = Path(root_dir) / "hg002_1.tsv"
+            output.write_bytes(
+                b"1:20-30\tb\n"
+                b"1:10-20\tc\n"
+                b"1:10-20\ta\n"
+            )
+
+            output_order = sweep_fixtures_parallel.sort_final_output_if_required(
+                output,
+                "CM-PILEUP",
+            )
+
+            self.assertIsNotNone(output_order)
+            self.assertEqual(output_order["mode"], "sorted")
+            self.assertEqual(output_order["key"], "Region<TAB>row")
+            self.assertEqual(output.read_bytes(), b"1:10-20\ta\n1:10-20\tc\n1:20-30\tb\n")
+
+    def test_non_cm_pileup_final_output_order_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            output = Path(root_dir) / "hg002_1.tsv"
+            original = b"1:20-30\tb\n1:10-20\ta\n"
+            output.write_bytes(original)
+
+            output_order = sweep_fixtures_parallel.sort_final_output_if_required(
+                output,
+                "T1-01",
+            )
+
+            self.assertIsNone(output_order)
+            self.assertEqual(output.read_bytes(), original)
+
 
 if __name__ == "__main__":
     unittest.main()
