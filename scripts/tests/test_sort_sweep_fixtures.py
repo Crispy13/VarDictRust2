@@ -102,6 +102,61 @@ class SortSweepFixturesTest(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertFalse((fixture_root / "output" / "T1-01" / "1" / "hg002_1.tsv.zst.sort-work").exists())
 
+    def test_in_place_migration_updates_symlink_target_without_replacing_link(self) -> None:
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            target_root = root / "target"
+            target_dir = target_root / "output" / "T1-01" / "1"
+            target_dir.mkdir(parents=True)
+            plain = root / "input.tsv"
+            plain.write_text("1:20-30\tb\n1:10-20\ta\n", encoding="utf-8")
+            target_tsv = target_dir / "hg002_1.tsv.zst"
+            zstd_compress_plain(plain, target_tsv)
+            target_sidecar = target_dir / "hg002_1.chunks.json"
+            target_sidecar.write_text(
+                json.dumps(
+                    {
+                        "monolithic_md5": "0" * 32,
+                        "monolithic_bytes": 1,
+                        "num_chunks": 1,
+                        "chunk_size": 10000,
+                        "chunks": [{"idx": 0, "byte_range": [0, 1]}],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            fixture_root = root / "fixtures"
+            link_dir = fixture_root / "output" / "T1-01" / "1"
+            link_dir.mkdir(parents=True)
+            link_tsv = link_dir / "hg002_1.tsv.zst"
+            link_sidecar = link_dir / "hg002_1.chunks.json"
+            link_tsv.symlink_to(target_tsv)
+            link_sidecar.symlink_to(target_sidecar)
+
+            rc = sort_sweep_fixtures.main(
+                [
+                    "--fixture-root",
+                    str(fixture_root),
+                    "--configs",
+                    "T1-01",
+                    "--tags",
+                    "hg002",
+                    "--chroms",
+                    "1",
+                    "--in-place",
+                    "--sort-buffer-size",
+                    "1M",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertTrue(link_tsv.is_symlink())
+            self.assertTrue(link_sidecar.is_symlink())
+            self.assertEqual(zstd_read_text(target_tsv), "1:10-20\ta\n1:20-30\tb\n")
+            payload = json.loads(target_sidecar.read_text(encoding="utf-8"))
+            self.assertEqual(payload["output_order"]["mode"], "sorted")
+
     def test_cli_requires_explicit_write_mode(self) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "scripts.sort_sweep_fixtures", "--fixture-root", "tmp/does-not-matter"],

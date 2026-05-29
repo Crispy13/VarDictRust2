@@ -15,6 +15,7 @@ provided. Use ``--dry-run`` to inspect the selected scope.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -85,6 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="GNU sort --buffer-size value (default: VARDICT_SWEEP_FIXTURE_SORT_BUFFER_SIZE, "
         "VARDICT_E2E_SWEEP_SORT_BUFFER_SIZE, or 128M).",
+    )
+    parser.add_argument(
+        "--sort-compress-program",
+        default="zstd",
+        help="GNU sort --compress-program value for temporary runs (default: zstd; use empty string to disable).",
     )
     parser.add_argument(
         "--force",
@@ -208,21 +214,19 @@ def write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     os.replace(tmp_path, path)
 
 
-def decompress_to_plain(source_tsv: Path, plain_path: Path) -> None:
-    with plain_path.open("wb") as output:
-        subprocess.run(["zstd", "-dc", str(source_tsv)], stdout=output, check=True)
-
-
-def compress_plain(plain_path: Path, dest_tsv: Path) -> None:
-    subprocess.run(["zstd", "-q", "-f", str(plain_path), "-o", str(dest_tsv)], check=True)
+def writable_path(path: Path) -> Path:
+    if path.is_symlink():
+        return path.resolve(strict=True)
+    return path
 
 
 def sidecar_for_sorted_fixture(
     existing: dict[str, object],
-    plain_path: Path,
+    *,
+    monolithic_md5: str,
+    monolithic_bytes: int,
     output_order: dict[str, object],
 ) -> dict[str, object]:
-    monolithic_bytes = plain_path.stat().st_size
     chunks = existing.get("chunks")
     num_chunks = existing.get("num_chunks")
     total_wall = 0.0
@@ -239,14 +243,14 @@ def sidecar_for_sorted_fixture(
                 total_tiles += num_tiles
 
     payload = dict(existing)
-    payload["monolithic_md5"] = base.compute_file_md5(plain_path)
+    payload["monolithic_md5"] = monolithic_md5
     payload["monolithic_bytes"] = monolithic_bytes
     payload["num_chunks"] = 1
     payload["chunk_size"] = existing.get("chunk_size", monolithic_bytes)
     payload["chunks"] = [
         {
             "idx": 0,
-            "md5_raw": base.compute_file_md5(plain_path),
+            "md5_raw": monolithic_md5,
             "wall_s": total_wall,
             "num_tiles": total_tiles,
             "byte_range": [0, monolithic_bytes],
@@ -262,12 +266,137 @@ def sidecar_for_sorted_fixture(
     return payload
 
 
+def checked_wait(proc: subprocess.Popen[bytes], name: str) -> None:
+    return_code = proc.wait()
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, proc.args, stderr=f"{name} failed")
+
+
+def sort_stream_to_zstd(
+    source_tsv: Path,
+    dest_tsv: Path,
+    work_dir: Path,
+    *,
+    sort_buffer_size: str,
+    sort_compress_program: str | None,
+) -> tuple[dict[str, object], str, int]:
+    sort_env = os.environ.copy()
+    sort_env["LC_ALL"] = base.SORT_ENV
+    sort_env["TMPDIR"] = str(work_dir)
+    sort_cmd = [
+        "sort",
+        f"--buffer-size={sort_buffer_size}",
+        "--parallel=1",
+        f"--temporary-directory={work_dir}",
+    ]
+    if sort_compress_program:
+        sort_cmd.append(f"--compress-program={sort_compress_program}")
+
+    decompressor = subprocess.Popen(
+        ["zstd", "-dc", str(source_tsv)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    sorter = subprocess.Popen(
+        sort_cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=sort_env,
+    )
+    compressor = subprocess.Popen(
+        ["zstd", "-q", "-f", "-o", str(dest_tsv), "-"],
+        stdin=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert decompressor.stdout is not None
+    assert sorter.stdin is not None
+    assert sorter.stdout is not None
+    assert compressor.stdin is not None
+
+    header: bytes | None = None
+    region_index: int | None = None
+    row_count = 0
+    md5 = hashlib.md5()
+    byte_count = 0
+
+    def write_output(row: bytes) -> None:
+        nonlocal byte_count
+        md5.update(row)
+        byte_count += len(row)
+        compressor.stdin.write(row)
+
+    try:
+        for raw_line in decompressor.stdout:
+            row = raw_line.rstrip(b"\r\n")
+            if not row.strip():
+                continue
+            fields = row.split(b"\t")
+            if region_index is None:
+                detected_index = base.detect_region_column(fields)
+                if detected_index is None:
+                    raise ValueError(f"Could not locate Region column in {source_tsv}: {row!r}")
+                region_index = detected_index
+                if fields[region_index].lower() == b"region":
+                    header = row
+                    continue
+            if region_index >= len(fields):
+                raise ValueError(f"Missing Region column {region_index} in {source_tsv}: {row!r}")
+            sorter.stdin.write(fields[region_index])
+            sorter.stdin.write(b"\t")
+            sorter.stdin.write(row)
+            sorter.stdin.write(b"\n")
+            row_count += 1
+
+        sorter.stdin.close()
+        sorter.stdin = None
+        checked_wait(decompressor, "zstd decompress")
+
+        if header is not None:
+            write_output(header + b"\n")
+        for raw_line in sorter.stdout:
+            _region, separator, row = raw_line.partition(b"\t")
+            if not separator:
+                raise ValueError(f"Invalid sorted spool record without tab: {raw_line!r}")
+            write_output(row)
+
+        sorter.stdout.close()
+        sorter.stdout = None
+        checked_wait(sorter, "sort")
+        compressor.stdin.close()
+        compressor.stdin = None
+        checked_wait(compressor, "zstd compress")
+    except Exception:
+        for proc in (decompressor, sorter, compressor):
+            if proc.poll() is None:
+                proc.kill()
+        for proc in (decompressor, sorter, compressor):
+            proc.wait()
+        raise
+    finally:
+        for stream in (decompressor.stdout, decompressor.stderr, sorter.stdin, sorter.stdout, sorter.stderr, compressor.stdin, compressor.stderr):
+            if stream is not None:
+                stream.close()
+
+    output_order = {
+        "mode": "sorted",
+        "key": base.SORT_KEY,
+        "lc_all": base.SORT_ENV,
+        "sort_buffer_size": sort_buffer_size,
+        "sort_parallel": 1,
+        "sort_compress_program": sort_compress_program or None,
+        "rows": row_count,
+    }
+    return output_order, md5.hexdigest(), byte_count
+
+
 def migrate_fixture(
     fixture: FixturePath,
     *,
     source_output_root: Path,
     dest_output_root: Path,
     force: bool,
+    sort_compress_program: str | None,
 ) -> MigrationResult:
     started = time.monotonic()
     if not fixture.source_sidecar.is_file():
@@ -278,29 +407,37 @@ def migrate_fixture(
 
     dest_tsv = dest_output_root / fixture.relative_tsv
     dest_sidecar = sidecar_path(dest_tsv)
+    write_tsv = writable_path(dest_tsv)
+    write_sidecar = writable_path(dest_sidecar)
     dest_tsv.parent.mkdir(parents=True, exist_ok=True)
-    work_dir = dest_tsv.parent / f".{dest_tsv.name}.sort-work"
+    work_dir = write_tsv.parent / f".{write_tsv.name}.sort-work"
     if work_dir.exists():
         shutil.rmtree(work_dir)
     work_dir.mkdir(parents=True)
-    plain_path = work_dir / "fixture.tsv"
     sorted_tsv = work_dir / dest_tsv.name
     sorted_sidecar = work_dir / dest_sidecar.name
     try:
-        decompress_to_plain(fixture.source_tsv, plain_path)
-        output_order = base.sort_final_output_if_required(plain_path, fixture.config)
-        if output_order is None:
-            raise RuntimeError(f"Sorting was unexpectedly skipped for {fixture.source_tsv}")
-        compress_plain(plain_path, sorted_tsv)
-        payload = sidecar_for_sorted_fixture(existing_sidecar, plain_path, output_order)
+        output_order, monolithic_md5, monolithic_bytes = sort_stream_to_zstd(
+            fixture.source_tsv.resolve(strict=True),
+            sorted_tsv,
+            work_dir,
+            sort_buffer_size=base.fixture_sort_buffer_size(),
+            sort_compress_program=sort_compress_program,
+        )
+        payload = sidecar_for_sorted_fixture(
+            existing_sidecar,
+            monolithic_md5=monolithic_md5,
+            monolithic_bytes=monolithic_bytes,
+            output_order=output_order,
+        )
         write_json_atomic(sorted_sidecar, payload)
-        os.replace(sorted_tsv, dest_tsv)
-        os.replace(sorted_sidecar, dest_sidecar)
+        os.replace(sorted_tsv, write_tsv)
+        os.replace(sorted_sidecar, write_sidecar)
         return MigrationResult(
             fixture=fixture,
             status="sorted",
             rows=int(output_order["rows"]),
-            bytes=plain_path.stat().st_size,
+            bytes=monolithic_bytes,
             seconds=time.monotonic() - started,
         )
     finally:
@@ -351,10 +488,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.limit is not None:
         fixtures = fixtures[: args.limit]
 
-    print(f"Selected fixtures: {len(fixtures)}")
-    print(f"Source output root: {source_output_root}")
-    print(f"Destination output root: {dest_output_root}")
-    print(f"Mode: {'dry-run' if args.dry_run else 'in-place' if args.in_place else 'staged'}")
+    print(f"Selected fixtures: {len(fixtures)}", flush=True)
+    print(f"Source output root: {source_output_root}", flush=True)
+    print(f"Destination output root: {dest_output_root}", flush=True)
+    print(f"Mode: {'dry-run' if args.dry_run else 'in-place' if args.in_place else 'staged'}", flush=True)
     if args.dry_run:
         for fixture in fixtures:
             print(f"DRY-RUN {fixture.relative_tsv}")
@@ -369,6 +506,7 @@ def main(argv: list[str] | None = None) -> int:
             source_output_root=source_output_root,
             dest_output_root=dest_output_root,
             force=args.force,
+            sort_compress_program=args.sort_compress_program.strip() or None,
         )
         counts[result.status] = counts.get(result.status, 0) + 1
         detail = f" rows={result.rows} bytes={result.bytes} seconds={result.seconds:.3f}" if result.rows is not None else ""
