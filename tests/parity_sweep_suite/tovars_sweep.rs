@@ -173,6 +173,7 @@ fn parity_tovars_sweep() {
                 let max_read_length = data.max_read_length.unwrap_or(0);
                 let ref_coverage = &data.ref_coverage;
                 let insertion_variants = &data.insertion_variants;
+                let mut non_insertion_variants_order = data.non_insertion_variants_order;
                 let mut non_insertion_variants = data.non_insertion_variants;
                 let duprate = data.duprate;
 
@@ -182,6 +183,7 @@ fn parity_tovars_sweep() {
                     ref_map,
                     ref_coverage,
                     insertion_variants,
+                    &mut non_insertion_variants_order,
                     &mut non_insertion_variants,
                     duprate,
                 );

@@ -24,7 +24,19 @@ All other tasks should be delegated to the default subagent. The delegation prom
 So the core question to decide whether to delegate or not is: "Is this task for planning, research or orchestration?" If yes, do it yourself. If no, delegate.
 
 ## Rules
-### 1. Model Selection for Subagent
+### 1. Do it yourself is not literally "do it yourself for everything". You still should follow your CLI setups.
+Agent does many things, file reading, web searching, executing commands, etc. Copilot CLI has been set to work the tasks properly, for example there is `Explore` agent for codebase analysis.
+
+So "Do it yourself" means "You manage it", instead of delegating the management of the tasks to subagents.
+
+#### Examples
+When we plan a new feature:
+Planning needs reading files, executing commands, searching webs. And it's your task.
+- Delegating the tasks to a subagent, so it will delegate file reading to Explore agent, etc. -> NO
+- You read files, execute commands. -> NO
+- Delegate file reading to `Explore` agent, command execution to `Task` agent, asking constructive critic to `Rubber-duck` agent. -> YES
+
+### 2. Model Selection for Subagent
 Most of the time, you will use GPT-5.4 (high) for delegation. Only use GPT-5.4 mini (high) for tasks that are very simple and straightforward, and do not require thinking at all.
 - **Default**: GPT-5.4 (high)
 - **Simple tasks not requring any thinking, just following instructions as it is** (e.g. "Run this command and return result", ): GPT-5.4 mini (high)

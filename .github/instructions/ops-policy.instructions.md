@@ -36,3 +36,4 @@ applyTo: '**'
     Use CLI's `rubber-duck` mode instead.
 - **plan-duck**  
     Use CLI's `plan` mode instead.
+

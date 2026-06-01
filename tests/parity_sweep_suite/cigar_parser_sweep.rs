@@ -151,6 +151,7 @@ fn parity_cigar_parser_sweep() {
                     &HashSet::new(),
                     0,
                     HashMap::new(),
+                    Default::default(),
                     HashMap::new(),
                     HashMap::new(),
                     HashMap::new(),
