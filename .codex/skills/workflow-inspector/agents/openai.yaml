@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workflow Inspector"
+  short_description: "Inspect VarDict workflow state"
+  default_prompt: "Use $workflow-inspector to report the current VarDict workflow state and missing checkpoints without changing it."

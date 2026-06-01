@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mismatch Repair"
+  short_description: "Repair diagnosed parity mismatches"
+  default_prompt: "Use $mismatch-repair to fix a diagnosed VarDictJava versus Rust parity mismatch in the Rust logic."

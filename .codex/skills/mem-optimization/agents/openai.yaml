@@ -1,0 +1,4 @@
+interface:
+  display_name: "Memory Optimization"
+  short_description: "Profile and reduce VarDict-rs memory"
+  default_prompt: "Use $mem-optimization to diagnose VarDict-rs RSS or allocation hotspots while preserving parity."

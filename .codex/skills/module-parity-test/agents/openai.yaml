@@ -1,0 +1,4 @@
+interface:
+  display_name: "Module Parity Test"
+  short_description: "Run module-level Java/Rust parity"
+  default_prompt: "Use $module-parity-test to verify a ported module against Java golden JSONL fixtures."

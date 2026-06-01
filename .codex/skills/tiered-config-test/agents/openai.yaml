@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tiered Config Test"
+  short_description: "Run graduated config parity gates"
+  default_prompt: "Use $tiered-config-test to choose and run the next VarDict parity config coverage tier."

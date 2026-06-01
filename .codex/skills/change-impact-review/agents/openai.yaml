@@ -1,0 +1,4 @@
+interface:
+  display_name: "Change Impact Review"
+  short_description: "Classify performance risk after changes"
+  default_prompt: "Use $change-impact-review to classify the performance impact of the current changes."

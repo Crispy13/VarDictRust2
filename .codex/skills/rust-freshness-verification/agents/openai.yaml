@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rust Freshness Verification"
+  short_description: "Verify current Rust and crate facts"
+  default_prompt: "Use $rust-freshness-verification to verify version-sensitive Rust or crate claims before answering."

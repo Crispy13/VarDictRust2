@@ -1,0 +1,4 @@
+interface:
+  display_name: "Config E2E Diagnosis"
+  short_description: "Diagnose full config parity failures"
+  default_prompt: "Use $config-e2e-diagnosis to diagnose an active config E2E parity failure from the latest gate artifact."

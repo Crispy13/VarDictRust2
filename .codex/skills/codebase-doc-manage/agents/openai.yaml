@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codebase Doc Manage"
+  short_description: "Maintain VarDict codebase docs cache"
+  default_prompt: "Use $codebase-doc-manage to orient on a VarDict module and update the codebase documentation cache."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Performance Optimization"
+  short_description: "Profile and optimize VarDict-rs performance"
+  default_prompt: "Use $perf-optimization to diagnose a VarDict-rs runtime regression and propose a measured optimization plan."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Logic Parity Audit"
+  short_description: "Audit Rust logic against Java source"
+  default_prompt: "Use $logic-parity-audit to compare a ported Rust module against the Java source method by method."
