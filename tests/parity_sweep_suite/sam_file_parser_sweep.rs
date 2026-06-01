@@ -35,9 +35,9 @@ fn collect_sam_file_parser_result(
     reference_resource: Arc<ReferenceResource>,
 ) -> SamFileParserResult {
     let initial_data = InitialData::new(
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
         HashMap::new(),
         HashMap::new(),
     );

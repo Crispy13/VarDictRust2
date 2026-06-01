@@ -14,6 +14,7 @@ use crate::data::{
     CurrentSegment, InitialData, Match, PositionMap, RealignedVariationData, Region, SVStructures,
     Sclip, Side, SortPositionSclip, Variation, VariationMap, VariationMapSV,
 };
+use crate::java_hashmap_order::java_hashmap_i32_order_from_keys;
 use crate::reference::{Reference, ReferenceResource, ReferenceSequenceMap};
 use crate::scope::{GlobalReadOnlyScope, Scope, VariantPrinter};
 use crate::utils::{
@@ -690,25 +691,8 @@ pub fn fill_and_sort_tmp_sv(
     tmp
 }
 
-fn java_hashmap_capacity_for_len(len: usize) -> usize {
-    let mut capacity = 16usize;
-    while len > (capacity * 3) / 4 {
-        capacity *= 2;
-    }
-    capacity
-}
-
-fn java_hashmap_bucket_index_i32(key: i32, capacity: usize) -> usize {
-    let hash = (key as u32) ^ ((key as u32) >> 16);
-    (hash as usize) & (capacity - 1)
-}
-
 fn java_hashmap_i32_keys(map: &HashMap<i32, Sclip>) -> Vec<i32> {
-    let mut keys: Vec<i32> = map.keys().copied().collect();
-    keys.sort();
-    let capacity = java_hashmap_capacity_for_len(map.len());
-    keys.sort_by_key(|key| java_hashmap_bucket_index_i32(*key, capacity));
-    keys
+    java_hashmap_i32_order_from_keys(map.keys().copied())
 }
 
 // ─── Cluster B–D stubs ──────────────────────────────────────────────
