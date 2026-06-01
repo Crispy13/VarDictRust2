@@ -9,6 +9,7 @@ use regex::Regex;
 
 use crate::config::{Configuration, SVFLANK};
 use crate::data::{AlignedVarsData, PositionMap, Region, Variant, VariationMap, Vars};
+use crate::java_hashmap_order::java_hashmap_i32_order_from_keys;
 use crate::patterns::{
     AMP_ATGC, ANY_SV, BEGIN_DIGITS, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_CARET, CARET_ATGNC,
     DUP_NUM, HASH_GROUP_CARET_GROUP, INV_NUM, SOME_SV_NUMBERS,
@@ -1366,11 +1367,9 @@ pub fn process(
 
     let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
 
-    // Collect and sort positions for deterministic iteration.
-    // Java uses HashMap for outer map — iteration order is JVM-dependent.
-    // Sort ascending so position+1 mutation from createInsertion is processed correctly.
-    let mut positions: Vec<i32> = non_insertion_variants.keys().copied().collect();
-    positions.sort();
+    // Java iterates the outer HashMap directly. Use current-key bucket order so
+    // position+1 mutations from createInsertion see the same visit order surface.
+    let positions = java_hashmap_i32_order_from_keys(non_insertion_variants.keys().copied());
 
     for &position in &positions {
         // Trap T28: error-and-continue — wrap in closure that can handle errors

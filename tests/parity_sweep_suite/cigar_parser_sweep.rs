@@ -122,9 +122,9 @@ fn parity_cigar_parser_sweep() {
                 let reference = Arc::new(reference);
 
                 let initial_data = InitialData::new(
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
                     HashMap::new(),
                     HashMap::new(),
                 );
@@ -150,10 +150,9 @@ fn parity_cigar_parser_sweep() {
                     &reference,
                     &HashSet::new(),
                     0,
-                    HashMap::new(),
                     Default::default(),
-                    HashMap::new(),
-                    HashMap::new(),
+                    Default::default(),
+                    Default::default(),
                     HashMap::new(),
                     HashMap::new(),
                     0, // NOTE: total_reads=0 - real value from RecordPreprocessor not available in sweep. Affects duprate only.
