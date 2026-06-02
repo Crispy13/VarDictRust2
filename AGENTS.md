@@ -23,5 +23,11 @@
 - Audit: `.github/workflows/ignore-audit.yml` runs nightly at 03:30 UTC. Flags any passing ignored test not in the allowlist.
 - When a previously-failing ignored test starts passing, either remove `#[ignore]` or add to allowlist with justification.
 
-## Terminal Usage
-- never emit exit at the end of a sync terminal command. It causes agents to wait forever even after the command completes.
+## Delegation of Tasks
+Delegate simple tasks to subagent whenever possible.
+
+- Simple Tasks (GPT 5.4 mini high)
+    - Terminal execution 
+    - Reading files
+    - Searching web
+    - Writing without deep reasoning

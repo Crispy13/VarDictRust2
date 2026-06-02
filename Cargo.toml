@@ -61,3 +61,7 @@ harness = false
 [[test]]
 name = "parity_e2e_sweep"
 harness = false
+
+[[bench]]
+name = "cigar_parser_bytes"
+harness = false

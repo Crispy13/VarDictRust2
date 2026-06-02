@@ -1406,6 +1406,88 @@ pub fn process(
     }
 }
 
+/// Incremental simple-mode entry point.
+///
+/// This preserves the Java HashMap-position walk from ToVarsBuilder.process(),
+/// but hands completed Vars containers to the caller immediately so simple mode
+/// does not retain the full region's AlignedVarsData before post-processing.
+#[allow(clippy::too_many_arguments)]
+pub fn process_incremental<F>(
+    max_read_length: i32,
+    region: &Region,
+    ref_map: &ReferenceSequenceMap,
+    ref_coverage: &PositionMap<i32>,
+    insertion_variants: &PositionMap<VariationMap>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    duprate: f64,
+    mut on_position: F,
+) -> i32
+where
+    F: FnMut(i32, Vars),
+{
+    let (conf, has_amplicon_based_calling) = GlobalReadOnlyScope::with_instance(|scope| {
+        (scope.conf.clone(), scope.amplicon_based_calling.is_some())
+    });
+
+    if conf.y {
+        eprintln!(
+            "Current segment: {}:{}-{} ",
+            region.chr, region.start, region.end
+        );
+    }
+
+    let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
+
+    // Java iterates the outer HashMap directly. Use current-key bucket order so
+    // position+1 mutations from createInsertion see the same visit order surface.
+    let positions = java_hashmap_i32_order_from_keys(non_insertion_variants.keys().copied());
+
+    for &position in &positions {
+        // Trap T28: error-and-continue — wrap in closure that can handle errors.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            process_position(
+                position,
+                &mut aligned_variants,
+                ref_map,
+                ref_coverage,
+                insertion_variants,
+                non_insertion_variants,
+                region,
+                duprate,
+                &conf,
+                has_amplicon_based_calling,
+            )
+        }));
+
+        if let Err(e) = result {
+            eprintln!(
+                "Error processing position {} in {}:{}-{}: {:?}",
+                position, region.chr, region.start, region.end, e
+            );
+        }
+
+        if let Some(vars) = aligned_variants.remove(&position) {
+            on_position(position, vars);
+        }
+    }
+
+    if !aligned_variants.is_empty() {
+        let mut remaining_positions: Vec<i32> = aligned_variants.keys().copied().collect();
+        remaining_positions.sort();
+        for position in remaining_positions {
+            if let Some(vars) = aligned_variants.remove(&position) {
+                on_position(position, vars);
+            }
+        }
+    }
+
+    if conf.y {
+        eprintln!("TIME: Finish preparing vars");
+    }
+
+    max_read_length
+}
+
 /// Process a single position in the main loop.
 #[allow(clippy::too_many_arguments)]
 fn process_position(

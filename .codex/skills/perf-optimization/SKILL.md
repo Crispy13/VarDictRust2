@@ -1,6 +1,6 @@
 ---
 name: perf-optimization
-description: "Performance optimization workflow for VarDict-rs. Use when: user requests optimization or runtime is slower than expected, throughput regression, CPU hotspot analysis, cache miss diagnosis, lock contention, I/O bottleneck, flamegraph profiling, benchmarking before/after, or optimizing any Rust code path. Covers: goal setting, baseline measurement, profiling (perf/flamegraph/cachegrind/DHAT), root cause analysis, optimization design, implementation, validation, and regression prevention."
+description: "Performance optimization workflow for VarDict-rs runtime and memory. Use when: user requests optimization, runtime is slower than expected, RSS exceeds target, throughput regression, memory regression, CPU hotspot analysis, allocation/RSS diagnosis, cache miss diagnosis, lock contention, I/O bottleneck, flamegraph/DHAT profiling, benchmarking before/after, or optimizing any Rust code path. Covers: goal setting, dual runtime+memory baseline measurement, profiling (perf/flamegraph/cachegrind/DHAT), root cause analysis, optimization design, implementation, validation, and regression prevention."
 ---
 
 # Performance Optimization — VarDict-rs
@@ -11,14 +11,14 @@ Applies to CPU time, memory, I/O, and concurrency — while preserving byte-iden
 ## When to Use
 
 - Rust wall-clock time exceeds Java on comparable input
+- Rust RSS exceeds Java RSS or an approved memory threshold on comparable input
 - Throughput regression after a code change
-- Need to identify CPU hotspots, cache misses, or lock contention
+- Need to identify CPU hotspots, allocation hotspots, cache misses, or lock contention
 - Evaluating an algorithmic or data structure change
 - Creating a benchmark suite for a subsystem
 
 ## When NOT to Use
 
-- Pure memory (RSS) issues with no runtime impact → use `mem-optimization` skill instead
 - Output parity mismatches → use `parity-check` skill instead
 - Correctness bugs → standard debugging
 
@@ -41,21 +41,50 @@ Every optimization starts with a measurable target. Without one, you cannot know
 | Throughput (regions/sec) | Custom harness | Pipeline parallelism |
 | Lock contention | `perf lock`, thread traces | Multi-threaded bottlenecks |
 
-### 1.2 — Set the target
+### 1.2 — Choose the optimization focus
+
+Every optimization has one primary focus and one additive guardrail:
+
+| Focus | Primary target | Additive guardrail |
+|-------|----------------|--------------------|
+| Runtime-focused | Runtime / wall-clock / throughput must improve or meet target | Peak RSS must remain within memory threshold |
+| Memory-focused | Peak RSS / allocation behavior must improve or meet target | Runtime must not regress beyond threshold |
+
+Do not split runtime and memory into separate acceptance policies. They are both
+performance metrics and must be reported together.
+
+### 1.3 — Set the target
 
 State it as: **"Reduce [metric] from [current] to [target] on [workload]."**
 
 Examples:
 - "Reduce wall-clock from 33s to ≤25s on chr1:100M-105M with -th 4"
+- "Reduce Peak RSS from 3.5GB to ≤1.2x Java RSS on chr1:100M-105M with -th 4"
 - "Reduce cache miss rate from 12% to <5% in CigarParser hot loop"
 - "Achieve ≥0.9x Java throughput on full-chromosome NA12878"
 
-### 1.3 — Identify constraints
+### 1.4 — Identify constraints
 
 - **Parity**: Output must remain byte-identical to Java. Non-negotiable.
 - **Correctness**: All `cargo test --profile debug-release -- --include-ignored --skip parity_config_e2e_cell_` must pass.
 - **Maintenance**: Prefer simple changes. Exotic optimizations need justification.
 - **Java execution order**: Preserved unless user explicitly approves deviation.
+- **Additive guardrails**: Optimization must not trade one performance metric for unacceptable regression in the other. Guardrails are additive — they never replace the primary target, parity gate, or test gate.
+
+### 1.5 — Additive dual-metric gate
+
+Every optimization must define both:
+
+| Focus | Primary target | Additive guardrail |
+|-------|----------------|--------------------|
+| Runtime-focused | Runtime / wall-clock / throughput must meet the Phase 1 target | Peak RSS must remain ≤1.2x Java RSS and must not increase by >20% vs Rust-before |
+| Memory-focused | Peak RSS must meet the Phase 1 target, defaulting to ≤1.2x Java RSS unless a stricter target is set | Runtime must not regress by >20% vs Rust-before |
+
+Rules:
+- Measure runtime and RSS on the same workload, build profile, thread count, inputs, and command shape.
+- Missing before/after evidence for either metric is **PENDING**, not a pass.
+- A guardrail failure rejects the optimization even when the primary target improves.
+- This gate is additive: do not remove or weaken the existing primary target, parity, correctness, maintenance, or Java-order gates.
 
 ---
 
@@ -87,7 +116,21 @@ hyperfine --warmup 1 --runs 5 \
 
 If `hyperfine` is unavailable, use `/usr/bin/time -v` with 3 manual runs and take the median.
 
-### 2.3 — Measure Java baseline (same workload)
+### 2.3 — Measure Peak RSS
+
+Use `/usr/bin/time -v` to record Rust Peak RSS on the same workload used for
+runtime measurement:
+
+```bash
+/usr/bin/time -v ./target/debug-release/vardict \
+  -G testdata/hs37d5.fa -b testdata/NA12878.mapped.*.bam \
+  -N NA12878 -th 4 -z -c 1 -S 2 -E 3 -g 4 \
+  -R "1:100000000-105000000" > /dev/null 2>&1
+```
+
+Record `Maximum resident set size`.
+
+### 2.4 — Measure Java baseline (same workload)
 
 ```bash
 hyperfine --warmup 1 --runs 3 \
@@ -98,7 +141,10 @@ hyperfine --warmup 1 --runs 3 \
   2>&1 | tee ./tmp/baseline_java_hyperfine.txt
 ```
 
-### 2.4 — Collect hardware counters
+For memory-focused optimization, also record Java Peak RSS with `/usr/bin/time -v`
+on the same Java command.
+
+### 2.5 — Collect hardware counters
 
 ```bash
 perf stat -e cycles,instructions,cache-references,cache-misses,branches,branch-misses \
@@ -110,15 +156,15 @@ perf stat -e cycles,instructions,cache-references,cache-misses,branches,branch-m
 
 **Use `-th 1`** for profiling runs — multi-threading adds noise to per-function attribution.
 
-### 2.5 — Record baseline
+### 2.6 — Record baseline
 
 ```markdown
-| Metric | Java | Rust (before) | Target |
-|--------|------|---------------|--------|
-| Wall-clock (5MB, -th 4) | Xs | Ys | ≤Xs |
+| Metric | Java | Rust (before) | Target / Guardrail |
+|--------|------|---------------|--------------------|
+| Wall-clock (5MB, -th 4) | Xs | Ys | Primary target or ≤20% guardrail regression |
 | Instructions | — | N | — |
 | Cache miss rate | — | X% | — |
-| Peak RSS | X MB | Y MB | — |
+| Peak RSS | X MB | Y MB | Primary target or ≤1.2x Java RSS and no >20% guardrail increase |
 ```
 
 Save to `./tmp/perf_baseline_YYYYMMDD.txt`.
@@ -196,7 +242,33 @@ cg_annotate ./tmp/cachegrind.out | head -100
 
 Use a smaller region (1MB) — cachegrind is 20-50x slower.
 
-### 3.5 — Record hotspot findings
+### 3.5 — DHAT / allocation profiling (memory-focused path)
+
+Use this path when Peak RSS, allocation pressure, or heap behavior is the primary
+target.
+
+```bash
+# DHAT requires the system allocator; it is incompatible with mimalloc.
+cargo build --profile debug-release --no-default-features --features dhat-heap
+
+./target/debug-release/vardict \
+  -G testdata/hs37d5.fa -b testdata/NA12878.mapped.*.bam \
+  -N NA12878 -th 1 -z -c 1 -S 2 -E 3 -g 4 \
+  -R "1:100000000-105000000" > /dev/null
+```
+
+This produces `dhat-heap.json` in the working directory. Use `-th 1` for clean
+allocation traces. Open it in the DHAT viewer and sort by "Total bytes" or
+"At t-gmax bytes".
+
+Record top allocation sites:
+
+```markdown
+| Rank | Allocation Site | Bytes at Peak | Block Count | Notes |
+|------|-----------------|---------------|-------------|-------|
+```
+
+### 3.6 — Record hotspot findings
 
 ```markdown
 | Rank | Function/Site | % CPU (or metric) | Category | Notes |
@@ -226,7 +298,19 @@ For each hotspot, determine WHY it's slow before jumping to a fix.
 | **I/O bound** | `read`/`write` syscalls dominate; low CPU utilization | Buffered I/O, memory-mapped files, prefetching |
 | **String formatting** | `fmt::` in flamegraph on output path | Pre-formatted buffers, `itoa`/`ryu` crates |
 
-### 4.2 — Quantify the opportunity
+### 4.2 — Memory-specific classification
+
+Use this when the primary target is Peak RSS or allocation behavior:
+
+| Root Cause | Indicators | Typical Fixes |
+|------------|------------|---------------|
+| Many small maps/containers | High block count, high overhead at global peak | Type alias swap, compact container, capacity tuning |
+| Large retained buffers | Large objects at global peak | Shrink, reuse, defer, split lifetime |
+| Temporaries overlap with peak | DHAT shows short-lived allocations alive at peak | Change construction timing if Java order/parity permits |
+| Allocation churn | High total bytes with lower peak | Reuse buffers, avoid collect/format/clone |
+| Inline storage backfire | Struct/value too large for inline small-vector strategy | Keep heap-backed or reduce inline capacity |
+
+### 4.3 — Quantify the opportunity
 
 For each root cause, estimate the theoretical speedup using Amdahl's Law:
 
@@ -239,7 +323,12 @@ $S = \frac{1}{0.65 + 0.35/3} = \frac{1}{0.767} = 1.30x$
 
 This tells you the maximum possible improvement — if the effort isn't worth 1.30x, skip it.
 
-### 4.3 — Prioritize
+For memory-focused work, quantify expected RSS reduction in bytes and ratio to Java
+RSS. If the expected reduction cannot move Rust toward the RSS target or below
+`1.2x Java`, skip the change unless it removes clear allocation churn with no
+runtime risk.
+
+### 4.4 — Prioritize
 
 Rank by: (estimated speedup) × (confidence) / (implementation effort).
 
@@ -261,6 +350,16 @@ Only pursue optimizations where the expected gain justifies the risk to parity a
 | 6 | **Concurrency** | High | Finer parallelism, work stealing |
 | 7 | **SIMD / intrinsics** | High | Vectorized sequence comparison |
 | 8 | **Unsafe** | Very High | Skip bounds checks, raw pointers — last resort |
+
+Memory-focused preference order:
+
+| Level | Type | Risk | Example |
+|-------|------|------|---------|
+| 1 | Type alias swap | Low | HashMap → VecMap for known small maps |
+| 2 | Capacity tuning | Low-Med | Reserve realistic capacity, shrink oversized buffers |
+| 3 | Buffer reuse | Medium | Reuse temporary strings/vectors outside hot loops |
+| 4 | Deferred construction | Medium-High | Delay allocation past peak; requires parity/order review |
+| 5 | Structural layout redesign | High | New compact representation or split storage |
 
 ### 5.2 — Parity impact assessment
 
@@ -369,6 +468,9 @@ If no improvement → revert and re-analyze.
 hyperfine --warmup 1 --runs 5 \
   './target/debug-release/vardict [flags] -R "1:100000000-105000000"' \
   2>&1 | tee ./tmp/after_hyperfine.txt
+
+/usr/bin/time -v ./target/debug-release/vardict [flags] \
+  -R "1:100000000-105000000" > /dev/null 2>&1
 ```
 
 ### 7.3 — Verify correctness
@@ -396,15 +498,17 @@ Run at least one different region to ensure the optimization doesn't regress els
 ```markdown
 | Metric | Before | After | Change | Target | Status |
 |--------|--------|-------|--------|--------|--------|
-| Wall-clock (5MB) | Xs | Ys | -Z% | ≤Ws | PASS/FAIL |
-| Peak RSS | X MB | Y MB | -Z% | — | — |
+| Wall-clock (5MB) | Xs | Ys | -Z% | Primary target or ≤20% guardrail regression | PASS/FAIL/PENDING |
+| Peak RSS | X MB | Y MB | -Z% | ≤1.2x Java and ≤20% increase vs before | PASS/FAIL/PENDING |
 | Cargo tests | 258 pass | 258 pass | — | all pass | PASS |
 | Parity | ✓ | ✓ | — | identical | PASS |
 ```
 
 **Decision gate**:
-- Target met + parity PASS + tests PASS → proceed to Phase 8
-- Target not met → profile again (Phase 3), look for next hotspot
+- Primary target met + additive guardrail PASS + parity PASS + tests PASS → proceed to Phase 8
+- Primary target not met → profile again (Phase 3), look for next hotspot
+- Additive guardrail FAIL → reject or redesign; do not accept the primary-metric win as-is
+- Any required runtime or RSS evidence missing → PENDING until measured
 - Parity FAIL or test FAIL → revert immediately, diagnose
 
 ---
@@ -467,6 +571,9 @@ If the optimization deviates from Java's algorithm or data structures:
 | Benchmark with other workloads running | Noisy results, irreproducible | Quiesce the system or use `hyperfine` |
 | Bundle multiple optimizations in one change | Can't isolate which helped | One optimization per commit |
 | Skip parity check after optimization | Output regression goes undetected | Always `diff` against Java reference |
+| Accept a runtime win while RSS exceeds the guardrail | Moves the bottleneck from time to memory | Reject or redesign unless the user explicitly approves a documented exception |
+| Accept an RSS win while runtime exceeds the guardrail | Moves the bottleneck from memory to time | Reject or redesign unless the user explicitly approves a documented exception |
+| Compare runtime and RSS from different workloads | Invalidates the additive gate | Measure both metrics on the same workload, build profile, thread count, and command shape |
 
 ## Lessons Learned (from this project)
 

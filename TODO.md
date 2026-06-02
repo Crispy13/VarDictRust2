@@ -4,6 +4,8 @@ Deferred work items in the VarDict-rs port that must be resolved before full pro
 
 ---
 # Planned
+## Optimize memory usage for pileup
+
 ## Do we really need dynamic dispatch for line sinks?
 ```rust
 pub type VariantLineSink = dyn Fn(&str) + Send + Sync + 'static;

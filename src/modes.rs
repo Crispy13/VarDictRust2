@@ -1,5 +1,5 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::io::Write;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -9,7 +9,7 @@ use crate::data::{
 use crate::mods::amplicon_post_process::amplicon_post_process;
 use crate::mods::cigar_parser::CigarParser;
 use crate::mods::sam_file_parser::sam_file_parser_process;
-use crate::mods::simple_post_process::simple_post_process;
+use crate::mods::simple_post_process::{simple_post_process, simple_post_process_position_lines};
 use crate::mods::somatic_post_process::somatic_post_process;
 use crate::mods::{structural_variants_processor, to_vars_builder, variation_realigner};
 use crate::parity::snapshot::maybe_write_module_snapshot;
@@ -65,7 +65,92 @@ fn write_mode_output(printer: &VariantPrinter, buffer: &[u8]) {
     }
 }
 
-fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
+fn buffered_streaming_printer(printer: &VariantPrinter) -> Option<VariantPrinter> {
+    match printer {
+        VariantPrinter::Out => {
+            let writer = Arc::new(Mutex::new(BufWriter::new(std::io::stdout())));
+            Some(VariantPrinter::LineSink(Arc::new(move |line| {
+                let mut writer = writer.lock().unwrap_or_else(|error| error.into_inner());
+                writeln!(writer, "{line}").expect("failed to write mode output to stdout");
+            })))
+        }
+        VariantPrinter::Err => {
+            let writer = Arc::new(Mutex::new(BufWriter::new(std::io::stderr())));
+            Some(VariantPrinter::LineSink(Arc::new(move |line| {
+                let mut writer = writer.lock().unwrap_or_else(|error| error.into_inner());
+                writeln!(writer, "{line}").expect("failed to write mode output to stderr");
+            })))
+        }
+        _ => None,
+    }
+}
+
+struct SimpleLineBuffer {
+    start: i32,
+    end: i32,
+    in_region: Vec<Option<Vec<String>>>,
+    extra: BTreeMap<i32, Vec<String>>,
+}
+
+impl SimpleLineBuffer {
+    fn new(region: &Region) -> Self {
+        let len = if region.end >= region.start {
+            usize::try_from(region.end - region.start + 1).unwrap_or(0)
+        } else {
+            0
+        };
+        let mut in_region = Vec::with_capacity(len);
+        in_region.resize_with(len, || None);
+        Self {
+            start: region.start,
+            end: region.end,
+            in_region,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn push(&mut self, position: i32, lines: Vec<String>) {
+        if lines.is_empty() {
+            return;
+        }
+        if position >= self.start && position <= self.end {
+            let offset = usize::try_from(position - self.start)
+                .expect("in-region position offset should fit usize");
+            match &mut self.in_region[offset] {
+                Some(existing) => existing.extend(lines),
+                slot @ None => *slot = Some(lines),
+            }
+        } else {
+            self.extra.entry(position).or_default().extend(lines);
+        }
+    }
+
+    fn print(self, printer: &VariantPrinter) {
+        for (position, lines) in &self.extra {
+            if *position < self.start {
+                for line in lines {
+                    printer.print_line(line);
+                }
+            }
+        }
+
+        for lines in self.in_region.into_iter().flatten() {
+            for line in lines {
+                printer.print_owned_line(line);
+            }
+        }
+
+        for (position, lines) in &self.extra {
+            if *position > self.end {
+                for line in lines {
+                    printer.print_line(line);
+                }
+            }
+        }
+    }
+}
+
+fn run_realigned_pipeline(scope: Scope<InitialData>) -> Scope<RealignedVariationData> {
     let parsed_scope = sam_file_parser_process(scope);
     maybe_write_module_snapshot(
         "SAM_FILE_PARSER",
@@ -128,10 +213,16 @@ fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
     };
     let realigned_scope = variation_realigner::process(variation_scope);
     maybe_write_module_snapshot("REALIGNER", &realigned_scope.region, &realigned_scope.data);
-    finalize_pipeline(realigned_scope)
+    realigned_scope
 }
 
-fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsData> {
+fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
+    finalize_pipeline(run_realigned_pipeline(scope))
+}
+
+fn process_structural_variants(
+    scope: Scope<RealignedVariationData>,
+) -> Scope<RealignedVariationData> {
     let Scope {
         bam,
         region,
@@ -177,10 +268,34 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
     );
     maybe_write_module_snapshot("SV_PROCESSOR", &region, &data);
 
+    Scope {
+        bam,
+        region,
+        region_ref: Arc::new(reference),
+        reference_resource,
+        max_read_length,
+        splice,
+        out,
+        data,
+    }
+}
+
+fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsData> {
+    let Scope {
+        bam,
+        region,
+        region_ref,
+        reference_resource,
+        max_read_length,
+        splice,
+        out,
+        mut data,
+    } = process_structural_variants(scope);
+
     let aligned_data = to_vars_builder::process(
         data.max_read_length.unwrap_or(max_read_length),
         &region,
-        &reference.reference_sequences,
+        &region_ref.reference_sequences,
         &data.ref_coverage,
         &data.insertion_variants,
         &mut data.non_insertion_variants,
@@ -191,13 +306,48 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
     Scope {
         bam,
         region,
-        region_ref: Arc::new(reference),
+        region_ref,
         reference_resource,
         max_read_length: aligned_data.max_read_length,
         splice,
         out,
         data: aligned_data,
     }
+}
+
+fn run_simple_pipeline(scope: Scope<InitialData>) {
+    let Scope {
+        region,
+        region_ref,
+        max_read_length,
+        splice,
+        out,
+        mut data,
+        ..
+    } = process_structural_variants(run_realigned_pipeline(scope));
+
+    let conf = GlobalReadOnlyScope::instance().conf.clone();
+    let mut lines = SimpleLineBuffer::new(&region);
+    let max_read_length = to_vars_builder::process_incremental(
+        data.max_read_length.unwrap_or(max_read_length),
+        &region,
+        &region_ref.reference_sequences,
+        &data.ref_coverage,
+        &data.insertion_variants,
+        &mut data.non_insertion_variants,
+        data.duprate,
+        |position, vars| {
+            let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                simple_post_process_position_lines(position, &vars, &region, &splice, &conf)
+            }));
+            if let Ok(position_lines) = rendered {
+                lines.push(position, position_lines);
+            }
+        },
+    );
+
+    let _ = max_read_length;
+    lines.print(&out);
 }
 
 /// Ported from: AbstractMode.java:L100-L105 and AbstractMode.AbstractParallelMode.
@@ -263,15 +413,22 @@ pub trait ParallelMode: AbstractMode + Sync {
     fn not_parallel(&self) {
         let printer = GlobalReadOnlyScope::instance().variant_printer.clone();
         for region in self.regions() {
-            if matches!(
-                printer,
-                VariantPrinter::LineSink(_) | VariantPrinter::OwnedLineSink(_)
-            ) {
-                self.process_region_to_printer(region, printer.clone());
-            } else {
-                let mut buffer = Vec::new();
-                self.process_region_to_buffer(region, &mut buffer);
-                write_mode_output(&printer, &buffer);
+            match buffered_streaming_printer(&printer) {
+                Some(streaming_printer) => {
+                    self.process_region_to_printer(region, streaming_printer);
+                }
+                None if matches!(
+                    printer,
+                    VariantPrinter::LineSink(_) | VariantPrinter::OwnedLineSink(_)
+                ) =>
+                {
+                    self.process_region_to_printer(region, printer.clone());
+                }
+                None => {
+                    let mut buffer = Vec::new();
+                    self.process_region_to_buffer(region, &mut buffer);
+                    write_mode_output(&printer, &buffer);
+                }
             }
         }
         self.post_parallel_hook();
@@ -348,7 +505,11 @@ impl SimpleMode {
             printer,
             InitialData::default(),
         );
-        simple_post_process(run_pipeline(initial_scope));
+        if std::env::var_os("VARDICT_PARITY_TOVARS").is_some() {
+            simple_post_process(run_pipeline(initial_scope));
+        } else {
+            run_simple_pipeline(initial_scope);
+        }
     }
 
     pub fn parallel(&self, threads: usize) {

@@ -12,14 +12,14 @@ Applies to CPU time, memory, I/O, and concurrency — while preserving byte-iden
 ## When to Use
 
 - Rust wall-clock time exceeds Java on comparable input
+- Rust RSS exceeds Java RSS or an approved memory threshold on comparable input
 - Throughput regression after a code change
-- Need to identify CPU hotspots, cache misses, or lock contention
+- Need to identify CPU hotspots, allocation hotspots, cache misses, or lock contention
 - Evaluating an algorithmic or data structure change
 - Creating a benchmark suite for a subsystem
 
 ## When NOT to Use
 
-- Pure memory (RSS) issues with no runtime impact → use `mem-optimization` skill instead
 - Output parity mismatches → use `parity-check` skill instead
 - Correctness bugs → standard debugging
 
