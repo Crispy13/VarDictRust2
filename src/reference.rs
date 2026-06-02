@@ -19,6 +19,7 @@ use crate::patterns::{UNABLE_FIND_CONTIG, WRONG_START_OR_END};
 const SEED_1: i32 = 17;
 // Java: Configuration.SEED_2 L208
 const SEED_2: i32 = 12;
+const MAX_REFERENCE_SEED_LEN: usize = SEED_1 as usize;
 
 thread_local! {
     static THREAD_LOCAL_FASTA_FILES: RefCell<HashMap<String, faidx::Reader>> = RefCell::new(HashMap::new());
@@ -187,7 +188,97 @@ impl<'de> serde::Deserialize<'de> for ReferenceSequenceMap {
 }
 
 pub type ReferenceSeedPositions = SmallVec<[i32; 1]>;
-pub type ReferenceSeedMap = FxHashMap<String, ReferenceSeedPositions>;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ReferenceSeedKey {
+    len: u8,
+    bytes: [u8; MAX_REFERENCE_SEED_LEN],
+}
+
+impl ReferenceSeedKey {
+    fn from_sequence(sequence: &str) -> Self {
+        let sequence_bytes = sequence.as_bytes();
+        assert!(
+            sequence_bytes.len() <= MAX_REFERENCE_SEED_LEN,
+            "reference seed exceeds maximum seed length"
+        );
+
+        let mut bytes = [0; MAX_REFERENCE_SEED_LEN];
+        bytes[..sequence_bytes.len()].copy_from_slice(sequence_bytes);
+        Self {
+            len: u8::try_from(sequence_bytes.len()).expect("reference seed length exceeds u8"),
+            bytes,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)])
+            .expect("reference seed key must remain ASCII")
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ReferenceSeedMap {
+    entries: FxHashMap<ReferenceSeedKey, ReferenceSeedPositions>,
+}
+
+impl ReferenceSeedMap {
+    pub fn get(&self, sequence: &str) -> Option<&ReferenceSeedPositions> {
+        self.entries.get(&ReferenceSeedKey::from_sequence(sequence))
+    }
+
+    fn get_mut(&mut self, sequence: &str) -> Option<&mut ReferenceSeedPositions> {
+        self.entries
+            .get_mut(&ReferenceSeedKey::from_sequence(sequence))
+    }
+
+    pub fn insert<S: AsRef<str>>(
+        &mut self,
+        sequence: S,
+        positions: ReferenceSeedPositions,
+    ) -> Option<ReferenceSeedPositions> {
+        self.entries.insert(
+            ReferenceSeedKey::from_sequence(sequence.as_ref()),
+            positions,
+        )
+    }
+}
+
+impl Index<&str> for ReferenceSeedMap {
+    type Output = ReferenceSeedPositions;
+
+    fn index(&self, sequence: &str) -> &Self::Output {
+        self.get(sequence)
+            .expect("reference seed sequence is not loaded")
+    }
+}
+
+impl serde::Serialize for ReferenceSeedMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.entries.len()))?;
+        for (seed, positions) in &self.entries {
+            map.serialize_entry(seed.as_str(), positions)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ReferenceSeedMap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries = HashMap::<String, ReferenceSeedPositions>::deserialize(deserializer)?;
+        let mut seed = Self::default();
+        for (sequence, positions) in entries {
+            seed.insert(sequence, positions);
+        }
+        Ok(seed)
+    }
+}
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Reference {
@@ -492,9 +583,7 @@ impl ReferenceResource {
         if let Some(seed_positions) = reference.seed.get_mut(key_sequence) {
             seed_positions.push(position);
         } else {
-            reference
-                .seed
-                .insert(key_sequence.to_owned(), smallvec![position]);
+            reference.seed.insert(key_sequence, smallvec![position]);
         }
     }
 
@@ -550,5 +639,17 @@ mod tests {
         ReferenceResource::add_positions_to_seed_sequence(&mut reference, 100, 2, "ACGT");
 
         assert_eq!(reference.seed["ACGT"].as_slice(), &[100, 102]);
+    }
+
+    #[test]
+    fn seed_map_serializes_with_string_keys() {
+        let mut reference = Reference::new();
+        ReferenceResource::add_positions_to_seed_sequence(&mut reference, 100, 0, "ACGT");
+
+        let json = serde_json::to_string(&reference.seed).unwrap();
+        assert!(json.contains("\"ACGT\""));
+
+        let roundtrip: ReferenceSeedMap = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip["ACGT"].as_slice(), &[100]);
     }
 }
