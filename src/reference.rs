@@ -10,7 +10,7 @@ use rust_htslib::faidx;
 use rustc_hash::FxHashMap;
 use serde::de::Deserializer;
 use serde::ser::{SerializeMap, Serializer};
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 
 use crate::data::Region;
 use crate::patterns::{UNABLE_FIND_CONTIG, WRONG_START_OR_END};
@@ -465,14 +465,12 @@ impl ReferenceResource {
 
             let seed_1_end = exon_index + SEED_1 as usize;
             let key_sequence = std::str::from_utf8(&exon[exon_index..seed_1_end])
-                .expect("reference seed must remain ASCII")
-                .to_owned();
+                .expect("reference seed must remain ASCII");
             Self::add_positions_to_seed_sequence(&mut reference, sequence_start, i, key_sequence);
 
             let seed_2_end = exon_index + SEED_2 as usize;
             let key_sequence = std::str::from_utf8(&exon[exon_index..seed_2_end])
-                .expect("reference seed must remain ASCII")
-                .to_owned();
+                .expect("reference seed must remain ASCII");
             Self::add_positions_to_seed_sequence(&mut reference, sequence_start, i, key_sequence);
         }
 
@@ -488,13 +486,16 @@ impl ReferenceResource {
         reference: &mut Reference,
         sequence_start: i32,
         i: i32,
-        key_sequence: String,
+        key_sequence: &str,
     ) {
-        let seed_positions = reference
-            .seed
-            .entry(key_sequence)
-            .or_insert_with(ReferenceSeedPositions::new);
-        seed_positions.push(i + sequence_start);
+        let position = i + sequence_start;
+        if let Some(seed_positions) = reference.seed.get_mut(key_sequence) {
+            seed_positions.push(position);
+        } else {
+            reference
+                .seed
+                .insert(key_sequence.to_owned(), smallvec![position]);
+        }
     }
 
     /// Ported from: ReferenceResource.isLoaded() L157-L167
@@ -539,5 +540,15 @@ mod tests {
             .push(LoadedRegion::new("20", 10, 30));
 
         assert!(ReferenceResource::is_loaded("20", 12, 28, &reference));
+    }
+
+    #[test]
+    fn seed_positions_append_in_genomic_order() {
+        let mut reference = Reference::new();
+
+        ReferenceResource::add_positions_to_seed_sequence(&mut reference, 100, 0, "ACGT");
+        ReferenceResource::add_positions_to_seed_sequence(&mut reference, 100, 2, "ACGT");
+
+        assert_eq!(reference.seed["ACGT"].as_slice(), &[100, 102]);
     }
 }
