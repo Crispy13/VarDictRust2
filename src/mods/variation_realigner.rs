@@ -1194,11 +1194,10 @@ pub fn no_passing_reads(chr: &str, start: i32, end: i32, bams: &[String]) -> boo
                 std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     let reader_result = bam::IndexedReader::from_path(bam_path);
-                    let mut reader = match reader_result {
+                    let reader = match reader_result {
                         Ok(r) => r,
                         Err(_) => continue, // Java catches exceptions and continues
                     };
-                    reader.set_threads(1).ok();
                     entry.insert(reader)
                 }
             };

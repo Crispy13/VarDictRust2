@@ -264,9 +264,6 @@ impl RecordPreprocessor {
                     .unwrap_or_else(|e| panic!("Failed to open BAM file {}: {}", bam_path, e))
             });
 
-        // Set thread count for decompression (performance, not parity-critical)
-        reader.set_threads(1).ok();
-
         // Java: queryOverlapping(region.chr, region.start, region.end) — 1-based inclusive
         // rust-htslib fetch() with a &str region string uses samtools-style "chr:start-end"
         // which is 1-based inclusive, matching htsjdk's queryOverlapping() semantics.
