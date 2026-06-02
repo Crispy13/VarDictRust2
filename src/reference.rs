@@ -1,8 +1,10 @@
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops::Index;
 use std::time::SystemTime;
 
@@ -189,7 +191,7 @@ impl<'de> serde::Deserialize<'de> for ReferenceSequenceMap {
 
 pub type ReferenceSeedPositions = SmallVec<[i32; 1]>;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReferenceSeedKey {
     len: u8,
     bytes: [u8; MAX_REFERENCE_SEED_LEN],
@@ -217,6 +219,18 @@ impl ReferenceSeedKey {
     }
 }
 
+impl Borrow<str> for ReferenceSeedKey {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Hash for ReferenceSeedKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ReferenceSeedMap {
     entries: FxHashMap<ReferenceSeedKey, ReferenceSeedPositions>,
@@ -224,12 +238,11 @@ pub struct ReferenceSeedMap {
 
 impl ReferenceSeedMap {
     pub fn get(&self, sequence: &str) -> Option<&ReferenceSeedPositions> {
-        self.entries.get(&ReferenceSeedKey::from_sequence(sequence))
+        self.entries.get(sequence)
     }
 
     fn get_mut(&mut self, sequence: &str) -> Option<&mut ReferenceSeedPositions> {
-        self.entries
-            .get_mut(&ReferenceSeedKey::from_sequence(sequence))
+        self.entries.get_mut(sequence)
     }
 
     pub fn insert<S: AsRef<str>>(
