@@ -4,28 +4,13 @@
 //! opens overlapping-query iterators, and streams filtered reads through
 //! RecordPreprocessor's filter cascade to CigarParser.
 
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use rust_htslib::bam::{self, HeaderView, Read as BamRead};
 
 use crate::data::{InitialData, Region};
+use crate::mods::indexed_reader_cache;
 use crate::scope::{GlobalReadOnlyScope, Scope};
-
-thread_local! {
-    static SAM_VIEW_READERS: RefCell<HashMap<String, bam::IndexedReader>> =
-        RefCell::new(HashMap::new());
-}
-
-const _: fn() = {
-    fn check() {
-        fn assert_send<T: Send>() {}
-
-        assert_send::<bam::IndexedReader>();
-    }
-
-    check
-};
 
 // ─── Integer.decode() equivalent ──────────────────────────────────────────────
 // Java: SamView constructor calls Integer.decode(samfilter) which handles
@@ -257,12 +242,8 @@ impl RecordPreprocessor {
 
         // Open IndexedReader — equivalent to SamView constructor
         // Ported from: SamView.java:L20-L24
-        let mut reader = SAM_VIEW_READERS
-            .with(|cached_readers| cached_readers.borrow_mut().remove(&bam_path))
-            .unwrap_or_else(|| {
-                bam::IndexedReader::from_path(&bam_path)
-                    .unwrap_or_else(|e| panic!("Failed to open BAM file {}: {}", bam_path, e))
-            });
+        let mut reader = indexed_reader_cache::take_or_open(&bam_path)
+            .unwrap_or_else(|e| panic!("Failed to open BAM file {}: {}", bam_path, e));
 
         // Java: queryOverlapping(region.chr, region.start, region.end) — 1-based inclusive
         // rust-htslib fetch() with a &str region string uses samtools-style "chr:start-end"
@@ -298,9 +279,7 @@ impl RecordPreprocessor {
         if let (Some(bam_path), Some(reader)) =
             (self.current_bam_path.take(), self.current_reader.take())
         {
-            SAM_VIEW_READERS.with(|cached_readers| {
-                cached_readers.borrow_mut().insert(bam_path, reader);
-            });
+            indexed_reader_cache::return_reader(bam_path, reader);
         }
     }
 
