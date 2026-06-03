@@ -88,6 +88,7 @@ fn buffered_streaming_printer(printer: &VariantPrinter) -> Option<VariantPrinter
 struct SimpleLineBuffer {
     start: i32,
     end: i32,
+    next_in_region_to_print: i32,
     in_region: Vec<Option<Vec<String>>>,
     extra: BTreeMap<i32, Vec<String>>,
 }
@@ -104,6 +105,7 @@ impl SimpleLineBuffer {
         Self {
             start: region.start,
             end: region.end,
+            next_in_region_to_print: region.start,
             in_region,
             extra: BTreeMap::new(),
         }
@@ -125,26 +127,53 @@ impl SimpleLineBuffer {
         }
     }
 
-    fn print(self, printer: &VariantPrinter) {
-        for (position, lines) in &self.extra {
-            if *position < self.start {
-                for line in lines {
-                    printer.print_line(line);
-                }
+    fn flush_extra_before(&mut self, limit: i32, printer: &VariantPrinter) {
+        let remaining = self.extra.split_off(&limit);
+        let ready = std::mem::replace(&mut self.extra, remaining);
+        for (_position, lines) in ready {
+            for line in lines {
+                printer.print_owned_line(line);
             }
         }
+    }
 
+    fn flush_in_region_before(&mut self, limit: i32, printer: &VariantPrinter) {
+        while self.next_in_region_to_print < limit && self.next_in_region_to_print <= self.end {
+            let offset = usize::try_from(self.next_in_region_to_print - self.start)
+                .expect("in-region position offset should fit usize");
+            if let Some(lines) = self.in_region[offset].take() {
+                for line in lines {
+                    printer.print_owned_line(line);
+                }
+            }
+            self.next_in_region_to_print += 1;
+        }
+    }
+
+    fn flush_before(&mut self, limit: i32, printer: &VariantPrinter) {
+        let pre_region_limit = limit.min(self.start);
+        if pre_region_limit > i32::MIN {
+            self.flush_extra_before(pre_region_limit, printer);
+        }
+
+        if limit > self.end {
+            self.flush_in_region_before(limit, printer);
+            self.flush_extra_before(limit, printer);
+        } else {
+            self.flush_in_region_before(limit, printer);
+        }
+    }
+
+    fn print(mut self, printer: &VariantPrinter) {
+        self.flush_before(i32::MAX, printer);
         for lines in self.in_region.into_iter().flatten() {
             for line in lines {
                 printer.print_owned_line(line);
             }
         }
-
-        for (position, lines) in &self.extra {
-            if *position > self.end {
-                for line in lines {
-                    printer.print_line(line);
-                }
+        for (_position, lines) in self.extra {
+            for line in lines {
+                printer.print_owned_line(line);
             }
         }
     }
@@ -322,30 +351,46 @@ fn run_simple_pipeline(scope: Scope<InitialData>) {
         max_read_length,
         splice,
         out,
-        mut data,
+        data:
+            RealignedVariationData {
+                mut non_insertion_variants,
+                insertion_variants,
+                ref_coverage,
+                max_read_length: realigned_max_read_length,
+                duprate,
+                ..
+            },
         ..
     } = process_structural_variants(run_realigned_pipeline(scope));
 
     let conf = GlobalReadOnlyScope::instance().conf.clone();
     let mut lines = SimpleLineBuffer::new(&region);
     let max_read_length = to_vars_builder::process_incremental(
-        data.max_read_length.unwrap_or(max_read_length),
+        realigned_max_read_length.unwrap_or(max_read_length),
         &region,
         &region_ref.reference_sequences,
-        &data.ref_coverage,
-        &data.insertion_variants,
-        &mut data.non_insertion_variants,
-        data.duprate,
-        |position, vars| {
-            let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                simple_post_process_position_lines(position, &vars, &region, &splice, &conf)
-            }));
-            if let Ok(position_lines) = rendered {
-                lines.push(position, position_lines);
+        &ref_coverage,
+        &insertion_variants,
+        &mut non_insertion_variants,
+        duprate,
+        |event| match event {
+            to_vars_builder::IncrementalProcessEvent::Position { position, vars } => {
+                let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    simple_post_process_position_lines(position, &vars, &region, &splice, &conf)
+                }));
+                if let Ok(position_lines) = rendered {
+                    lines.push(position, position_lines);
+                }
+            }
+            to_vars_builder::IncrementalProcessEvent::ReadyBefore(limit) => {
+                lines.flush_before(limit, &out);
             }
         },
     );
 
+    drop(non_insertion_variants);
+    drop(insertion_variants);
+    drop(ref_coverage);
     let _ = max_read_length;
     lines.print(&out);
 }

@@ -662,6 +662,11 @@ pub fn is_the_same_variation_on_ref(
 // Cluster C: collectReferenceVariants + process
 // ---------------------------------------------------------------------------
 
+pub enum IncrementalProcessEvent {
+    Position { position: i32, vars: Vars },
+    ReadyBefore(i32),
+}
+
 /// Ported from: ToVarsBuilder.java:L1018-L1030
 /// Build DEBUG field from accumulated debug lines.
 fn construct_debug_lines(debug_lines: &[String], vref: &mut Variant, conf: &Configuration) {
@@ -1420,10 +1425,10 @@ pub fn process_incremental<F>(
     insertion_variants: &PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     duprate: f64,
-    mut on_position: F,
+    mut on_event: F,
 ) -> i32
 where
-    F: FnMut(i32, Vars),
+    F: FnMut(IncrementalProcessEvent),
 {
     let (conf, has_amplicon_based_calling) = GlobalReadOnlyScope::with_instance(|scope| {
         (scope.conf.clone(), scope.amplicon_based_calling.is_some())
@@ -1441,8 +1446,12 @@ where
     // Java iterates the outer HashMap directly. Use current-key bucket order so
     // position+1 mutations from createInsertion see the same visit order surface.
     let positions = java_hashmap_i32_order_from_keys(non_insertion_variants.keys().copied());
+    let mut suffix_min_positions = vec![i32::MAX; positions.len() + 1];
+    for index in (0..positions.len()).rev() {
+        suffix_min_positions[index] = suffix_min_positions[index + 1].min(positions[index]);
+    }
 
-    for &position in &positions {
+    for (index, &position) in positions.iter().enumerate() {
         // Trap T28: error-and-continue — wrap in closure that can handle errors.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             process_position(
@@ -1467,19 +1476,33 @@ where
         }
 
         if let Some(vars) = aligned_variants.remove(&position) {
-            on_position(position, vars);
+            on_event(IncrementalProcessEvent::Position { position, vars });
+        }
+        if aligned_variants.is_empty() {
+            on_event(IncrementalProcessEvent::ReadyBefore(
+                suffix_min_positions[index + 1],
+            ));
         }
     }
 
     if !aligned_variants.is_empty() {
         let mut remaining_positions: Vec<i32> = aligned_variants.keys().copied().collect();
         remaining_positions.sort();
-        for position in remaining_positions {
+        for (index, position) in remaining_positions.iter().copied().enumerate() {
             if let Some(vars) = aligned_variants.remove(&position) {
-                on_position(position, vars);
+                on_event(IncrementalProcessEvent::Position { position, vars });
             }
+            let next_remaining_position = remaining_positions
+                .get(index + 1)
+                .copied()
+                .unwrap_or(i32::MAX);
+            on_event(IncrementalProcessEvent::ReadyBefore(
+                next_remaining_position,
+            ));
         }
     }
+
+    on_event(IncrementalProcessEvent::ReadyBefore(i32::MAX));
 
     if conf.y {
         eprintln!("TIME: Finish preparing vars");
