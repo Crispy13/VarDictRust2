@@ -667,6 +667,13 @@ pub enum IncrementalProcessEvent {
     ReadyBefore(i32),
 }
 
+fn prune_position_map_before<V>(map: &mut PositionMap<V>, cursor: &mut i32, limit: i32) {
+    while *cursor < limit {
+        map.remove(cursor);
+        *cursor += 1;
+    }
+}
+
 /// Ported from: ToVarsBuilder.java:L1018-L1030
 /// Build DEBUG field from accumulated debug lines.
 fn construct_debug_lines(debug_lines: &[String], vref: &mut Variant, conf: &Configuration) {
@@ -1421,8 +1428,8 @@ pub fn process_incremental<F>(
     max_read_length: i32,
     region: &Region,
     ref_map: &ReferenceSequenceMap,
-    ref_coverage: &PositionMap<i32>,
-    insertion_variants: &PositionMap<VariationMap>,
+    ref_coverage: &mut PositionMap<i32>,
+    insertion_variants: &mut PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     duprate: f64,
     mut on_event: F,
@@ -1450,6 +1457,10 @@ where
     for index in (0..positions.len()).rev() {
         suffix_min_positions[index] = suffix_min_positions[index + 1].min(positions[index]);
     }
+    let first_prunable_position = positions.iter().copied().min().unwrap_or(i32::MAX);
+    let mut non_insertion_prune_cursor = first_prunable_position;
+    let mut insertion_prune_cursor = first_prunable_position;
+    let mut ref_coverage_prune_cursor = first_prunable_position;
 
     for (index, &position) in positions.iter().enumerate() {
         // Trap T28: error-and-continue — wrap in closure that can handle errors.
@@ -1479,9 +1490,21 @@ where
             on_event(IncrementalProcessEvent::Position { position, vars });
         }
         if aligned_variants.is_empty() {
-            on_event(IncrementalProcessEvent::ReadyBefore(
-                suffix_min_positions[index + 1],
-            ));
+            let watermark = suffix_min_positions[index + 1];
+            if watermark != i32::MAX {
+                prune_position_map_before(
+                    non_insertion_variants,
+                    &mut non_insertion_prune_cursor,
+                    watermark,
+                );
+                prune_position_map_before(
+                    insertion_variants,
+                    &mut insertion_prune_cursor,
+                    watermark,
+                );
+                prune_position_map_before(ref_coverage, &mut ref_coverage_prune_cursor, watermark);
+            }
+            on_event(IncrementalProcessEvent::ReadyBefore(watermark));
         }
     }
 

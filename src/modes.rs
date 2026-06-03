@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -89,24 +89,17 @@ struct SimpleLineBuffer {
     start: i32,
     end: i32,
     next_in_region_to_print: i32,
-    in_region: Vec<Option<Vec<String>>>,
+    in_region: VecDeque<Option<Vec<String>>>,
     extra: BTreeMap<i32, Vec<String>>,
 }
 
 impl SimpleLineBuffer {
     fn new(region: &Region) -> Self {
-        let len = if region.end >= region.start {
-            usize::try_from(region.end - region.start + 1).unwrap_or(0)
-        } else {
-            0
-        };
-        let mut in_region = Vec::with_capacity(len);
-        in_region.resize_with(len, || None);
         Self {
             start: region.start,
             end: region.end,
             next_in_region_to_print: region.start,
-            in_region,
+            in_region: VecDeque::new(),
             extra: BTreeMap::new(),
         }
     }
@@ -116,8 +109,11 @@ impl SimpleLineBuffer {
             return;
         }
         if position >= self.start && position <= self.end {
-            let offset = usize::try_from(position - self.start)
+            let offset = usize::try_from(position - self.next_in_region_to_print)
                 .expect("in-region position offset should fit usize");
+            if offset >= self.in_region.len() {
+                self.in_region.resize_with(offset + 1, || None);
+            }
             match &mut self.in_region[offset] {
                 Some(existing) => existing.extend(lines),
                 slot @ None => *slot = Some(lines),
@@ -139,9 +135,7 @@ impl SimpleLineBuffer {
 
     fn flush_in_region_before(&mut self, limit: i32, printer: &VariantPrinter) {
         while self.next_in_region_to_print < limit && self.next_in_region_to_print <= self.end {
-            let offset = usize::try_from(self.next_in_region_to_print - self.start)
-                .expect("in-region position offset should fit usize");
-            if let Some(lines) = self.in_region[offset].take() {
+            if let Some(Some(lines)) = self.in_region.pop_front() {
                 for line in lines {
                     printer.print_owned_line(line);
                 }
@@ -354,8 +348,8 @@ fn run_simple_pipeline(scope: Scope<InitialData>) {
         data:
             RealignedVariationData {
                 mut non_insertion_variants,
-                insertion_variants,
-                ref_coverage,
+                mut insertion_variants,
+                mut ref_coverage,
                 max_read_length: realigned_max_read_length,
                 duprate,
                 ..
@@ -369,8 +363,8 @@ fn run_simple_pipeline(scope: Scope<InitialData>) {
         realigned_max_read_length.unwrap_or(max_read_length),
         &region,
         &region_ref.reference_sequences,
-        &ref_coverage,
-        &insertion_variants,
+        &mut ref_coverage,
+        &mut insertion_variants,
         &mut non_insertion_variants,
         duprate,
         |event| match event {
