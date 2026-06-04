@@ -1118,11 +1118,12 @@ pub fn find_del(
                 region,
             );
 
-            // Java: StructuralVariantsProcessor.java#L244 — iterate softClips3End
-            let mut sc3_keys: Vec<i32> = soft_clips_3_end.keys().cloned().collect();
-            sc3_keys.sort();
+            // Java scans the raw HashMap entrySet here and breaks on the first
+            // matching soft clip. Reproduce that bucket traversal order instead
+            // of sorting numerically, otherwise the wrong breakpoint wins.
+            let sc3_keys = java_hashmap_i32_keys(soft_clips_3_end);
             let mut found = false;
-            for &i in &sc3_keys {
+            for i in sc3_keys {
                 if found {
                     break;
                 }
