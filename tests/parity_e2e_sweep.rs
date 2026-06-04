@@ -25,6 +25,9 @@ mod na12878_exome_sweep;
 #[path = "parity_e2e_sweep/na12878_lowcov_sweep.rs"]
 mod na12878_lowcov_sweep;
 
+mod prelude;
+use prelude::*;
+
 fn main() {
     sweep_common::reset_failure_count();
 

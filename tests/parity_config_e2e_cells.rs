@@ -1,6 +1,8 @@
 use libtest_mimic::{Arguments, Failed, Trial};
 
 mod common;
+mod prelude;
+use prelude::*;
 
 fn main() {
     if std::env::var_os("PARITY_REGION_INDEX").is_some() {
