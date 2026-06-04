@@ -771,10 +771,11 @@ fn run_partial_pipeline(
         std::mem::take(soft_clips_3_end),
         std::mem::take(soft_clips_5_end),
     );
+    let scope_reference = std::mem::take(reference);
     let scope = Scope {
         bam: context.bam.to_string(),
         region: modified_region,
-        region_ref: Arc::new(reference.clone()),
+        region_ref: Arc::new(scope_reference),
         reference_resource: Arc::clone(context.reference_resource),
         max_read_length,
         splice: Arc::new(context.splice.clone()),
@@ -819,6 +820,8 @@ fn run_partial_pipeline(
         duplicate_reads,
     );
     let variation_data = parser.process_preprocessor(&mut data, &header, &chr_name);
+    drop(parser);
+    *reference = Arc::try_unwrap(region_ref).unwrap_or_else(|region_ref| (*region_ref).clone());
     *non_insertion_variants = variation_data.non_insertion_variants;
     *insertion_variants = variation_data.insertion_variants;
     *ref_coverage = variation_data.ref_coverage;
