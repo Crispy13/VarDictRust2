@@ -364,11 +364,11 @@ pub fn create_variant(
     total_pos_coverage: i32,
     var: &mut Vec<Variant>,
     debug_lines: &mut Vec<String>,
-    keys: &[String],
+    keys: &[&str],
     hicov: i32,
     conf: &Configuration,
 ) {
-    for description_string in keys {
+    for &description_string in keys {
         if description_string == "SV" {
             // Trap T13: SV string format
             if let Some(sv) = &non_insertion_variations.sv {
@@ -409,7 +409,7 @@ pub fn create_variant(
         let lo_divisor = if locnt != 0 { locnt as f64 } else { 0.5_f64 };
 
         let mut tvref = Variant::default();
-        tvref.description_string = description_string.clone();
+        tvref.description_string = description_string.to_owned();
         tvref.position_coverage = cnt.vars_count;
         tvref.vars_count_on_forward = fwd;
         tvref.vars_count_on_reverse = rev;
@@ -474,11 +474,14 @@ pub fn create_insertion(
         None => return total_pos_coverage,
     };
 
-    let mut insertion_desc_strings: Vec<String> =
-        insertion_variations.entries.keys().cloned().collect();
-    insertion_desc_strings.sort(); // Trap T5: lexicographic sort
+    let mut insertion_desc_strings: Vec<&str> = insertion_variations
+        .entries
+        .keys()
+        .map(String::as_str)
+        .collect();
+    insertion_desc_strings.sort_unstable(); // Trap T5: lexicographic sort
 
-    for description_string in &insertion_desc_strings {
+    for description_string in insertion_desc_strings {
         // Trap T25: totalPosCoverage updated for '&' descriptions
         if description_string.contains('&') && ref_coverage.contains_key(&(position + 1)) {
             total_pos_coverage = *ref_coverage.get(&(position + 1)).unwrap();
@@ -533,7 +536,7 @@ pub fn create_insertion(
         let lo_divisor = if locnt != 0 { locnt as f64 } else { 0.5_f64 };
 
         let mut tvref = Variant::default();
-        tvref.description_string = description_string.clone();
+        tvref.description_string = description_string.to_owned();
         tvref.position_coverage = cnt.vars_count;
         tvref.vars_count_on_forward = fwd;
         tvref.vars_count_on_reverse = rev;
@@ -667,9 +670,20 @@ pub enum IncrementalProcessEvent {
     ReadyBefore(i32),
 }
 
-fn prune_position_map_before<V>(map: &mut PositionMap<V>, cursor: &mut i32, limit: i32) {
-    while *cursor < limit {
-        map.remove(cursor);
+fn sorted_position_keys<V>(map: &PositionMap<V>) -> Vec<i32> {
+    let mut keys: Vec<i32> = map.keys().copied().collect();
+    keys.sort_unstable();
+    keys
+}
+
+fn prune_position_map_before<V>(
+    map: &mut PositionMap<V>,
+    sorted_keys: &[i32],
+    cursor: &mut usize,
+    limit: i32,
+) {
+    while sorted_keys.get(*cursor).is_some_and(|&position| position < limit) {
+        map.remove(&sorted_keys[*cursor]);
         *cursor += 1;
     }
 }
@@ -1458,9 +1472,15 @@ where
         suffix_min_positions[index] = suffix_min_positions[index + 1].min(positions[index]);
     }
     let first_prunable_position = positions.iter().copied().min().unwrap_or(i32::MAX);
-    let mut non_insertion_prune_cursor = first_prunable_position;
-    let mut insertion_prune_cursor = first_prunable_position;
-    let mut ref_coverage_prune_cursor = first_prunable_position;
+    let non_insertion_prune_keys = sorted_position_keys(non_insertion_variants);
+    let insertion_prune_keys = sorted_position_keys(insertion_variants);
+    let ref_coverage_prune_keys = sorted_position_keys(ref_coverage);
+    let mut non_insertion_prune_cursor =
+        non_insertion_prune_keys.partition_point(|&position| position < first_prunable_position);
+    let mut insertion_prune_cursor =
+        insertion_prune_keys.partition_point(|&position| position < first_prunable_position);
+    let mut ref_coverage_prune_cursor =
+        ref_coverage_prune_keys.partition_point(|&position| position < first_prunable_position);
 
     for (index, &position) in positions.iter().enumerate() {
         // Trap T28: error-and-continue — wrap in closure that can handle errors.
@@ -1494,15 +1514,22 @@ where
             if watermark != i32::MAX {
                 prune_position_map_before(
                     non_insertion_variants,
+                    &non_insertion_prune_keys,
                     &mut non_insertion_prune_cursor,
                     watermark,
                 );
                 prune_position_map_before(
                     insertion_variants,
+                    &insertion_prune_keys,
                     &mut insertion_prune_cursor,
                     watermark,
                 );
-                prune_position_map_before(ref_coverage, &mut ref_coverage_prune_cursor, watermark);
+                prune_position_map_before(
+                    ref_coverage,
+                    &ref_coverage_prune_keys,
+                    &mut ref_coverage_prune_cursor,
+                    watermark,
+                );
             }
             on_event(IncrementalProcessEvent::ReadyBefore(watermark));
         }
@@ -1605,8 +1632,12 @@ fn process_position(
     let hicov = calc_hicov(insertion_variants.get(&position), vars_at_cur_position);
 
     let mut var: Vec<Variant> = Vec::new();
-    let mut keys: Vec<String> = vars_at_cur_position.entries.keys().cloned().collect();
-    keys.sort(); // Trap T4,T5: lexicographic sort
+    let mut keys: Vec<&str> = vars_at_cur_position
+        .entries
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable(); // Trap T4,T5: lexicographic sort
 
     let mut debug_lines: Vec<String> = Vec::new();
 
