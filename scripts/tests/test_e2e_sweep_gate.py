@@ -434,6 +434,48 @@ class GateSmokeTest(unittest.TestCase):
 
         self.assertEqual(warnings["counts"], {"incompatible_backfilled_chunks": 1})
 
+    def test_run_provenance_check_skips_content_decompress_when_metadata_not_ready(self) -> None:
+        matrix = [("T1-01", "hg002", "1")]
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as root_dir:
+            root = Path(root_dir)
+            output_root = root / "output"
+            chunks = output_root / "T1-01" / "1" / "hg002_1.chunks.json"
+            tsv = output_root / "T1-01" / "1" / "hg002_1.tsv.zst"
+            bed_root = root / "beds"
+            bed_path = bed_root / "hg002" / "1.bed"
+            chunks.parent.mkdir(parents=True, exist_ok=True)
+            bed_path.parent.mkdir(parents=True, exist_ok=True)
+            tsv.write_text("compressed", encoding="utf-8")
+            bed_path.write_text("1\t10\t20\n", encoding="utf-8")
+            expected_bed_sha256 = hashlib.sha256(bed_path.read_bytes()).hexdigest()
+            chunks.write_text(
+                json.dumps(
+                    {
+                        "monolithic_md5": hashlib.md5(b"fixture\n").hexdigest(),
+                        "monolithic_bytes": len(b"fixture\n"),
+                        "vardict_commit": "deadbeef",
+                        "preset": "T1-01",
+                        "bed_sha256": expected_bed_sha256,
+                        "generator_flags": "--output-only --config WRONG --tags hg002",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = mock.Mock(sweep_bed_root=bed_root)
+
+            with mock.patch.object(e2e_sweep_gate, "CANONICAL_OUTPUT_ROOT", output_root), mock.patch(
+                "scripts.e2e_sweep_gate.live_vardictjava_commit",
+                return_value="deadbeef",
+            ), mock.patch(
+                "scripts.e2e_sweep_gate.decompressed_tsv_md5_and_bytes",
+            ) as decompress_mock, mock.patch("scripts.e2e_sweep_gate.emit_status"), mock.patch(
+                "scripts.e2e_sweep_gate.emit_warning_summary"
+            ):
+                warnings = e2e_sweep_gate.run_provenance_check(args, matrix)
+
+        self.assertEqual(warnings["counts"], {"mismatch_generator_flags": 1})
+        decompress_mock.assert_not_called()
+
     def test_progress_log_captures_status_and_warning_lines(self) -> None:
         with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tmp") as report_dir:
             args = mock.Mock(report_dir=Path(report_dir))

@@ -1620,7 +1620,7 @@ def provenance_metadata_warning(
     return f"mismatch_{key}", f"{chunks_label} expected={expected_value} actual={actual_value}"
 
 
-def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
+def cache_fingerprint_structural_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
     staged_tsv_path, resolved_tsv_path = validation_path_pair(tsv_path)
     staged_chunks_path, resolved_chunks_path = validation_path_pair(chunks_path)
     tsv_label = format_validation_path(staged_tsv_path, resolved_tsv_path)
@@ -1653,6 +1653,19 @@ def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object
                 f"{chunks_label} missing gate provenance: {','.join(missing_provenance)}",
             )
 
+    return None
+
+
+def cache_fingerprint_content_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
+    staged_tsv_path, resolved_tsv_path = validation_path_pair(tsv_path)
+    staged_chunks_path, resolved_chunks_path = validation_path_pair(chunks_path)
+    tsv_label = format_validation_path(staged_tsv_path, resolved_tsv_path)
+    chunks_label = format_validation_path(staged_chunks_path, resolved_chunks_path)
+
+    assert isinstance(payload, dict)
+    monolithic_md5 = payload.get("monolithic_md5")
+    monolithic_bytes = payload.get("monolithic_bytes")
+
     try:
         actual_md5, actual_bytes = decompressed_tsv_md5_and_bytes(staged_tsv_path)
     except subprocess.CalledProcessError as exc:
@@ -1676,6 +1689,10 @@ def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object
         )
 
     return None
+
+
+def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
+    return cache_fingerprint_structural_warning(tsv_path, chunks_path, payload) or cache_fingerprint_content_warning(tsv_path, chunks_path, payload)
 
 
 def manifest_cache_entries_payload() -> dict:
@@ -1965,18 +1982,23 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                 completed_cells += 1
                 continue
 
-            fingerprint_warning = cache_fingerprint_warning(tsv_path, chunks_path, payload)
-            if fingerprint_warning is not None:
-                warning_key, warning_message = fingerprint_warning
+            cell_not_ready = False
+
+            structural_warning = cache_fingerprint_structural_warning(tsv_path, chunks_path, payload)
+            if structural_warning is not None:
+                warning_key, warning_message = structural_warning
                 track_warning(
                     warning_counts,
                     warning_key,
                     warning_message,
                     warning_samples,
                 )
+                cell_not_ready = True
+
             if not isinstance(payload, dict):
                 completed_cells += 1
                 continue
+
             vardict_commit = payload.get("vardict_commit")
             if vardict_commit is None:
                 track_warning(
@@ -1985,6 +2007,7 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                     str(chunks_path),
                     warning_samples,
                 )
+                cell_not_ready = True
             elif vardict_commit != live_commit:
                 raise SystemExit(
                     f"ERROR: provenance mismatch for {preset}/{tag}/chr{chrom}: "
@@ -2012,6 +2035,7 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                         format_validation_path(staged_chunks_path, resolved_chunks_path),
                         warning_samples,
                     )
+                    cell_not_ready = True
                     continue
 
                 metadata_warning = provenance_metadata_warning(
@@ -2029,6 +2053,19 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                         warning_message,
                         warning_samples,
                     )
+                    cell_not_ready = True
+
+            if not cell_not_ready:
+                content_warning = cache_fingerprint_content_warning(tsv_path, chunks_path, payload)
+                if content_warning is not None:
+                    warning_key, warning_message = content_warning
+                    track_warning(
+                        warning_counts,
+                        warning_key,
+                        warning_message,
+                        warning_samples,
+                    )
+
             completed_cells += 1
 
         emit_status(

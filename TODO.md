@@ -13,6 +13,38 @@ pub type VariantOwnedLineSink = dyn Fn(String) + Send + Sync + 'static;
 ```
 we can use enum or just one function.
 
+## Sweep gate: stale golden-cache provenance → cache reports `not-ready`
+
+**Context:** `scripts/e2e_sweep_gate.py` `run_provenance_check` was reordered so the
+cheap metadata checks run before the expensive `zstd -dc | md5` content check, which
+runs only when a cell is otherwise ready (commit on `dev/claude`). That removed the
+~13-minute wasted decompress (CM-PILEUP's 36 GB golden cache on `/hdd-disk1`) seen in
+the `na12878_lowcov` run — but it only makes the gate **fail fast**, not pass.
+
+**Real issue:** the `na12878_lowcov` golden cache is 700/700 `not-ready`
+(`mismatch_generator_flags=615` + `incompatible_backfilled_chunks=85`). The recorded
+`generator_flags` are `['--fisher']` instead of the expected
+`--output-only --config <PRESET> --tags <tag> --sweep-bed-root <root>`, and several
+backfilled sidecars lack `generator_flags`/`preset`/`bed_sha256`. So the gate does not
+trust this cache as a canonical result even though the parity tests themselves pass.
+
+**Unblock path (pick one):**
+1. Regenerate/backfill the `chunks.json` sidecars so `generator_flags`/`preset`/
+   `bed_sha256` match the gate's expectation (see `scripts/backfill_chunks_json.py`
+   and `scripts/gen_e2e_sweep_golden.sh`). Makes the cache genuinely `ready`.
+2. Or confirm the mismatch is purely cosmetic (TSV *content* is correct; only the
+   recorded provenance string is incomplete) and normalize/relax that specific check
+   in `provenance_metadata_warning` / `missing_backfilled_provenance_keys`.
+
+**Then (only after the cache is `ready` again):** the legitimate content md5 returns
+and CM-PILEUP's 36 GB will be decompressed for real — move the sweep-fixture cache
+off the 86%-full HDD `/hdd-disk1` onto SSD to keep that read fast. (The same large
+reads also slow the `tests` phase, where CM-PILEUP went idle 600s/1200s.)
+
+**Detection:** rerun the provenance phase of the sweep gate on `na12878_lowcov`;
+non-empty `warning_summary` / `readiness=not-ready` in `parity-failure-report.json`
+flags it.
+
 
 # Deferred
 ## 0.8 SomaticMode CLI dispatch in `src/bin/vardict_rs.rs`
