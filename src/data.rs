@@ -14,6 +14,276 @@ use crate::utils::{substr, substr_with_len};
 
 pub type PositionMap<V> = HashMap<i32, V, FxBuildHasher>;
 
+// ─── CoverageMap: dense Vec-backed map for ref_coverage (i32 → i32) ──────────
+//
+// Replaces `PositionMap<i32>` for `ref_coverage` only. Positions in a read
+// region are nearly contiguous, so a dense Vec indexed by (pos - base) beats
+// hashbrown probing. Positions below `base` (rare) fall back to a HashMap.
+//
+// Sentinel: ABSENT = i32::MIN means "not inserted". Presence is tracked via
+// `present` count so `is_empty` and `contains_key` are O(1).
+//
+// The `front` field is a logical offset into `dense`: `dense[front]`
+// corresponds to position `base`. This allows O(1) "removal" of the
+// front without draining the Vec. The physical Vec is only compacted
+// (re-based) when the wasted front exceeds COMPACT_THRESHOLD, which bounds
+// the amortized cost of compaction.
+
+const COVERAGE_ABSENT: i32 = i32::MIN;
+/// Compact the dense Vec when `front` exceeds this many ABSENT prefix slots.
+const COMPACT_THRESHOLD: usize = 4096;
+
+/// Dense Vec-backed coverage map. Fast for genomic regions (contiguous positions).
+/// Fallback HashMap handles rare below-base positions.
+#[derive(Clone, Debug)]
+pub struct CoverageMap {
+    /// Logical position of dense[front]; updated on compaction.
+    base: i32,
+    /// Values; dense[front] corresponds to `base`, dense[front+1] to `base+1`, etc.
+    dense: Vec<i32>,
+    /// Logical start index in `dense`; dense[..front] is wasted prefix.
+    front: usize,
+    /// Count of present slots in dense (for is_empty).
+    present: u32,
+    /// Positions < base (rare); also used as fallback for far-future positions.
+    fallback: HashMap<i32, i32, FxBuildHasher>,
+}
+
+impl Default for CoverageMap {
+    fn default() -> Self {
+        Self {
+            base: 0,
+            dense: Vec::new(),
+            front: 0,
+            present: 0,
+            fallback: HashMap::default(),
+        }
+    }
+}
+
+impl CoverageMap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Compact the dense Vec: drop the wasted ABSENT prefix.
+    /// Invariant: `base` = position of `dense[front]`. After compaction,
+    /// `dense[0]` = old `dense[front]`, `front = 0`, `base` unchanged.
+    #[cold]
+    fn compact(&mut self) {
+        if self.front == 0 {
+            return;
+        }
+        self.dense.drain(..self.front);
+        // base stays as-is (it already = position of dense[front] = new dense[0]).
+        self.front = 0;
+    }
+
+    /// Physical index of `pos` in `dense`, or `None` if out of range.
+    /// Invariant: dense[front + i] stores value for position `base + i`.
+    /// So phys = front + (pos - base).
+    #[inline]
+    fn phys_idx(&self, pos: i32) -> Option<usize> {
+        if self.dense.is_empty() || pos < self.base {
+            return None;
+        }
+        let logical = (pos - self.base) as usize;
+        let phys = self.front + logical;
+        if phys < self.dense.len() { Some(phys) } else { None }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.present == 0 && self.fallback.is_empty()
+    }
+
+    #[inline]
+    pub fn contains_key(&self, pos: &i32) -> bool {
+        match self.phys_idx(*pos) {
+            Some(i) => self.dense[i] != COVERAGE_ABSENT,
+            None => self.fallback.contains_key(pos),
+        }
+    }
+
+    #[inline]
+    pub fn get(&self, pos: &i32) -> Option<&i32> {
+        match self.phys_idx(*pos) {
+            Some(i) => {
+                let v = &self.dense[i];
+                if *v != COVERAGE_ABSENT { Some(v) } else { None }
+            }
+            None => self.fallback.get(pos),
+        }
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, pos: &i32) -> Option<&mut i32> {
+        let pos = *pos;
+        match self.phys_idx(pos) {
+            Some(i) => {
+                let v = &mut self.dense[i];
+                if *v != COVERAGE_ABSENT { Some(v) } else { None }
+            }
+            None => self.fallback.get_mut(&pos),
+        }
+    }
+
+    /// Insert a key-value pair. Returns prior value (None if was absent).
+    /// Maintains `present` count.
+    pub fn insert(&mut self, pos: i32, value: i32) -> Option<i32> {
+        debug_assert!(value != COVERAGE_ABSENT, "value must not equal COVERAGE_ABSENT sentinel");
+        if self.dense.is_empty() {
+            // First insert (or after full compaction): set base.
+            self.base = pos;
+            self.front = 0;
+            self.dense.push(value);
+            self.present += 1;
+            return None;
+        }
+        if pos >= self.base {
+            let logical = (pos - self.base) as usize;
+            let phys = self.front + logical;
+            if phys >= self.dense.len() {
+                self.dense.resize(phys + 1, COVERAGE_ABSENT);
+            }
+            let old = std::mem::replace(&mut self.dense[phys], value);
+            if old == COVERAGE_ABSENT {
+                self.present += 1;
+                None
+            } else {
+                Some(old)
+            }
+        } else {
+            // pos < base: use fallback
+            self.fallback.insert(pos, value)
+        }
+    }
+
+    /// Remove a position. Returns prior value or None.
+    pub fn remove(&mut self, pos: &i32) -> Option<i32> {
+        let pos = *pos;
+        match self.phys_idx(pos) {
+            Some(i) => {
+                let old = std::mem::replace(&mut self.dense[i], COVERAGE_ABSENT);
+                if old != COVERAGE_ABSENT {
+                    self.present -= 1;
+                    // If we removed the current base slot, advance front+base.
+                    if i == self.front {
+                        // Advance front+base past any ABSENT slots.
+                        let old_front = self.front;
+                        while self.front < self.dense.len()
+                            && self.dense[self.front] == COVERAGE_ABSENT
+                        {
+                            self.front += 1;
+                        }
+                        let advanced = self.front - old_front;
+                        // base must track the position of dense[front].
+                        self.base = self.base.wrapping_add(advanced as i32);
+
+                        if self.front >= self.dense.len() {
+                            // All slots ABSENT; fully reset.
+                            self.dense.clear();
+                            self.front = 0;
+                            // base is now stale (beyond any position); will be reset on next insert.
+                        } else if self.front >= COMPACT_THRESHOLD {
+                            self.compact();
+                        }
+                    }
+                    return Some(old);
+                }
+                None
+            }
+            None => self.fallback.remove(&pos),
+        }
+    }
+
+    /// Iterator over all present positions. Returns owned i32 values.
+    /// dense[phys] corresponds to position base + (phys - front)... wait.
+    /// Invariant: dense[phys] for phys in [front, dense.len()) stores value for
+    /// position base + (phys - front). So dense[front + i] → position base + i... NO.
+    /// See phys_idx: phys = front + (pos - base), so pos = base + (phys - front).
+    /// dense[front + i]: pos = base + ((front + i) - front) = base + i. Correct.
+    pub fn keys(&self) -> impl Iterator<Item = i32> + '_ {
+        let base = self.base;
+        let front = self.front;
+        // dense[front + i] → position base + (front + i - front) = base + i
+        // But wait: phys_idx says phys = front + (pos - base), so pos = base + (phys - front)
+        // For phys = front + i: pos = base + ((front + i) - front) = base + i.
+        // And dense[self.front..][i] = dense[self.front + i], so pos = base + i. Correct.
+        let _ = front; // used above for documentation only; base + i is correct
+        let dense_iter = self.dense[self.front..].iter().enumerate().filter_map(move |(i, &v)| {
+            if v != COVERAGE_ABSENT {
+                Some(base + i as i32)
+            } else {
+                None
+            }
+        });
+        let fallback_iter = self.fallback.keys().copied();
+        dense_iter.chain(fallback_iter)
+    }
+}
+
+impl crate::variations::CountMap<i32> for CoverageMap {
+    #[inline]
+    fn increment_value(&mut self, key: i32, add: i32) {
+        // Semantics: absent → 0+add; present → existing+add
+        if self.dense.is_empty() {
+            self.base = key;
+            self.front = 0;
+            self.dense.push(add);
+            self.present += 1;
+            return;
+        }
+        if key >= self.base {
+            let logical = (key - self.base) as usize;
+            let phys = self.front + logical;
+            if phys >= self.dense.len() {
+                self.dense.resize(phys + 1, COVERAGE_ABSENT);
+            }
+            let slot = &mut self.dense[phys];
+            if *slot == COVERAGE_ABSENT {
+                *slot = add;
+                self.present += 1;
+            } else {
+                *slot += add;
+            }
+        } else {
+            *self.fallback.entry(key).or_insert(0) += add;
+        }
+    }
+}
+
+/// Custom serde: serialize CoverageMap as sorted [[pos, val], ...] array,
+/// identical representation to what serialize_sorted_int_map produced for HashMap<i32, i32>.
+pub fn serialize_coverage_map<S: serde::Serializer>(
+    map: &CoverageMap,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut entries: Vec<(i32, i32)> = map.keys()
+        .map(|k| (k, *map.get(&k).unwrap()))
+        .collect();
+    entries.sort_by_key(|(k, _)| *k);
+    let mut seq = serializer.serialize_seq(Some(entries.len()))?;
+    for pair in &entries {
+        seq.serialize_element(pair)?;
+    }
+    seq.end()
+}
+
+/// Custom serde: deserialize [[pos, val], ...] → CoverageMap.
+pub fn deserialize_coverage_map<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<CoverageMap, D::Error> {
+    use serde::Deserialize;
+    let entries = Vec::<(i32, i32)>::deserialize(deserializer)?;
+    let mut map = CoverageMap::new();
+    for (k, v) in entries {
+        map.insert(k, v);
+    }
+    Ok(map)
+}
+
 // ─── VecMap: insertion-ordered Vec-backed map for small per-position maps ────
 //
 // Replaces `IndexMap<String, Variation, FxBuildHasher>` as `VariationEntries`.
@@ -677,9 +947,9 @@ pub struct InitialData {
     pub insertion_variants: PositionMap<VariationMap>,
 
     #[serde(rename = "refCoverage")]
-    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub ref_coverage: PositionMap<i32>,
+    #[serde(serialize_with = "crate::data::serialize_coverage_map")]
+    #[serde(deserialize_with = "crate::data::deserialize_coverage_map")]
+    pub ref_coverage: CoverageMap,
 
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
@@ -696,7 +966,7 @@ impl InitialData {
     pub fn new(
         non_insertion_variants: PositionMap<VariationMap>,
         insertion_variants: PositionMap<VariationMap>,
-        ref_coverage: PositionMap<i32>,
+        ref_coverage: CoverageMap,
         soft_clips_3_end: HashMap<i32, Sclip>,
         soft_clips_5_end: HashMap<i32, Sclip>,
     ) -> Self {
@@ -734,9 +1004,9 @@ pub struct VariationData {
     pub position_to_deletions_count: PositionMap<SortedStringMap<i32>>,
 
     #[serde(rename = "refCoverage")]
-    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub ref_coverage: PositionMap<i32>,
+    #[serde(serialize_with = "crate::data::serialize_coverage_map")]
+    #[serde(deserialize_with = "crate::data::deserialize_coverage_map")]
+    pub ref_coverage: CoverageMap,
 
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
@@ -1288,9 +1558,9 @@ pub struct RealignedVariationData {
     pub soft_clips_3_end: HashMap<i32, Sclip>,
 
     #[serde(rename = "refCoverage")]
-    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub ref_coverage: PositionMap<i32>,
+    #[serde(serialize_with = "crate::data::serialize_coverage_map")]
+    #[serde(deserialize_with = "crate::data::deserialize_coverage_map")]
+    pub ref_coverage: CoverageMap,
 
     #[serde(rename = "maxReadLength")]
     pub max_read_length: Option<i32>,

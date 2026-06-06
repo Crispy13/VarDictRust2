@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use crate::config::{DISCPAIRQUAL, MINSVCDIST, SEED_1, SEED_2, SVFLANK};
 use crate::data::{
-    CurrentSegment, InitialData, Match, PositionMap, RealignedVariationData, Region, SVStructures,
-    Sclip, Side, SortPositionSclip, Variation, VariationMap, VariationMapSV,
+    CoverageMap, CurrentSegment, InitialData, Match, PositionMap, RealignedVariationData, Region,
+    SVStructures, Sclip, Side, SortPositionSclip, Variation, VariationMap, VariationMapSV,
 };
 use crate::java_hashmap_order::java_hashmap_i32_order_from_keys;
 use crate::reference::{Reference, ReferenceResource, ReferenceSequenceMap};
@@ -734,7 +734,7 @@ fn run_partial_pipeline(
     reference: &mut Reference,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
 ) {
@@ -888,7 +888,7 @@ pub fn find_del(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -1508,7 +1508,7 @@ pub fn find_inv(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -1620,7 +1620,7 @@ fn find_inv_sub(
     side: Side,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -2025,7 +2025,7 @@ fn find_inv_sub(
 #[allow(clippy::too_many_arguments)]
 pub fn findsv(
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -2469,7 +2469,7 @@ pub fn findsv(
 pub fn find_del_disc(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -2749,7 +2749,7 @@ pub fn find_del_disc(
 pub fn find_inv_disc(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &HashMap<i32, Sclip>,
     soft_clips_5_end: &HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -3018,7 +3018,7 @@ pub fn find_dup_disc(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -3470,7 +3470,7 @@ pub fn find_all_svs(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     reference: &mut Reference,
@@ -3603,7 +3603,7 @@ pub fn find_all_svs(
 /// counts on matching existing non-insertion variants.
 pub fn adj_snv(
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     soft_clips_5_end: &mut HashMap<i32, Sclip>,
     soft_clips_3_end: &mut HashMap<i32, Sclip>,
     reference: &Reference,
@@ -3770,7 +3770,7 @@ pub fn process(
     bams: &Option<Vec<String>>,
     splice: &Option<std::collections::BTreeSet<String>>,
     _prev_non_insertion_variants: &mut PositionMap<VariationMap>,
-    _prev_ref_coverage: &mut PositionMap<i32>,
+    _prev_ref_coverage: &mut CoverageMap,
     _prev_soft_clips_3_end: &mut HashMap<i32, Sclip>,
     _prev_soft_clips_5_end: &mut HashMap<i32, Sclip>,
     _prev_reference_sequences: &ReferenceSequenceMap,

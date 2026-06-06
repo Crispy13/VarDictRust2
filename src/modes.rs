@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::data::{
-    AlignedVarsData, InitialData, PositionMap, RealignedVariationData, Region, Sclip, VariationMap,
+    AlignedVarsData, CoverageMap, InitialData, PositionMap, RealignedVariationData, Region, Sclip,
+    VariationMap,
 };
 use crate::mods::amplicon_post_process::amplicon_post_process;
 use crate::mods::cigar_parser::CigarParser;
@@ -270,7 +271,7 @@ fn process_structural_variants(
         Some(splice.iter().cloned().collect::<BTreeSet<_>>())
     };
     let mut prev_non_insertion_variants = PositionMap::<VariationMap>::default();
-    let mut prev_ref_coverage = PositionMap::<i32>::default();
+    let mut prev_ref_coverage = CoverageMap::default();
     let mut prev_soft_clips_3_end = HashMap::<i32, Sclip>::new();
     let mut prev_soft_clips_5_end = HashMap::<i32, Sclip>::new();
     let prev_reference_sequences = ReferenceSequenceMap::default();

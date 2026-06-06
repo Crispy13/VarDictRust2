@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use regex::Regex;
 
 use crate::config::{Configuration, SVFLANK};
-use crate::data::{AlignedVarsData, PositionMap, Region, Variant, VariationMap, Vars};
+use crate::data::{AlignedVarsData, CoverageMap, PositionMap, Region, Variant, VariationMap, Vars};
 use crate::java_hashmap_order::java_hashmap_i32_order_from_keys;
 use crate::patterns::{
     AMP_ATGC, ANY_SV, BEGIN_DIGITS, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_CARET, CARET_ATGNC,
@@ -465,7 +465,7 @@ pub fn create_insertion(
     mut hicov: i32,
     insertion_variants: &PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &PositionMap<i32>,
+    ref_coverage: &CoverageMap,
     ref_map: &ReferenceSequenceMap,
     conf: &Configuration,
 ) -> i32 {
@@ -676,8 +676,26 @@ fn sorted_position_keys<V>(map: &PositionMap<V>) -> Vec<i32> {
     keys
 }
 
+fn sorted_coverage_keys(map: &CoverageMap) -> Vec<i32> {
+    let mut keys: Vec<i32> = map.keys().collect();
+    keys.sort_unstable();
+    keys
+}
+
 fn prune_position_map_before<V>(
     map: &mut PositionMap<V>,
+    sorted_keys: &[i32],
+    cursor: &mut usize,
+    limit: i32,
+) {
+    while sorted_keys.get(*cursor).is_some_and(|&position| position < limit) {
+        map.remove(&sorted_keys[*cursor]);
+        *cursor += 1;
+    }
+}
+
+fn prune_coverage_map_before(
+    map: &mut CoverageMap,
     sorted_keys: &[i32],
     cursor: &mut usize,
     limit: i32,
@@ -764,7 +782,7 @@ pub fn collect_reference_variants(
     debug_lines: &[String],
     ref_map: &ReferenceSequenceMap,
     region: &Region,
-    ref_coverage: &PositionMap<i32>,
+    ref_coverage: &CoverageMap,
     non_insertion_variants: &PositionMap<VariationMap>,
     duprate: f64,
     conf: &Configuration,
@@ -1128,7 +1146,7 @@ fn process_variant_finalization(
     variations_at_pos: &mut Vars,
     ref_map: &ReferenceSequenceMap,
     region: &Region,
-    ref_coverage: &PositionMap<i32>,
+    ref_coverage: &CoverageMap,
     _duprate: f64,
     conf: &Configuration,
     debug_lines: &[String],
@@ -1375,7 +1393,7 @@ pub fn process(
     max_read_length: i32,
     region: &Region,
     ref_map: &ReferenceSequenceMap,
-    ref_coverage: &PositionMap<i32>,
+    ref_coverage: &CoverageMap,
     insertion_variants: &PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     duprate: f64,
@@ -1442,7 +1460,7 @@ pub fn process_incremental<F>(
     max_read_length: i32,
     region: &Region,
     ref_map: &ReferenceSequenceMap,
-    ref_coverage: &mut PositionMap<i32>,
+    ref_coverage: &mut CoverageMap,
     insertion_variants: &mut PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     duprate: f64,
@@ -1474,7 +1492,7 @@ where
     let first_prunable_position = positions.iter().copied().min().unwrap_or(i32::MAX);
     let non_insertion_prune_keys = sorted_position_keys(non_insertion_variants);
     let insertion_prune_keys = sorted_position_keys(insertion_variants);
-    let ref_coverage_prune_keys = sorted_position_keys(ref_coverage);
+    let ref_coverage_prune_keys = sorted_coverage_keys(ref_coverage);
     let mut non_insertion_prune_cursor =
         non_insertion_prune_keys.partition_point(|&position| position < first_prunable_position);
     let mut insertion_prune_cursor =
@@ -1524,7 +1542,7 @@ where
                     &mut insertion_prune_cursor,
                     watermark,
                 );
-                prune_position_map_before(
+                prune_coverage_map_before(
                     ref_coverage,
                     &ref_coverage_prune_keys,
                     &mut ref_coverage_prune_cursor,
@@ -1569,7 +1587,7 @@ fn process_position(
     position: i32,
     aligned_variants: &mut HashMap<i32, Vars>,
     ref_map: &ReferenceSequenceMap,
-    ref_coverage: &PositionMap<i32>,
+    ref_coverage: &CoverageMap,
     insertion_variants: &PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     region: &Region,

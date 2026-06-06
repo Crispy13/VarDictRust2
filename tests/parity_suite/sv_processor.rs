@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use vardict_rs::data::{PositionMap, RealignedVariationData, Sclip, VariationMap};
+use vardict_rs::data::{CoverageMap, PositionMap, RealignedVariationData, Sclip, VariationMap};
 use vardict_rs::mods::structural_variants_processor;
 use vardict_rs::reference::{ReferenceResource, ReferenceSequenceMap};
 
@@ -57,7 +57,7 @@ fn parity_sv_processor_all_regions() {
 
         // Empty prev_* arguments (single-region, no prior segment)
         let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
-        let mut prev_ref_coverage: PositionMap<i32> = PositionMap::default();
+        let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
         let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
         let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
         let prev_reference_sequences = ReferenceSequenceMap::default();
@@ -122,7 +122,7 @@ fn parity_sv_processor_region_1_9967324_9968024() {
     let splice: Option<std::collections::BTreeSet<String>> = None;
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
-    let mut prev_ref_coverage: PositionMap<i32> = PositionMap::default();
+    let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
     let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
     let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
     let prev_reference_sequences = ReferenceSequenceMap::default();
@@ -192,7 +192,7 @@ fn parity_sv_processor_config_t1_01_14_106517915_106518615() {
     let splice: Option<std::collections::BTreeSet<String>> = None;
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
-    let mut prev_ref_coverage: PositionMap<i32> = PositionMap::default();
+    let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
     let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
     let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
     let prev_reference_sequences = ReferenceSequenceMap::default();
@@ -268,7 +268,7 @@ fn parity_sv_processor_config_t1_01_8_20002977_20003677() {
     let splice: Option<std::collections::BTreeSet<String>> = None;
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
-    let mut prev_ref_coverage: PositionMap<i32> = PositionMap::default();
+    let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
     let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
     let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
     let prev_reference_sequences = ReferenceSequenceMap::default();
@@ -344,7 +344,7 @@ fn parity_sv_processor_config_t1_02_1_9967324_9968024() {
     let splice: Option<std::collections::BTreeSet<String>> = None;
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
-    let mut prev_ref_coverage: PositionMap<i32> = PositionMap::default();
+    let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
     let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
     let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
     let prev_reference_sequences = ReferenceSequenceMap::default();
@@ -420,7 +420,7 @@ fn parity_sv_processor_config_cm_noreal_11_7717216_7717916() {
     let splice: Option<std::collections::BTreeSet<String>> = None;
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
-    let mut prev_ref_coverage: PositionMap<i32> = PositionMap::default();
+    let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
     let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
     let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
     let prev_reference_sequences = ReferenceSequenceMap::default();
@@ -497,7 +497,7 @@ fn parity_sv_processor_config_cm_noreal_X_134988591_134989291() {
     let splice: Option<std::collections::BTreeSet<String>> = None;
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
-    let mut prev_ref_coverage: PositionMap<i32> = PositionMap::default();
+    let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
     let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
     let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
     let prev_reference_sequences = ReferenceSequenceMap::default();

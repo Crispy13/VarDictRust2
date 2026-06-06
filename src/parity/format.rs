@@ -153,8 +153,8 @@ where
 #[cfg(test)]
 mod tests {
     use crate::data::{
-        AlignedVarsData, PositionMap, RealignedVariationData, SortedStringMap, Variation,
-        VariationData, VariationEntries, VariationMap, Vars,
+        AlignedVarsData, CoverageMap, PositionMap, RealignedVariationData, SortedStringMap,
+        Variation, VariationData, VariationEntries, VariationMap, Vars,
     };
     use std::collections::{BTreeMap, HashMap};
 
@@ -211,7 +211,7 @@ mod tests {
             },
         );
 
-        let mut ref_cov = PositionMap::default();
+        let mut ref_cov = CoverageMap::default();
         ref_cov.insert(100, 50);
         ref_cov.insert(101, 55);
 
@@ -248,7 +248,7 @@ mod tests {
             },
         );
 
-        let mut ref_cov = PositionMap::default();
+        let mut ref_cov = CoverageMap::default();
         ref_cov.insert(50, 42);
 
         let rdata = RealignedVariationData {

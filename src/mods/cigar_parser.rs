@@ -9,8 +9,8 @@ use rust_htslib::bam::{self, HeaderView, record::Aux};
 
 use crate::config::{Configuration, MINMAPBASE, MINSVCDIST, MINSVPOS, SEED_1};
 use crate::data::{
-    BaseInsertion, Mate, ModifiedCigar, PositionMap, Region, SVStructures, Sclip, SortedStringMap,
-    Variation, VariationData, VariationMap,
+    BaseInsertion, CoverageMap, Mate, ModifiedCigar, PositionMap, Region, SVStructures, Sclip,
+    SortedStringMap, Variation, VariationData, VariationMap,
 };
 use crate::mods::cigar_modifier::modify_cigar;
 use crate::mods::sam_file_parser::{RecordPreprocessor, get_mate_reference_name};
@@ -216,7 +216,7 @@ pub struct CigarParser {
     // ── Output maps (populated across all records) ──
     pub non_insertion_variants: PositionMap<VariationMap>,
     pub insertion_variants: PositionMap<VariationMap>,
-    pub ref_coverage: PositionMap<i32>,
+    pub ref_coverage: CoverageMap,
     pub soft_clips_3_end: HashMap<i32, Sclip>,
     pub soft_clips_5_end: HashMap<i32, Sclip>,
     pub position_to_insertion_count: PositionMap<SortedStringMap<i32>>,
@@ -260,7 +260,7 @@ impl CigarParser {
             // Output maps — initialized empty
             non_insertion_variants: PositionMap::default(),
             insertion_variants: PositionMap::default(),
-            ref_coverage: PositionMap::default(),
+            ref_coverage: CoverageMap::default(),
             soft_clips_3_end: HashMap::new(),
             soft_clips_5_end: HashMap::new(),
             position_to_insertion_count: PositionMap::default(),
@@ -307,7 +307,7 @@ impl CigarParser {
         // Fields from RecordPreprocessor / InitialData:
         non_insertion_variants: PositionMap<VariationMap>,
         insertion_variants: PositionMap<VariationMap>,
-        ref_coverage: PositionMap<i32>,
+        ref_coverage: CoverageMap,
         soft_clips_3_end: HashMap<i32, Sclip>,
         soft_clips_5_end: HashMap<i32, Sclip>,
         total_reads: i32,
@@ -3232,7 +3232,7 @@ impl CigarParser {
         query_sequence: &str,
         query_quality: &str,
         reference: &ReferenceSequenceMap,
-        ref_coverage: &mut PositionMap<i32>,
+        ref_coverage: &mut CoverageMap,
     ) -> Offset {
         let (vext, goodq) = Self::with_conf(|conf| (conf.vext, conf.goodq));
         let mut offset = 0i32;
