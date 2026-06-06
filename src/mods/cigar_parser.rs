@@ -957,9 +957,24 @@ impl CigarParser {
         }
 
         // Java: CigarParser.java#L305-L306 — double soft-clip filter
-        let cigar_string = self.cigar.to_string();
-        if BEGIN_dig_dig_S_ANY_dig_dig_S_END.is_match(&cigar_string) {
-            return;
+        // Equivalent to regex ^\d\dS.*\d\dS$: both endpoints are S with exactly 2-digit length
+        // (10..=99) AND the CIGAR has at least 2 elements. The `len >= 2` guard is required
+        // because for a single-element CIGAR (e.g. "76S"), `first()` and `last()` return the
+        // same element, which would incorrectly fire. The regex `^\d\dS.*\d\dS$` requires two
+        // distinct `\d\dS` tokens separated by `.*`, so it cannot match a single-element CIGAR.
+        // Checking directly on ParsedCigar avoids a String allocation + regex evaluation per read.
+        {
+            let elems = &self.cigar.elements;
+            let double_soft_clip = elems.len() >= 2
+                && elems
+                    .first()
+                    .is_some_and(|e| e.operator == CigarOp::S && (10..=99).contains(&e.length))
+                && elems
+                    .last()
+                    .is_some_and(|e| e.operator == CigarOp::S && (10..=99).contains(&e.length));
+            if double_soft_clip {
+                return;
+            }
         }
 
         // Java: CigarParser.java#L309-L312
