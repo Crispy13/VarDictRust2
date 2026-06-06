@@ -13,7 +13,173 @@ use crate::patterns::ANY_SV;
 use crate::utils::{substr, substr_with_len};
 
 pub type PositionMap<V> = HashMap<i32, V, FxBuildHasher>;
-pub type VariationEntries = IndexMap<String, Variation, FxBuildHasher>;
+
+// ─── VecMap: insertion-ordered Vec-backed map for small per-position maps ────
+//
+// Replaces `IndexMap<String, Variation, FxBuildHasher>` as `VariationEntries`.
+// Per-position variation maps hold ~1-5 entries; linear scan on a contiguous
+// Vec beats hashbrown probing (movemask cost) at these sizes.
+//
+// API contract: identical to IndexMap — insert overwrites & returns old value,
+// shift_remove / shift_remove_entry preserve the order of remaining entries.
+
+/// Insertion-ordered Vec-backed map. Fast for N≤~16; do not use for large maps.
+#[derive(Clone, Debug, Default)]
+pub struct VecMap<V> {
+    entries: Vec<(String, V)>,
+}
+
+impl<V> VecMap<V> {
+    #[inline]
+    pub fn new() -> Self {
+        Self { entries: Vec::new() }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    #[inline]
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.entries.iter().any(|(k, _)| k == key)
+    }
+
+    #[inline]
+    pub fn get(&self, key: &str) -> Option<&V> {
+        self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut V> {
+        self.entries.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    /// Insert a key-value pair. If the key already exists, overwrites the value
+    /// and returns the old value. Otherwise inserts at the end and returns None.
+    #[inline]
+    pub fn insert(&mut self, key: String, value: V) -> Option<V> {
+        if let Some(pos) = self.entries.iter().position(|(k, _)| k == &key) {
+            let old = std::mem::replace(&mut self.entries[pos].1, value);
+            Some(old)
+        } else {
+            self.entries.push((key, value));
+            None
+        }
+    }
+
+    /// Remove a key, preserving insertion order of remaining entries.
+    /// Returns the value if found, else None.
+    #[inline]
+    pub fn shift_remove(&mut self, key: &str) -> Option<V> {
+        if let Some(pos) = self.entries.iter().position(|(k, _)| k == key) {
+            Some(self.entries.remove(pos).1)
+        } else {
+            None
+        }
+    }
+
+    /// Remove a key, preserving insertion order. Returns (key, value) if found.
+    #[inline]
+    pub fn shift_remove_entry(&mut self, key: &str) -> Option<(String, V)> {
+        if let Some(pos) = self.entries.iter().position(|(k, _)| k == key) {
+            Some(self.entries.remove(pos))
+        } else {
+            None
+        }
+    }
+
+    /// Alias for `shift_remove` — preserves order, same semantics as IndexMap::remove
+    /// when called from structural_variants_processor (re-inserts after mutation).
+    #[inline]
+    pub fn remove(&mut self, key: &str) -> Option<V> {
+        self.shift_remove(key)
+    }
+
+    /// Single-pass hot path: lookup-or-insert-default.
+    /// Avoids double scan (one for check, one for insert).
+    #[inline]
+    pub fn get_or_insert_with_default(&mut self, key: &str) -> &mut V
+    where
+        V: Default,
+    {
+        let pos = self.entries.iter().position(|(k, _)| k == key);
+        match pos {
+            Some(i) => &mut self.entries[i].1,
+            None => {
+                self.entries.push((key.to_string(), V::default()));
+                let last = self.entries.len() - 1;
+                &mut self.entries[last].1
+            }
+        }
+    }
+
+    /// Iterator over (&String, &V) pairs in insertion order.
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &V)> {
+        self.entries.iter().map(|(k, v)| (k, v))
+    }
+
+    /// Iterator over (&String, &mut V) pairs in insertion order.
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&String, &mut V)> {
+        self.entries.iter_mut().map(|(k, v)| (k as &String, v))
+    }
+
+    /// Iterator over keys in insertion order.
+    #[inline]
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.entries.iter().map(|(k, _)| k)
+    }
+
+    /// Iterator over values in insertion order.
+    #[inline]
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.entries.iter().map(|(_, v)| v)
+    }
+}
+
+/// By-key indexing mirroring `IndexMap`'s `Index<&Q>`: panics if the key is absent.
+impl<V> std::ops::Index<&str> for VecMap<V> {
+    type Output = V;
+    #[inline]
+    fn index(&self, key: &str) -> &V {
+        self.get(key).expect("VecMap: no entry found for key")
+    }
+}
+
+impl<V> IntoIterator for VecMap<V> {
+    type Item = (String, V);
+    type IntoIter = std::vec::IntoIter<(String, V)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.into_iter()
+    }
+}
+
+impl<'a, V> IntoIterator for &'a VecMap<V> {
+    type Item = &'a (String, V);
+    type IntoIter = std::slice::Iter<'a, (String, V)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+impl<V: PartialEq> PartialEq for VecMap<V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+
+impl<V: Eq> Eq for VecMap<V> {}
+
+pub type VariationEntries = VecMap<Variation>;
 
 // ─── SortedStringMap: BTreeMap<String, V> with array-of-pairs serde ─────────
 
@@ -450,8 +616,8 @@ pub struct VariationMapSV {
 // Always serializes as {"entries": [[k,v], ...], "sv": null|{...}}
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VariationMap {
-    #[serde(serialize_with = "crate::parity::format::serialize_indexmap_as_pairs")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_indexmap_as_pairs")]
+    #[serde(serialize_with = "crate::parity::format::serialize_vecmap_as_pairs")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_vecmap_as_pairs")]
     pub entries: VariationEntries,
 
     pub sv: Option<VariationMapSV>,

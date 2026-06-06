@@ -587,18 +587,8 @@ where
     H: BuildHasher,
 {
     let map = hash.entry(start).or_default();
-    let entries = &mut map.entries;
-
-    match entries
-        .raw_entry_mut_v1()
-        .from_key(description_string.as_ref())
-    {
-        RawEntryMut::Occupied(entry) => entry.into_mut(),
-        RawEntryMut::Vacant(entry) => {
-            let (_, variation) = entry.insert(description_string.into(), Variation::default());
-            variation
-        }
-    }
+    map.entries
+        .get_or_insert_with_default(description_string.as_ref())
 }
 
 /// Ported from: VariationUtils.java:L446-L458

@@ -65,3 +65,7 @@ harness = false
 [[bench]]
 name = "cigar_parser_bytes"
 harness = false
+
+[[bench]]
+name = "variation_entries_bench"
+harness = false

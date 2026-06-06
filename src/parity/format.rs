@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
+use crate::data::VecMap;
+
 /// Serializes a HashMap<i32, V, H> as sorted array of pairs: [[key, value], ...]
 pub fn serialize_sorted_int_map<V: Serialize, H: BuildHasher, S: Serializer>(
     map: &HashMap<i32, V, H>,
@@ -35,6 +37,33 @@ where
         seq.serialize_element(&(key, value))?;
     }
     seq.end()
+}
+
+/// Serializes a VecMap<V> as array of pairs in insertion order: [["key", value], ...]
+pub fn serialize_vecmap_as_pairs<V: Serialize, S: Serializer>(
+    map: &VecMap<V>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut seq = serializer.serialize_seq(Some(map.len()))?;
+    for (key, value) in map.iter() {
+        seq.serialize_element(&(key, value))?;
+    }
+    seq.end()
+}
+
+/// Deserializes [["key", value], ...] JSON array → VecMap<V>
+/// Mirror of serialize_vecmap_as_pairs.
+pub fn deserialize_vecmap_as_pairs<'de, V, D>(deserializer: D) -> Result<VecMap<V>, D::Error>
+where
+    V: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    let entries = Vec::<(String, V)>::deserialize(deserializer)?;
+    let mut map = VecMap::new();
+    for (k, v) in entries {
+        map.insert(k, v);
+    }
+    Ok(map)
 }
 
 /// Serializes a HashMap<String, V> as sorted array of pairs: [[key, value], ...]

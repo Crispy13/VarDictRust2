@@ -1597,8 +1597,11 @@ fn process_position(
         }
     }
 
+    // Cache ref_coverage lookup once — avoids 2-3 separate probes below.
+    let ref_cov_opt = ref_coverage.get(&position).copied();
+
     // Skip if no SV and no coverage
-    if vars_at_cur_position.sv.is_none() && !ref_coverage.contains_key(&position) {
+    if vars_at_cur_position.sv.is_none() && ref_cov_opt.is_none() {
         return;
     }
 
@@ -1614,21 +1617,22 @@ fn process_position(
         return;
     }
 
-    // Check coverage
-    if !ref_coverage.contains_key(&position) || *ref_coverage.get(&position).unwrap() == 0 {
-        let sv_type = vars_at_cur_position
-            .sv
-            .as_ref()
-            .and_then(|sv| sv.type_.as_deref())
-            .unwrap_or("null");
-        eprintln!(
-            "Error tcov: {} {} {} {} {}",
-            region.chr, position, region.start, region.end, sv_type
-        );
-        return;
-    }
-
-    let mut total_pos_coverage = *ref_coverage.get(&position).unwrap();
+    // Check coverage (collapses the previous contains_key + get + unwrap triple-probe)
+    let mut total_pos_coverage = match ref_cov_opt {
+        Some(cov) if cov != 0 => cov,
+        _ => {
+            let sv_type = vars_at_cur_position
+                .sv
+                .as_ref()
+                .and_then(|sv| sv.type_.as_deref())
+                .unwrap_or("null");
+            eprintln!(
+                "Error tcov: {} {} {} {} {}",
+                region.chr, position, region.start, region.end, sv_type
+            );
+            return;
+        }
+    };
     let hicov = calc_hicov(insertion_variants.get(&position), vars_at_cur_position);
 
     let mut var: Vec<Variant> = Vec::new();
