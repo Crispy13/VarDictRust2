@@ -26,8 +26,14 @@
 ## Delegation of Tasks
 Delegate simple tasks to subagent whenever possible.
 
+- Default Model: GPT 5.4-mini high
 - Simple Tasks (GPT 5.4 mini high)
     - Terminal execution 
     - Reading files
     - Searching web
     - Writing without deep reasoning
+
+### Terminal Execution (Mandatory)
+You should delegate all terminal execution to the default model subagent. 
+- Don't make subagents think command. You give the command and just direct it to launch and return results what you want.
+- Use existing subagents you created for terminal execution. Don't make a new subagent per task. Create new one if no one exists for terminal execution.
