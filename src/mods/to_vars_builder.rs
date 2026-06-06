@@ -1528,7 +1528,9 @@ where
                     ref_coverage,
                     &ref_coverage_prune_keys,
                     &mut ref_coverage_prune_cursor,
-                    watermark,
+                    // Future long-DEL finalization can still read coverage just before
+                    // the next remaining variant position; match non-incremental ToVars.
+                    watermark.saturating_sub(2),
                 );
             }
             on_event(IncrementalProcessEvent::ReadyBefore(watermark));
