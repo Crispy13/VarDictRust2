@@ -76,7 +76,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use vardict_rs::config::{BamNames, Configuration};
 use vardict_rs::data::Region;
-use vardict_rs::modes::SimpleMode;
+use vardict_rs::modes::{SimpleMode, SomaticMode};
+use vardict_rs::patterns::SAMPLE_PATTERN2;
 use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::{GlobalReadOnlyScope, VariantPrinter};
 
@@ -136,6 +137,12 @@ impl Drop for SweepScopeGuard {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum SweepMode {
+    Single,
+    Somatic,
+}
+
 struct TagContext {
     tag: String,
     config_name: String,
@@ -144,6 +151,7 @@ struct TagContext {
     chr_lengths: HashMap<String, i32>,
     chroms: Vec<String>,
     sample: String,
+    mode: SweepMode,
     cache_validation: OnceLock<Result<(), String>>,
     cache_skip_logged: AtomicBool,
 }
@@ -214,10 +222,6 @@ pub fn build_trials(tag: &str) -> Vec<Trial> {
 }
 
 fn prepare_tag_context(tag: &str) -> Option<Arc<TagContext>> {
-    let (bam_path, ref_path) = bam_paths_for_tag(tag);
-    let bam_path = PathBuf::from(bam_path);
-    let ref_path = PathBuf::from(ref_path);
-    let sample = sample_name_for_bam(&bam_path);
     let config_name = active_config();
 
     let chroms = match discover_chroms(tag) {
@@ -226,25 +230,51 @@ fn prepare_tag_context(tag: &str) -> Option<Arc<TagContext>> {
         Err(error) => panic!("Failed to discover sweep chromosomes for {tag}: {error}"),
     };
 
-    let bam_path_string = bam_path.to_string_lossy().into_owned();
-    let ref_path_string = ref_path.to_string_lossy().into_owned();
-    let fai_path = format!("{ref_path_string}.fai");
-    let chr_lengths = super::common::load_chr_lengths(&fai_path);
-    let scope_config = sweep_config(&config_name, &bam_path_string, &ref_path_string);
-    let reference_resource =
-        ReferenceResource::new(ref_path_string.clone(), 1200, 0, chr_lengths.clone(), false);
-
-    Some(Arc::new(TagContext {
-        tag: tag.to_string(),
-        config_name,
-        scope_config,
-        reference_resource,
-        chr_lengths,
-        chroms,
-        sample,
-        cache_validation: OnceLock::new(),
-        cache_skip_logged: AtomicBool::new(false),
-    }))
+    if let Some((tumor, normal, reference)) = somatic_pair_lookup(tag) {
+        let sample = sample_name_for_pair(tumor, normal);
+        let ref_path_string = reference.to_string();
+        let fai_path = format!("{ref_path_string}.fai");
+        let chr_lengths = super::common::load_chr_lengths(&fai_path);
+        let scope_config = sweep_config_somatic(&config_name, tumor, normal, reference, &sample);
+        let reference_resource =
+            ReferenceResource::new(ref_path_string, 1200, 0, chr_lengths.clone(), false);
+        Some(Arc::new(TagContext {
+            tag: tag.to_string(),
+            config_name,
+            scope_config,
+            reference_resource,
+            chr_lengths,
+            chroms,
+            sample,
+            mode: SweepMode::Somatic,
+            cache_validation: OnceLock::new(),
+            cache_skip_logged: AtomicBool::new(false),
+        }))
+    } else {
+        let (bam_path, ref_path) = bam_paths_for_tag(tag);
+        let bam_path = PathBuf::from(bam_path);
+        let ref_path = PathBuf::from(ref_path);
+        let sample = sample_name_for_bam(&bam_path);
+        let bam_path_string = bam_path.to_string_lossy().into_owned();
+        let ref_path_string = ref_path.to_string_lossy().into_owned();
+        let fai_path = format!("{ref_path_string}.fai");
+        let chr_lengths = super::common::load_chr_lengths(&fai_path);
+        let scope_config = sweep_config(&config_name, &bam_path_string, &ref_path_string);
+        let reference_resource =
+            ReferenceResource::new(ref_path_string.clone(), 1200, 0, chr_lengths.clone(), false);
+        Some(Arc::new(TagContext {
+            tag: tag.to_string(),
+            config_name,
+            scope_config,
+            reference_resource,
+            chr_lengths,
+            chroms,
+            sample,
+            mode: SweepMode::Single,
+            cache_validation: OnceLock::new(),
+            cache_skip_logged: AtomicBool::new(false),
+        }))
+    }
 }
 
 fn build_chunk_plans(
@@ -918,7 +948,11 @@ fn count_rows(rows_by_tile: &RowsByTile) -> usize {
 
 fn validate_tag_cache(context: &TagContext) -> Result<(), String> {
     match context.cache_validation.get_or_init(|| {
-        check_e2e_sweep_manifest(&context.config_name, &context.tag)?;
+        if context.mode == SweepMode::Somatic {
+            check_e2e_sweep_manifest_somatic(&context.config_name, &context.tag)?;
+        } else {
+            check_e2e_sweep_manifest(&context.config_name, &context.tag)?;
+        }
         for chrom in &context.chroms {
             let java_path = java_tsv_path(&context.tag, chrom, &context.config_name);
             if !java_path.is_file() {
@@ -2710,7 +2744,6 @@ fn run_rust_chunk(
     );
     let rows = Arc::new(Mutex::new(RustChunkRows::new(tiles)));
     let sink_rows = rows.clone();
-    let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
     GlobalReadOnlyScope::set_variant_printer(VariantPrinter::OwnedLineSink(Arc::new(
         move |line| {
             let mut rows = sink_rows.lock().unwrap_or_else(|error| error.into_inner());
@@ -2726,11 +2759,27 @@ fn run_rust_chunk(
         "rust-simple-start",
         None,
     );
-    if let Some(thread_count) = super::common::configured_thread_count(context.scope_config.threads)
-    {
-        simple_mode.parallel(thread_count);
-    } else {
-        simple_mode.not_parallel();
+    match context.mode {
+        SweepMode::Somatic => {
+            let somatic_mode = SomaticMode::new(vec![regions], context.reference_resource.clone());
+            if let Some(thread_count) =
+                super::common::configured_thread_count(context.scope_config.threads)
+            {
+                somatic_mode.parallel(thread_count);
+            } else {
+                somatic_mode.not_parallel();
+            }
+        }
+        SweepMode::Single => {
+            let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
+            if let Some(thread_count) =
+                super::common::configured_thread_count(context.scope_config.threads)
+            {
+                simple_mode.parallel(thread_count);
+            } else {
+                simple_mode.not_parallel();
+            }
+        }
     }
     emit_chunk_heartbeat(context, trial_name, chrom, ordinal, "rust-simple-end", None);
     rust_phase.finish(context, trial_name, chrom, ordinal, "rust-simple", None);
@@ -2762,7 +2811,6 @@ fn run_rust_chunk_to_spool(
     );
     let rows = Arc::new(Mutex::new(RustChunkSpool::new(spool)?));
     let sink_rows = rows.clone();
-    let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
     GlobalReadOnlyScope::set_variant_printer(VariantPrinter::OwnedLineSink(Arc::new(
         move |line| {
             let mut rows = sink_rows.lock().unwrap_or_else(|error| error.into_inner());
@@ -2779,11 +2827,27 @@ fn run_rust_chunk_to_spool(
         "rust-simple-start",
         Some("mode=disk-spool"),
     );
-    if let Some(thread_count) = super::common::configured_thread_count(context.scope_config.threads)
-    {
-        simple_mode.parallel(thread_count);
-    } else {
-        simple_mode.not_parallel();
+    match context.mode {
+        SweepMode::Somatic => {
+            let somatic_mode = SomaticMode::new(vec![regions], context.reference_resource.clone());
+            if let Some(thread_count) =
+                super::common::configured_thread_count(context.scope_config.threads)
+            {
+                somatic_mode.parallel(thread_count);
+            } else {
+                somatic_mode.not_parallel();
+            }
+        }
+        SweepMode::Single => {
+            let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
+            if let Some(thread_count) =
+                super::common::configured_thread_count(context.scope_config.threads)
+            {
+                simple_mode.parallel(thread_count);
+            } else {
+                simple_mode.not_parallel();
+            }
+        }
     }
     emit_chunk_heartbeat(
         context,
@@ -2835,7 +2899,6 @@ fn run_rust_chunk_to_streaming_sort(
         tiles,
     ))));
     let sink_rows = rows.clone();
-    let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
     GlobalReadOnlyScope::set_variant_printer(VariantPrinter::OwnedLineSink(Arc::new(
         move |line| {
             let mut rows = sink_rows.lock().unwrap_or_else(|error| error.into_inner());
@@ -2854,11 +2917,27 @@ fn run_rust_chunk_to_streaming_sort(
         "rust-simple-start",
         Some("mode=stream-sort"),
     );
-    if let Some(thread_count) = super::common::configured_thread_count(context.scope_config.threads)
-    {
-        simple_mode.parallel(thread_count);
-    } else {
-        simple_mode.not_parallel();
+    match context.mode {
+        SweepMode::Somatic => {
+            let somatic_mode = SomaticMode::new(vec![regions], context.reference_resource.clone());
+            if let Some(thread_count) =
+                super::common::configured_thread_count(context.scope_config.threads)
+            {
+                somatic_mode.parallel(thread_count);
+            } else {
+                somatic_mode.not_parallel();
+            }
+        }
+        SweepMode::Single => {
+            let simple_mode = SimpleMode::new(vec![regions], context.reference_resource.clone());
+            if let Some(thread_count) =
+                super::common::configured_thread_count(context.scope_config.threads)
+            {
+                simple_mode.parallel(thread_count);
+            } else {
+                simple_mode.not_parallel();
+            }
+        }
     }
     emit_chunk_heartbeat(
         context,
@@ -3167,4 +3246,319 @@ fn format_rows(rows: &[Row]) -> String {
 
 pub(crate) fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Somatic helpers (ported from parity_e2e_sweep_somatic/somatic_common.rs)
+// Suffixed `_somatic` to avoid name clashes with the single-sample counterparts.
+// ──────────────────────────────────────────────────────────────────────────────
+
+pub(crate) const SOMATIC_BAM_PAIR_MAP: &[(&str, &str, &str, &str)] = &[(
+    "wes_il_pair",
+    "testdata/WES_IL_T_1.bwa.dedup.bam",
+    "testdata/WES_IL_N_1.bwa.dedup.bam",
+    "testdata/GRCh38.d1.vd1.fa",
+)];
+
+/// Returns `Some((tumor_bam, normal_bam, reference_fa))` for a known somatic
+/// pair tag, or `None` if the tag is not a somatic pair.
+fn somatic_pair_lookup(tag: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    SOMATIC_BAM_PAIR_MAP
+        .iter()
+        .find_map(|(candidate, tumor, normal, reference)| {
+            (*candidate == tag).then_some((*tumor, *normal, *reference))
+        })
+}
+
+fn sample_name_for_pair(tumor: &str, normal: &str) -> String {
+    let raw_bam = format!("{tumor}|{normal}");
+    if let Some(captures) = SAMPLE_PATTERN2.captures(&raw_bam) {
+        if let Some(sample) = captures.get(1) {
+            return sample.as_str().to_string();
+        }
+    }
+    Path::new(tumor)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| panic!("Tumor BAM path has no file stem: {tumor}"))
+}
+
+fn sweep_config_somatic(
+    config_name: &str,
+    tumor_path: &str,
+    normal_path: &str,
+    reference_path: &str,
+    sample: &str,
+) -> Configuration {
+    let mut config = if config_name == "default" {
+        Configuration::default()
+    } else {
+        super::common::config_preset(config_name)
+    };
+    config.bam = Some(BamNames::new(format!("{tumor_path}|{normal_path}")));
+    config.fasta = reference_path.to_string();
+    config.sample_name = Some(sample.to_string());
+    config
+}
+
+fn check_e2e_sweep_manifest_somatic(config: &str, tag: &str) -> Result<(), String> {
+    let manifest_path = sweep_fixture_root().join("manifest.json");
+    let manifest = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("Failed to read {}: {error}", manifest_path.display()))?;
+    let manifest_json: Value = serde_json::from_str(&manifest)
+        .map_err(|error| format!("Failed to parse {}: {error}", manifest_path.display()))?;
+
+    let manifest_commit = manifest_json
+        .get("vardictjava_commit")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("Missing vardictjava_commit in {}", manifest_path.display()))?;
+    let live_commit = live_vardictjava_commit()?;
+    if manifest_commit != live_commit {
+        return Err(format!(
+            "Sweep cache commit mismatch: manifest={manifest_commit}, live={live_commit}"
+        ));
+    }
+
+    let cache_key = format!("{config}:somatic:{tag}");
+    let cache_entry = manifest_json
+        .get("cache_entries")
+        .and_then(Value::as_object)
+        .and_then(|entries| entries.get(&cache_key))
+        .ok_or_else(|| {
+            format!(
+                "Missing cache_entries[{cache_key}] in {}; regenerate the somatic E2E sweep cache",
+                manifest_path.display()
+            )
+        })?;
+
+    let expected_bed_sha = cache_entry
+        .get("bed_sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| String::from("Missing bed_sha256 in somatic cache entry"))?;
+    let bed_root = resolve_bed_root_somatic(tag, expected_bed_sha).map_err(|e| e.to_string())?;
+
+    compare_manifest_field(
+        cache_entry,
+        "bed_sha256",
+        &compute_bed_sha256_somatic(&bed_root.path, tag)
+            .map(Value::String)
+            .map_err(|error| error.to_string())?,
+    )?;
+    compare_manifest_field(
+        cache_entry,
+        "bam_stat",
+        &compute_bam_stat_somatic(tag).map_err(|error| error.to_string())?,
+    )?;
+    compare_manifest_field(
+        cache_entry,
+        "reference_sha256",
+        &Value::String(compute_reference_sha256_somatic(tag).map_err(|error| error.to_string())?),
+    )?;
+    compare_manifest_field(
+        cache_entry,
+        "generator_flags_hash",
+        &Value::String(
+            compute_generator_flags_hash_somatic(config, tag, &bed_root.logical_root)
+                .map_err(|error| error.to_string())?,
+        ),
+    )?;
+    compare_manifest_field(
+        cache_entry,
+        "vardictjava_commit",
+        &Value::String(live_commit),
+    )?;
+
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct BedRootSelection {
+    logical_root: String,
+    path: PathBuf,
+}
+
+fn resolve_bed_root_somatic(tag: &str, expected_bed_sha: &str) -> io::Result<BedRootSelection> {
+    if let Ok(root) = std::env::var("VARDICT_E2E_SWEEP_BED_ROOT") {
+        let path = PathBuf::from(root.trim());
+        let logical_root = path.to_string_lossy().into_owned();
+        return Ok(BedRootSelection { logical_root, path });
+    }
+
+    let mut candidates = Vec::new();
+    for logical_root in candidate_bed_roots_somatic()? {
+        let path = PathBuf::from(&logical_root);
+        let tag_root = path.join(tag);
+        if !tag_root.is_dir() {
+            continue;
+        }
+        let digest = compute_bed_sha256_somatic(&path, tag)?;
+        if digest == expected_bed_sha {
+            candidates.push(BedRootSelection { logical_root, path });
+        }
+    }
+
+    candidates.sort_by(|left, right| left.logical_root.cmp(&right.logical_root));
+    candidates.into_iter().next().ok_or_else(|| {
+        io::Error::other(format!(
+            "No sweep BED root matched manifest hash for {tag}; checked tmp/* candidates"
+        ))
+    })
+}
+
+fn candidate_bed_roots_somatic() -> io::Result<Vec<String>> {
+    let mut roots = vec![String::from("tmp/sweep_beds")];
+
+    if Path::new("tmp").is_dir() {
+        for entry in fs::read_dir("tmp")? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let logical_root = path.to_string_lossy().into_owned();
+            if logical_root == "tmp/sweep_beds" {
+                continue;
+            }
+            roots.push(logical_root);
+        }
+    }
+
+    roots.sort();
+    roots.dedup();
+    Ok(roots)
+}
+
+fn compute_bed_sha256_somatic(bed_root: &Path, tag: &str) -> io::Result<String> {
+    let bed_root = bed_root.join(tag);
+    let mut bed_files = Vec::new();
+
+    for entry in fs::read_dir(&bed_root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("bed") {
+            bed_files.push(path);
+        }
+    }
+
+    bed_files.sort();
+    sha256_concat_files_somatic(&bed_files)
+}
+
+fn compute_bam_stat_somatic(tag: &str) -> io::Result<Value> {
+    let (tumor, normal, _) = somatic_pair_lookup(tag)
+        .ok_or_else(|| invalid_data(format!("Unknown somatic pair tag: {tag}")))?;
+    Ok(serde_json::json!([
+        bam_stat_entry_somatic(tumor, "tumor")?,
+        bam_stat_entry_somatic(normal, "normal")?,
+    ]))
+}
+
+fn compute_reference_sha256_somatic(tag: &str) -> io::Result<String> {
+    let (_, _, reference) = somatic_pair_lookup(tag)
+        .ok_or_else(|| invalid_data(format!("Unknown somatic pair tag: {tag}")))?;
+    let fai_path = PathBuf::from(format!("{reference}.fai"));
+    let target = if fai_path.is_file() {
+        fai_path
+    } else {
+        PathBuf::from(reference)
+    };
+    sha256_file_somatic(&target)
+}
+
+fn compute_generator_flags_hash_somatic(
+    config: &str,
+    tag: &str,
+    bed_root: &str,
+) -> io::Result<String> {
+    let logical_flags = format!(
+        "--output-only --config {config} --pair-tags {tag} --tags --sweep-bed-root {bed_root}"
+    );
+    sha256_bytes_somatic(logical_flags.as_bytes())
+}
+
+fn bam_stat_entry_somatic(path: &str, role: &str) -> io::Result<Value> {
+    let metadata = fs::metadata(path)?;
+    let modified = metadata
+        .modified()
+        .map_err(io::Error::other)?
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_secs();
+    Ok(serde_json::json!({
+        "path": path,
+        "size": metadata.len(),
+        "mtime_unix": modified,
+        "role": role,
+    }))
+}
+
+fn sha256_file_somatic(path: &Path) -> io::Result<String> {
+    sha256_concat_files_somatic(&[path.to_path_buf()])
+}
+
+fn sha256_concat_files_somatic(paths: &[PathBuf]) -> io::Result<String> {
+    let mut child = Command::new("sha256sum")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("Failed to open sha256sum stdin"))?;
+        for path in paths {
+            let mut file = File::open(path)?;
+            io::copy(&mut file, &mut stdin)?;
+        }
+        stdin.flush()?;
+    }
+
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "sha256sum failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    parse_sha256sum_output_somatic(&output.stdout)
+}
+
+fn sha256_bytes_somatic(bytes: &[u8]) -> io::Result<String> {
+    let mut child = Command::new("sha256sum")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("Failed to open sha256sum stdin"))?;
+        stdin.write_all(bytes)?;
+        stdin.flush()?;
+    }
+
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "sha256sum failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    parse_sha256sum_output_somatic(&output.stdout)
+}
+
+fn parse_sha256sum_output_somatic(stdout: &[u8]) -> io::Result<String> {
+    let digest = String::from_utf8(stdout.to_vec())
+        .map_err(|error| io::Error::other(format!("sha256sum output was not UTF-8: {error}")))?;
+    digest
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+        .ok_or_else(|| io::Error::other("sha256sum output was empty"))
 }
