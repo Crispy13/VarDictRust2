@@ -10,7 +10,7 @@ use std::path::Path;
 use clap::Parser;
 use vardict_rs::config::{BamNames, Configuration};
 use vardict_rs::data::Region;
-use vardict_rs::modes::SimpleMode;
+use vardict_rs::modes::{SimpleMode, SomaticMode};
 use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::GlobalReadOnlyScope;
 use vardict_rs::variations::{clear_variation_utils_scope, configure_variation_utils_scope};
@@ -161,11 +161,25 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let _cleanup = ScopeCleanup;
 
     let reference_resource = ReferenceResource::new(&cli.reference, 1200, 0, chr_lengths, false);
-    let simple_mode = SimpleMode::new(regions, reference_resource);
-    if requested_threads > 1 {
-        simple_mode.parallel(requested_threads);
+    let has_bam2 = GlobalReadOnlyScope::instance()
+        .conf
+        .bam
+        .as_ref()
+        .map_or(false, |b| b.has_bam2());
+    if has_bam2 {
+        let somatic_mode = SomaticMode::new(regions, reference_resource);
+        if requested_threads > 1 {
+            somatic_mode.parallel(requested_threads);
+        } else {
+            somatic_mode.not_parallel();
+        }
     } else {
-        simple_mode.not_parallel();
+        let simple_mode = SimpleMode::new(regions, reference_resource);
+        if requested_threads > 1 {
+            simple_mode.parallel(requested_threads);
+        } else {
+            simple_mode.not_parallel();
+        }
     }
 
     Ok(())

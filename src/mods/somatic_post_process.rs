@@ -1,13 +1,15 @@
 use std::collections::HashSet;
 use std::panic;
+use std::sync::{Arc, Mutex};
 
 use crate::config::Configuration;
-use crate::data::{AlignedVarsData, CombineAnalysisData, Region, Variant, Vars};
+use crate::data::{AlignedVarsData, CombineAnalysisData, InitialData, Region, Variant, Vars};
+use crate::modes::run_pipeline;
 use crate::mods::output::SomaticOutputVariant;
 use crate::patterns::MINUS_NUM_NUM;
 use crate::reference::ReferenceResource;
-use crate::scope::{GlobalReadOnlyScope, Scope};
-use crate::variations::{VarMaybeArg, VarsType, get_var_maybe_from_vars};
+use crate::scope::{GlobalReadOnlyScope, Scope, VariantPrinter};
+use crate::variations::{VarMaybeArg, VarsType, get_var_maybe_from_vars, strand_bias};
 
 const STRONG_SOMATIC: &str = "StrongSomatic";
 const SAMPLE_SPECIFIC: &str = "SampleSpecific";
@@ -527,17 +529,166 @@ pub fn determinate_type(
 
 /// Ported from: SomaticPostProcessModule.combineAnalysis()
 /// Java source: SomaticPostProcessModule.java:L385-L476
-/// Stubbed per design brief until Mode.pipeline() is available.
 #[allow(clippy::too_many_arguments)]
 fn combine_analysis(
-    _variant1: &Variant,
-    _variant2: &mut Variant,
-    _chr_name: &str,
-    _position: i32,
-    _description_string: &str,
-    _splice: &HashSet<String>,
-    max_read_length: i32,
-    _reference_resource: &ReferenceResource,
+    variant1: &Variant,
+    variant2: &mut Variant,
+    chr_name: &str,
+    position: i32,
+    description_string: &str,
+    splice: &HashSet<String>,
+    mut max_read_length: i32,
+    reference_resource: &ReferenceResource,
 ) -> CombineAnalysisData {
-    CombineAnalysisData::new(max_read_length, String::new())
+    let scope_instance = GlobalReadOnlyScope::instance();
+    let conf = &scope_instance.conf;
+
+    // Don't do it for structural variants
+    if variant1.end_position - variant1.start_position > conf.svminlen {
+        return CombineAnalysisData::new(max_read_length, "");
+    }
+
+    let rescue_region = Region::new(
+        chr_name,
+        variant1.start_position - max_read_length,
+        variant1.end_position + max_read_length,
+        "",
+    );
+    let reference = reference_resource
+        .get_reference(&rescue_region)
+        .unwrap_or_else(|error| {
+            panic!(
+                "Failed to fetch reference for {}: {}",
+                rescue_region.print_region(),
+                error
+            )
+        });
+
+    let bam_names = conf.bam.as_ref().expect("BAM names must be configured");
+    let combined_bam = format!("{}:{}", bam_names.get_bam1(), bam_names.get_bam2().unwrap());
+
+    let throwaway_buffer = Arc::new(Mutex::new(String::new()));
+    let throwaway_printer = VariantPrinter::Buffer(throwaway_buffer);
+
+    let scope = Scope::new(
+        combined_bam,
+        rescue_region,
+        Arc::new(reference),
+        Arc::new(reference_resource.clone()),
+        max_read_length,
+        splice.clone(),
+        throwaway_printer,
+        InitialData::default(),
+    );
+
+    let tpl = run_pipeline(scope);
+    max_read_length = tpl.max_read_length;
+    let vars = tpl.data.aligned_variants;
+
+    let vref = vars
+        .get(&position)
+        .and_then(|vars_at_pos| {
+            get_var_maybe_from_vars(
+                vars_at_pos,
+                VarsType::Varn,
+                VarMaybeArg::Description(description_string),
+            )
+        })
+        .cloned();
+
+    if let Some(vref) = vref {
+        if vref.position_coverage - variant1.position_coverage >= conf.minr {
+            variant2.total_pos_coverage = vref.total_pos_coverage - variant1.total_pos_coverage;
+            if variant2.total_pos_coverage < 0 {
+                variant2.total_pos_coverage = 0;
+            }
+
+            variant2.position_coverage = vref.position_coverage - variant1.position_coverage;
+            if variant2.position_coverage < 0 {
+                variant2.position_coverage = 0;
+            }
+
+            variant2.ref_forward_coverage =
+                vref.ref_forward_coverage - variant1.ref_forward_coverage;
+            if variant2.ref_forward_coverage < 0 {
+                variant2.ref_forward_coverage = 0;
+            }
+
+            variant2.ref_reverse_coverage =
+                vref.ref_reverse_coverage - variant1.ref_reverse_coverage;
+            if variant2.ref_reverse_coverage < 0 {
+                variant2.ref_reverse_coverage = 0;
+            }
+
+            variant2.vars_count_on_forward =
+                vref.vars_count_on_forward - variant1.vars_count_on_forward;
+            if variant2.vars_count_on_forward < 0 {
+                variant2.vars_count_on_forward = 0;
+            }
+
+            variant2.vars_count_on_reverse =
+                vref.vars_count_on_reverse - variant1.vars_count_on_reverse;
+            if variant2.vars_count_on_reverse < 0 {
+                variant2.vars_count_on_reverse = 0;
+            }
+
+            if variant2.position_coverage != 0 {
+                let cov = variant2.position_coverage as f64;
+                variant2.mean_position = (vref.mean_position * vref.position_coverage as f64
+                    - variant1.mean_position * variant1.position_coverage as f64)
+                    / cov;
+                variant2.mean_quality = (vref.mean_quality * vref.position_coverage as f64
+                    - variant1.mean_quality * variant1.position_coverage as f64)
+                    / cov;
+                variant2.mean_mapping_quality = (vref.mean_mapping_quality
+                    * vref.position_coverage as f64
+                    - variant1.mean_mapping_quality * variant1.position_coverage as f64)
+                    / cov;
+                variant2.high_quality_reads_frequency = (vref.high_quality_reads_frequency
+                    * vref.position_coverage as f64
+                    - variant1.high_quality_reads_frequency * variant1.position_coverage as f64)
+                    / cov;
+                variant2.extra_frequency = (vref.extra_frequency * vref.position_coverage as f64
+                    - variant1.extra_frequency * variant1.position_coverage as f64)
+                    / cov;
+                variant2.number_of_mismatches = (vref.number_of_mismatches
+                    * vref.position_coverage as f64
+                    - variant1.number_of_mismatches * variant1.position_coverage as f64)
+                    / cov;
+            } else {
+                variant2.mean_position = 0.0;
+                variant2.mean_quality = 0.0;
+                variant2.mean_mapping_quality = 0.0;
+                variant2.high_quality_reads_frequency = 0.0;
+                variant2.extra_frequency = 0.0;
+                variant2.number_of_mismatches = 0.0;
+            }
+            variant2.is_at_least_at_2_positions = true;
+            variant2.has_at_least_2_diff_qualities = true;
+
+            if variant2.total_pos_coverage <= 0 {
+                return CombineAnalysisData::new(max_read_length, FALSE);
+            }
+
+            variant2.frequency =
+                variant2.position_coverage as f64 / variant2.total_pos_coverage as f64;
+            variant2.high_quality_to_low_quality_ratio = variant1.high_quality_to_low_quality_ratio;
+            variant2.genotype = vref.genotype.clone();
+            variant2.strand_bias_flag = format!(
+                "{};{}",
+                strand_bias(variant2.ref_forward_coverage, variant2.ref_reverse_coverage),
+                strand_bias(
+                    variant2.vars_count_on_forward,
+                    variant2.vars_count_on_reverse
+                ),
+            );
+            CombineAnalysisData::new(max_read_length, GERMLINE)
+        } else if vref.position_coverage < variant1.position_coverage - 2 {
+            CombineAnalysisData::new(max_read_length, FALSE)
+        } else {
+            CombineAnalysisData::new(max_read_length, "")
+        }
+    } else {
+        CombineAnalysisData::new(max_read_length, FALSE)
+    }
 }

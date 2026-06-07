@@ -89,7 +89,11 @@ impl CoverageMap {
         }
         let logical = (pos - self.base) as usize;
         let phys = self.front + logical;
-        if phys < self.dense.len() { Some(phys) } else { None }
+        if phys < self.dense.len() {
+            Some(phys)
+        } else {
+            None
+        }
     }
 
     #[inline]
@@ -131,7 +135,10 @@ impl CoverageMap {
     /// Insert a key-value pair. Returns prior value (None if was absent).
     /// Maintains `present` count.
     pub fn insert(&mut self, pos: i32, value: i32) -> Option<i32> {
-        debug_assert!(value != COVERAGE_ABSENT, "value must not equal COVERAGE_ABSENT sentinel");
+        debug_assert!(
+            value != COVERAGE_ABSENT,
+            "value must not equal COVERAGE_ABSENT sentinel"
+        );
         if self.dense.is_empty() {
             // First insert (or after full compaction): set base.
             self.base = pos;
@@ -211,13 +218,16 @@ impl CoverageMap {
         // For phys = front + i: pos = base + ((front + i) - front) = base + i.
         // And dense[self.front..][i] = dense[self.front + i], so pos = base + i. Correct.
         let _ = front; // used above for documentation only; base + i is correct
-        let dense_iter = self.dense[self.front..].iter().enumerate().filter_map(move |(i, &v)| {
-            if v != COVERAGE_ABSENT {
-                Some(base + i as i32)
-            } else {
-                None
-            }
-        });
+        let dense_iter = self.dense[self.front..]
+            .iter()
+            .enumerate()
+            .filter_map(move |(i, &v)| {
+                if v != COVERAGE_ABSENT {
+                    Some(base + i as i32)
+                } else {
+                    None
+                }
+            });
         let fallback_iter = self.fallback.keys().copied();
         dense_iter.chain(fallback_iter)
     }
@@ -260,9 +270,7 @@ pub fn serialize_coverage_map<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     use serde::ser::SerializeSeq;
-    let mut entries: Vec<(i32, i32)> = map.keys()
-        .map(|k| (k, *map.get(&k).unwrap()))
-        .collect();
+    let mut entries: Vec<(i32, i32)> = map.keys().map(|k| (k, *map.get(&k).unwrap())).collect();
     entries.sort_by_key(|(k, _)| *k);
     let mut seq = serializer.serialize_seq(Some(entries.len()))?;
     for pair in &entries {
@@ -302,7 +310,9 @@ pub struct VecMap<V> {
 impl<V> VecMap<V> {
     #[inline]
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     #[inline]
@@ -327,7 +337,10 @@ impl<V> VecMap<V> {
 
     #[inline]
     pub fn get_mut(&mut self, key: &str) -> Option<&mut V> {
-        self.entries.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v)
+        self.entries
+            .iter_mut()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
     }
 
     /// Insert a key-value pair. If the key already exists, overwrites the value

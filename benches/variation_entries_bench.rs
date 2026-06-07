@@ -7,7 +7,6 @@
 ///   3. shift_remove
 ///
 /// at N = 1, 3, 5, 20, 100 entries with realistic short keys.
-
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use indexmap::IndexMap;
 use rustc_hash::FxBuildHasher;
@@ -38,14 +37,36 @@ struct Variation {
 fn keys_for_n(n: usize) -> Vec<String> {
     // Short keys: single-base SNVs, short insertions, short deletions, SV
     let pool = [
-        "A", "T", "C", "G", "+AT", "+TG", "+CAT", "+ATCG", "-1", "-2", "-3",
-        "-4", "+ATCGATCG", "+TTTT", "-10", "SV", "N", "+A", "+T", "+C",
+        "A",
+        "T",
+        "C",
+        "G",
+        "+AT",
+        "+TG",
+        "+CAT",
+        "+ATCG",
+        "-1",
+        "-2",
+        "-3",
+        "-4",
+        "+ATCGATCG",
+        "+TTTT",
+        "-10",
+        "SV",
+        "N",
+        "+A",
+        "+T",
+        "+C",
         "+GCGCGCGCGCGCGCGCGCGC", // long key (worst case for linear)
         "+AAAAAAAAAAAAAAAAAAAAAA",
         "+TTTTTTTTTTTTTTTTTTTTTT",
         "+CCCCCCCCCCCCCCCCCCCCCC",
         "+GGGGGGGGGGGGGGGGGGGGGG",
-        "-20", "-30", "-40", "-50", "-60",
+        "-20",
+        "-30",
+        "-40",
+        "-50",
+        "-60",
         "+ATCGATCGATCGATCGATCG1",
         "+ATCGATCGATCGATCGATCG2",
         "+ATCGATCGATCGATCGATCG3",
@@ -154,11 +175,15 @@ struct VecMap {
 
 impl VecMap {
     fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     fn with_capacity(cap: usize) -> Self {
-        Self { entries: Vec::with_capacity(cap) }
+        Self {
+            entries: Vec::with_capacity(cap),
+        }
     }
 
     /// Single-pass get-or-insert-default (mirrors the get_variation hot path).
@@ -311,25 +336,17 @@ fn bench_get(criterion: &mut Criterion) {
             vecmap_get_or_insert(&mut vm, key);
         }
 
-        group.bench_with_input(
-            BenchmarkId::new("indexmap", n),
-            &lookup_key,
-            |b, k| {
-                b.iter(|| {
-                    black_box(indexmap_get(black_box(&im), black_box(k)));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("indexmap", n), &lookup_key, |b, k| {
+            b.iter(|| {
+                black_box(indexmap_get(black_box(&im), black_box(k)));
+            });
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("vecmap", n),
-            &lookup_key,
-            |b, k| {
-                b.iter(|| {
-                    black_box(vecmap_get(black_box(&vm), black_box(k)));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("vecmap", n), &lookup_key, |b, k| {
+            b.iter(|| {
+                black_box(vecmap_get(black_box(&vm), black_box(k)));
+            });
+        });
     }
     group.finish();
 }

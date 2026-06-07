@@ -688,7 +688,10 @@ fn prune_position_map_before<V>(
     cursor: &mut usize,
     limit: i32,
 ) {
-    while sorted_keys.get(*cursor).is_some_and(|&position| position < limit) {
+    while sorted_keys
+        .get(*cursor)
+        .is_some_and(|&position| position < limit)
+    {
         map.remove(&sorted_keys[*cursor]);
         *cursor += 1;
     }
@@ -700,7 +703,10 @@ fn prune_coverage_map_before(
     cursor: &mut usize,
     limit: i32,
 ) {
-    while sorted_keys.get(*cursor).is_some_and(|&position| position < limit) {
+    while sorted_keys
+        .get(*cursor)
+        .is_some_and(|&position| position < limit)
+    {
         map.remove(&sorted_keys[*cursor]);
         *cursor += 1;
     }

@@ -240,7 +240,7 @@ fn run_realigned_pipeline(scope: Scope<InitialData>) -> Scope<RealignedVariation
     realigned_scope
 }
 
-fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
+pub(crate) fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
     finalize_pipeline(run_realigned_pipeline(scope))
 }
 
