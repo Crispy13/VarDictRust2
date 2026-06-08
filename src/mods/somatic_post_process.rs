@@ -226,22 +226,32 @@ fn print_variations_from_first_sample(
             vref.adj_complex();
         }
 
-        if let Some(v2nt_ref) =
-            get_var_maybe_from_vars(v2, VarsType::Varn, VarMaybeArg::Description(&nt))
-        {
-            let mut v2nt = v2nt_ref.clone();
-            let type_ = determinate_type(v2, &vref, &mut v2nt, splice, conf);
-            let output_variant = SomaticOutputVariant::new(
+        // Java: v2nt = getVarMaybe(v2, varn, nt) returns the SHARED normal variant (the varn map
+        // and the variants list reference the same object), and determinateType mutates it in
+        // place (is_noise lowers total_pos_coverage / zeroes position_coverage). That mutation is
+        // visible to a later tumor variant whose placeholder reads v2.variants[0]. Mutate the
+        // real variant in v2 in place to match, instead of a throwaway clone.
+        if let Some(idx) = v2.variants.iter().position(|v| v.description_string == nt) {
+            let type_ = determinate_type(
+                v2.reference_variant.as_ref(),
+                &vref,
+                &mut v2.variants[idx],
+                splice,
+                conf,
+            );
+            let v2nt = &v2.variants[idx];
+            let line = SomaticOutputVariant::new(
                 Some(&vref),
-                Some(&v2nt),
+                Some(v2nt),
                 Some(&vref),
-                Some(&v2nt),
+                Some(v2nt),
                 region,
                 &v1.sv,
                 &v2.sv,
                 &type_,
-            );
-            out.print_line(&output_variant.to_tsv_line(conf));
+            )
+            .to_tsv_line(conf);
+            out.print_line(&line);
         } else {
             let var_for_print = if !v2.variants.is_empty() {
                 let v2r = get_var_maybe_from_vars(v2, VarsType::Var, VarMaybeArg::Index(0));
@@ -489,14 +499,14 @@ fn print_variations_from_second_sample(
 /// Ported from: SomaticPostProcessModule.determinateType()
 /// Java source: SomaticPostProcessModule.java:L346-L369
 pub fn determinate_type(
-    variants: &Vars,
+    reference_variant: Option<&Variant>,
     standard_variant: &Variant,
     variant_to_compare: &mut Variant,
     splice: &HashSet<String>,
     conf: &Configuration,
 ) -> String {
     let mut type_ = if variant_to_compare.is_good_var(
-        variants.reference_variant.as_ref(),
+        reference_variant,
         Some(&standard_variant.vartype),
         splice,
         conf,
