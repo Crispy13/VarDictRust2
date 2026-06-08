@@ -662,21 +662,26 @@ impl SomaticMode {
         let bam1_scope = Scope::new(
             bam_names.get_bam1(),
             region.clone(),
-            Arc::new(reference.clone()),
+            Arc::new(reference),
             Arc::new(self.reference_resource.clone()),
             0,
-            splice.clone(),
+            splice,
             printer.clone(),
             InitialData::default(),
         );
         let bam1_aligned = run_pipeline(bam1_scope);
+        // Java SomaticMode.processBothBamsInPipeline passes the SAME Reference and splice
+        // object to both pipelines (initialScope1 and initialScope2). The tumor pass's
+        // SV-breakpoint reference extensions and splice sites are therefore visible to the
+        // normal pass, which lets it skip the partial-pipeline re-parse at already-loaded
+        // breakpoints. Share the tumor-extended reference + splice with the normal pipeline.
         let bam2_scope = Scope::new(
             bam_names.get_bam2().expect("Somatic mode requires BAM2"),
             region.clone(),
-            Arc::new(reference),
+            bam1_aligned.region_ref.clone(),
             Arc::new(self.reference_resource.clone()),
             bam1_aligned.max_read_length,
-            splice,
+            (*bam1_aligned.splice).clone(),
             printer,
             InitialData::default(),
         );
