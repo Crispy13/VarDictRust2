@@ -115,6 +115,7 @@ WARNING_SEVERITY_BY_KEY = {
     "missing_vardict_commit": "not-ready",
     "missing_generator_flags": "not-ready",
     "mismatch_generator_flags": "not-ready",
+    "generator_flags_unrecorded_somatic": "diagnostic-only",
     "missing_preset": "not-ready",
     "mismatch_preset": "not-ready",
     "missing_bed_sha256": "not-ready",
@@ -125,7 +126,11 @@ WARNING_SEVERITY_ORDER = ("blocking", "not-ready", "diagnostic-only", "unknown")
 
 sys.path.insert(0, str(PROJECT_ROOT))
 try:
-    from scripts.lib.merge_manifest import merge_cache_entries
+    from scripts.lib.merge_manifest import (
+        merge_cache_entries,
+        merge_cache_entries_somatic,
+        PAIR_PATHS,
+    )
 except ImportError as exc:  # pragma: no cover - import guard
     raise SystemExit(
         f"ERROR: cannot import scripts.lib.merge_manifest: {exc}\n"
@@ -1904,21 +1909,37 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> d
             [chrom for matrix_preset, _tag, chrom in matrix if matrix_preset == preset]
         )
         preserve_path = prepare_merge_preserve_file()
-        logical_flags = (
-            f"--output-only --config {preset} --tags {','.join(tags)} "
-            f"--sweep-bed-root {active_sweep_bed_root}"
-        )
-        merge_cache_entries(
-            config_name=preset,
-            tags_csv=",".join(tags),
-            logical_flags=logical_flags,
-            project_root=PROJECT_ROOT,
-            sweep_bed_root=active_sweep_bed_root,
-            preserve_path=preserve_path,
-            manifest_only=True,
-            fixture_output_root=CANONICAL_OUTPUT_ROOT,
-            fixture_chroms=fixture_chroms,
-        )
+        somatic_tags = [t for t in tags if t in PAIR_PATHS]
+        germline_tags = [t for t in tags if t not in PAIR_PATHS]
+        if germline_tags:
+            logical_flags = (
+                f"--output-only --config {preset} --tags {','.join(germline_tags)} "
+                f"--sweep-bed-root {active_sweep_bed_root}"
+            )
+            merge_cache_entries(
+                config_name=preset,
+                tags_csv=",".join(germline_tags),
+                logical_flags=logical_flags,
+                project_root=PROJECT_ROOT,
+                sweep_bed_root=active_sweep_bed_root,
+                preserve_path=preserve_path,
+                manifest_only=True,
+                fixture_output_root=CANONICAL_OUTPUT_ROOT,
+                fixture_chroms=fixture_chroms,
+            )
+        for tag in somatic_tags:
+            somatic_logical_flags = (
+                f"--output-only --config {preset} --pair-tags {tag} --tags "
+                f"--sweep-bed-root {active_sweep_bed_root}"
+            )
+            merge_cache_entries_somatic(
+                config_name=preset,
+                tags_csv=tag,
+                logical_flags=somatic_logical_flags,
+                project_root=PROJECT_ROOT,
+                sweep_bed_root=active_sweep_bed_root,
+                preserve_path=preserve_path,
+            )
         emit_status(
             "stage",
             started_at=stage_started_at,
@@ -2014,10 +2035,17 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                     f"vardict_commit={vardict_commit} live={live_commit}"
                 )
 
-            expected_flags = (
-                f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} "
-                f"--sweep-bed-root {active_sweep_bed_root}"
-            )
+            is_somatic_tag = tag in PAIR_PATHS
+            if is_somatic_tag:
+                expected_flags = (
+                    f"--output-only --config {preset} --pair-tags {tag} --tags "
+                    f"--sweep-bed-root {active_sweep_bed_root}"
+                )
+            else:
+                expected_flags = (
+                    f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} "
+                    f"--sweep-bed-root {active_sweep_bed_root}"
+                )
             optional_checks = {
                 "generator_flags": expected_flags,
                 "preset": preset,
@@ -2037,6 +2065,17 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                     )
                     cell_not_ready = True
                     continue
+
+                if is_somatic_tag and key == "generator_flags":
+                    normalized_actual = normalize_generator_flags(actual_value)
+                    if normalized_actual is None or normalized_actual == "":
+                        track_warning(
+                            warning_counts,
+                            "generator_flags_unrecorded_somatic",
+                            format_validation_path(staged_chunks_path, resolved_chunks_path),
+                            warning_samples,
+                        )
+                        continue
 
                 metadata_warning = provenance_metadata_warning(
                     key,
