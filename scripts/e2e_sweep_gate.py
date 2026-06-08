@@ -2067,15 +2067,19 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                     continue
 
                 if is_somatic_tag and key == "generator_flags":
-                    normalized_actual = normalize_generator_flags(actual_value)
-                    if normalized_actual is None or normalized_actual == "":
-                        track_warning(
-                            warning_counts,
-                            "generator_flags_unrecorded_somatic",
-                            format_validation_path(staged_chunks_path, resolved_chunks_path),
-                            warning_samples,
-                        )
-                        continue
+                    # Somatic golden-gen records the preset flags (e.g. ['-th','4'], ['--fisher'],
+                    # or [] for the flagless default), not the gate's logical --output-only/
+                    # --pair-tags/--sweep-bed-root form, so this check can never match for any
+                    # somatic config. The manifest-level Rust check (check_e2e_sweep_manifest_somatic)
+                    # validates generator_flags_hash byte-exactly, so treat the chunks.json
+                    # generator_flags as a diagnostic-only signal regardless of its value.
+                    track_warning(
+                        warning_counts,
+                        "generator_flags_unrecorded_somatic",
+                        format_validation_path(staged_chunks_path, resolved_chunks_path),
+                        warning_samples,
+                    )
+                    continue
 
                 metadata_warning = provenance_metadata_warning(
                     key,
