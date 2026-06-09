@@ -32,6 +32,12 @@ pub type PositionMap<V> = HashMap<i32, V, FxBuildHasher>;
 const COVERAGE_ABSENT: i32 = i32::MIN;
 /// Compact the dense Vec when `front` exceeds this many ABSENT prefix slots.
 const COMPACT_THRESHOLD: usize = 4096;
+/// Cap on the dense span. Positions `>= base + DENSE_SPAN_CAP` spill to the
+/// `fallback` HashMap instead of growing the dense Vec, bounding it to ~4 MiB.
+/// Byte-neutral: all accessors already check dense-then-fallback. Mirrors the
+/// existing `pos < base` spill (see struct doc: "also used as fallback for
+/// far-future positions").
+const DENSE_SPAN_CAP: i32 = 1 << 20;
 
 /// Dense Vec-backed coverage map. Fast for genomic regions (contiguous positions).
 /// Fallback HashMap handles rare below-base positions.
@@ -147,7 +153,7 @@ impl CoverageMap {
             self.present += 1;
             return None;
         }
-        if pos >= self.base {
+        if pos >= self.base && pos - self.base < DENSE_SPAN_CAP {
             let logical = (pos - self.base) as usize;
             let phys = self.front + logical;
             if phys >= self.dense.len() {
@@ -244,7 +250,7 @@ impl crate::variations::CountMap<i32> for CoverageMap {
             self.present += 1;
             return;
         }
-        if key >= self.base {
+        if key >= self.base && key - self.base < DENSE_SPAN_CAP {
             let logical = (key - self.base) as usize;
             let phys = self.front + logical;
             if phys >= self.dense.len() {
