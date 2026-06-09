@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use indexmap::IndexMap;
 use rustc_hash::FxBuildHasher;
@@ -1533,15 +1535,19 @@ impl Variant {
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Vars {
     #[serde(rename = "referenceVariant")]
-    pub reference_variant: Option<Variant>,
+    #[serde(serialize_with = "crate::parity::format::serialize_option_rc_variant")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_option_rc_variant")]
+    pub reference_variant: Option<Rc<RefCell<Variant>>>,
 
     #[serde(rename = "variants")]
-    pub variants: Vec<Variant>,
+    #[serde(serialize_with = "crate::parity::format::serialize_vec_rc_variant")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_vec_rc_variant")]
+    pub variants: Vec<Rc<RefCell<Variant>>>,
 
     #[serde(rename = "varDescriptionStringToVariants")]
     #[serde(serialize_with = "crate::parity::format::serialize_btreemap_as_pairs")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_btreemap_as_pairs")]
-    pub var_description_string_to_variants: BTreeMap<String, Variant>,
+    pub var_description_string_to_variants: BTreeMap<String, Rc<RefCell<Variant>>>,
 
     #[serde(rename = "sv")]
     pub sv: String,

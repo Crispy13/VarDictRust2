@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::BuildHasher;
 use std::hash::Hash;
+use std::rc::Rc;
 use std::sync::RwLock;
 
 use indexmap::map::{RawEntryApiV1, raw_entry_v1::RawEntryMut};
@@ -518,35 +520,36 @@ pub fn correct_cnt(var_to_correct: &mut Variation) {
 }
 
 /// Ported from: VariationUtils.java:L324-L355
-pub fn get_var_maybe<'a>(
-    aligned_variants: &'a HashMap<i32, Vars>,
+pub fn get_var_maybe(
+    aligned_variants: &HashMap<i32, Vars>,
     key: i32,
     vars_type: VarsType,
     arg: VarMaybeArg<'_>,
-) -> Option<&'a Variant> {
+) -> Option<Rc<RefCell<Variant>>> {
     aligned_variants
         .get(&key)
         .and_then(|vars| get_var_maybe_from_vars(vars, vars_type, arg))
 }
 
 /// Ported from: VariationUtils.java:L362-L378
-pub fn get_var_maybe_from_vars<'a>(
-    vars: &'a Vars,
+pub fn get_var_maybe_from_vars(
+    vars: &Vars,
     vars_type: VarsType,
     arg: VarMaybeArg<'_>,
-) -> Option<&'a Variant> {
+) -> Option<Rc<RefCell<Variant>>> {
     match vars_type {
         VarsType::Var => match arg {
-            VarMaybeArg::Index(index) => vars.variants.get(index),
+            VarMaybeArg::Index(index) => vars.variants.get(index).cloned(),
             VarMaybeArg::Description(_) | VarMaybeArg::None => None,
         },
         VarsType::Varn => match arg {
-            VarMaybeArg::Description(description) => {
-                vars.var_description_string_to_variants.get(description)
-            }
+            VarMaybeArg::Description(description) => vars
+                .var_description_string_to_variants
+                .get(description)
+                .cloned(),
             VarMaybeArg::Index(_) | VarMaybeArg::None => None,
         },
-        VarsType::Ref => vars.reference_variant.as_ref(),
+        VarsType::Ref => vars.reference_variant.clone(),
     }
 }
 
@@ -934,10 +937,14 @@ mod tests {
             description_string: String::from("A"),
             ..Variant::default()
         };
+        let cell = Rc::new(RefCell::new(variant));
         let vars = Vars {
-            reference_variant: Some(variant.clone()),
-            variants: vec![variant.clone()],
-            var_description_string_to_variants: BTreeMap::from([(String::from("A"), variant)]),
+            reference_variant: Some(Rc::clone(&cell)),
+            variants: vec![Rc::clone(&cell)],
+            var_description_string_to_variants: BTreeMap::from([(
+                String::from("A"),
+                Rc::clone(&cell),
+            )]),
             sv: String::new(),
         };
         let aligned = HashMap::from([(7, vars)]);
@@ -1358,7 +1365,7 @@ mod tests {
             3,
             Vars {
                 reference_variant: None,
-                variants: vec![Variant::default()],
+                variants: vec![Rc::new(RefCell::new(Variant::default()))],
                 var_description_string_to_variants: BTreeMap::new(),
                 sv: String::new(),
             },
@@ -1465,7 +1472,7 @@ mod tests {
     #[test]
     fn get_var_maybe_index_out_of_range_returns_none() {
         let vars = Vars {
-            variants: vec![Variant::default()],
+            variants: vec![Rc::new(RefCell::new(Variant::default()))],
             ..Vars::default()
         };
         assert!(get_var_maybe_from_vars(&vars, VarsType::Var, VarMaybeArg::Index(1)).is_none());
@@ -1553,7 +1560,7 @@ mod tests {
     #[test]
     fn get_var_maybe_ref_ignores_extra_arg() {
         let vars = Vars {
-            reference_variant: Some(Variant::default()),
+            reference_variant: Some(Rc::new(RefCell::new(Variant::default()))),
             ..Vars::default()
         };
 

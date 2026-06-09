@@ -58,7 +58,8 @@ pub fn simple_post_process_position_lines(
         if !conf.do_pileup {
             return lines;
         }
-        if let Some(mut vref) = variants_on_position.reference_variant.clone() {
+        if let Some(ref ref_cell) = variants_on_position.reference_variant {
+            let mut vref = ref_cell.borrow().clone();
             vref.vartype.clear();
             vrefs.push(vref);
         } else {
@@ -69,7 +70,12 @@ pub fn simple_post_process_position_lines(
         }
     } else {
         let only_variant = variants_on_position.variants.len() == 1;
-        for vref in &variants_on_position.variants {
+        let ref_var_owned = variants_on_position
+            .reference_variant
+            .as_ref()
+            .map(|c| c.borrow().clone());
+        for vref_cell in &variants_on_position.variants {
+            let vref = vref_cell.borrow().clone();
             if vref.refallele.contains('N') {
                 continue;
             }
@@ -77,30 +83,26 @@ pub fn simple_post_process_position_lines(
                 continue;
             }
             if vref.start_position != position && conf.do_pileup && only_variant {
-                if let Some(mut ref_var) = variants_on_position.reference_variant.clone() {
-                    ref_var.vartype.clear();
-                    vrefs.push(ref_var);
+                if let Some(ref_var) = ref_var_owned.clone() {
+                    let mut rv = ref_var;
+                    rv.vartype.clear();
+                    vrefs.push(rv);
                 } else {
                     let output_variant =
                         SimpleOutputVariant::new(None, region, &variants_on_position.sv, position);
                     lines.push(output_variant.to_tsv_line(conf));
-                    let mut ref_var = Variant::default();
-                    ref_var.vartype.clear();
-                    vrefs.push(ref_var);
+                    let mut rv = Variant::default();
+                    rv.vartype.clear();
+                    vrefs.push(rv);
                 }
             }
             let vartype = vref.var_type();
-            let is_good = vref.is_good_var(
-                variants_on_position.reference_variant.as_ref(),
-                Some(&vartype),
-                splice,
-                conf,
-            );
+            let is_good = vref.is_good_var(ref_var_owned.as_ref(), Some(&vartype), splice, conf);
             if !is_good && !conf.do_pileup {
                 continue;
             }
 
-            let mut owned_vref = vref.clone();
+            let mut owned_vref = vref;
             owned_vref.vartype = vartype;
             vrefs.push(owned_vref);
         }

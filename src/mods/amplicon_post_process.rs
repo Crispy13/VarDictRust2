@@ -45,12 +45,14 @@ pub fn amplicon_post_process(
                 let vtmp = vars
                     .get(*amplicon_number as usize)
                     .and_then(|amp_vars| amp_vars.get(&position));
-                let reference_variant = vtmp.and_then(|vars| vars.reference_variant.clone());
+                let reference_variant = vtmp
+                    .and_then(|vars| vars.reference_variant.as_ref().map(|c| c.borrow().clone()));
 
                 if let Some(vtmp) = vtmp {
                     if !vtmp.variants.is_empty() {
                         let mut good_vars: Vec<Variant> = Vec::new();
-                        for mut tv in vtmp.variants.clone() {
+                        for tv_cell in vtmp.variants.iter() {
+                            let mut tv = tv_cell.borrow().clone();
                             vcovs.push(tv.total_pos_coverage);
                             if tv.total_pos_coverage > maxcov {
                                 maxcov = tv.total_pos_coverage;
@@ -154,14 +156,16 @@ pub fn amplicon_post_process(
                         else {
                             continue;
                         };
-                        let Some(variant) = vtmp.var_description_string_to_variants.get(&gdnt)
+                        let Some(variant_cell) = vtmp.var_description_string_to_variants.get(&gdnt)
                         else {
                             continue;
                         };
-                        if variant.is_good_var(vtmp.reference_variant.as_ref(), None, splice, &conf)
-                        {
+                        let variant = variant_cell.borrow().clone();
+                        let ref_var_owned =
+                            vtmp.reference_variant.as_ref().map(|c| c.borrow().clone());
+                        if variant.is_good_var(ref_var_owned.as_ref(), None, splice, &conf) {
                             gcnt.push(VariantRegion::new(
-                                Some(variant.clone()),
+                                Some(variant),
                                 format!(
                                     "{}:{}-{}",
                                     amplicon_region.chr, amplicon_region.start, amplicon_region.end
@@ -210,11 +214,13 @@ pub fn amplicon_post_process(
                                 .get(*amplicon_number as usize)
                                 .and_then(|amp_vars| amp_vars.get(&position));
                             if let Some(vtmp) = vtmp {
-                                if let Some(variant) = vtmp.variants.first() {
-                                    bad_variants
-                                        .push(VariantRegion::new(Some(variant.clone()), reg_str));
+                                if let Some(variant_cell) = vtmp.variants.first() {
+                                    bad_variants.push(VariantRegion::new(
+                                        Some(variant_cell.borrow().clone()),
+                                        reg_str,
+                                    ));
                                 } else if let Some(reference_variant) =
-                                    vtmp.reference_variant.clone()
+                                    vtmp.reference_variant.as_ref().map(|c| c.borrow().clone())
                                 {
                                     bad_variants
                                         .push(VariantRegion::new(Some(reference_variant), reg_str));

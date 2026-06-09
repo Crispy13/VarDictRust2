@@ -106,17 +106,17 @@ fn calling_for_one_sample(
         return;
     }
 
-    for mut variant in variants.variants.clone() {
+    let ref_var_owned = variants
+        .reference_variant
+        .as_ref()
+        .map(|c| c.borrow().clone());
+    for variant_cell in variants.variants.iter() {
+        let mut variant = variant_cell.borrow().clone();
         if variant.refallele == variant.varallele {
             continue;
         }
         variant.vartype = variant.var_type();
-        if !variant.is_good_var(
-            variants.reference_variant.as_ref(),
-            Some(&variant.vartype),
-            splice,
-            conf,
-        ) {
+        if !variant.is_good_var(ref_var_owned.as_ref(), Some(&variant.vartype), splice, conf) {
             continue;
         }
         if variant.vartype == COMPLEX {
@@ -203,14 +203,10 @@ fn print_variations_from_first_sample(
 ) {
     let mut processed = 0usize;
     while processed < v1.variants.len() {
-        let current = v1.variants[processed].clone();
+        let current = v1.variants[processed].borrow().clone();
         let current_type = current.var_type();
-        if !current.is_good_var(
-            v1.reference_variant.as_ref(),
-            Some(&current_type),
-            splice,
-            conf,
-        ) {
+        let v1_ref_owned = v1.reference_variant.as_ref().map(|c| c.borrow().clone());
+        if !current.is_good_var(v1_ref_owned.as_ref(), Some(&current_type), splice, conf) {
             break;
         }
 
@@ -231,47 +227,53 @@ fn print_variations_from_first_sample(
         // place (is_noise lowers total_pos_coverage / zeroes position_coverage). That mutation is
         // visible to a later tumor variant whose placeholder reads v2.variants[0]. Mutate the
         // real variant in v2 in place to match, instead of a throwaway clone.
-        if let Some(idx) = v2.variants.iter().position(|v| v.description_string == nt) {
-            let type_ = determinate_type(
-                v2.reference_variant.as_ref(),
-                &vref,
-                &mut v2.variants[idx],
-                splice,
-                conf,
-            );
-            let v2nt = &v2.variants[idx];
+        if let Some(idx) = v2
+            .variants
+            .iter()
+            .position(|v| v.borrow().description_string == nt)
+        {
+            let v2_ref_owned = v2.reference_variant.as_ref().map(|c| c.borrow().clone());
+            let type_ = {
+                let mut v2nt_mut = v2.variants[idx].borrow_mut();
+                determinate_type(v2_ref_owned.as_ref(), &vref, &mut *v2nt_mut, splice, conf)
+            };
+            let v2nt_borrowed = v2.variants[idx].borrow();
             let line = SomaticOutputVariant::new(
                 Some(&vref),
-                Some(v2nt),
+                Some(&*v2nt_borrowed),
                 Some(&vref),
-                Some(v2nt),
+                Some(&*v2nt_borrowed),
                 region,
                 &v1.sv,
                 &v2.sv,
                 &type_,
             )
             .to_tsv_line(conf);
+            drop(v2nt_borrowed);
             out.print_line(&line);
         } else {
             let var_for_print = if !v2.variants.is_empty() {
                 let v2r = get_var_maybe_from_vars(v2, VarsType::Var, VarMaybeArg::Index(0));
                 let mut var_for_print = Variant::default();
-                if let Some(v2r) = v2r {
+                if let Some(v2r_cell) = v2r {
+                    let v2r = v2r_cell.borrow();
                     var_for_print.total_pos_coverage = v2r.total_pos_coverage;
                     var_for_print.ref_forward_coverage = v2r.ref_forward_coverage;
                     var_for_print.ref_reverse_coverage = v2r.ref_reverse_coverage;
                 }
                 Some(var_for_print)
             } else {
-                v2.reference_variant.clone()
+                v2.reference_variant.as_ref().map(|c| c.borrow().clone())
             };
 
             let mut rescued_variant = None;
             let mut type_ = String::from(STRONG_SOMATIC);
             if vref.vartype != SNV && (nt.len() > 10 || MINUS_NUM_NUM.is_match(&nt)) {
                 let mut v2nt = Variant::default();
-                v2.var_description_string_to_variants
-                    .insert(nt.clone(), v2nt.clone());
+                v2.var_description_string_to_variants.insert(
+                    nt.clone(),
+                    std::rc::Rc::new(std::cell::RefCell::new(v2nt.clone())),
+                );
                 if vref.position_coverage < conf.minr + 3 && !nt.contains('<') {
                     let combine_data = combine_analysis(
                         &vref,
@@ -328,23 +330,19 @@ fn print_variations_from_first_sample(
         return;
     }
 
-    for v2var_original in v2.variants.clone() {
-        let mut v2var = v2var_original;
+    for v2var_original in v2.variants.iter() {
+        let mut v2var = v2var_original.borrow().clone();
         v2var.vartype = v2var.var_type();
-        if !v2var.is_good_var(
-            v2.reference_variant.as_ref(),
-            Some(&v2var.vartype),
-            splice,
-            conf,
-        ) {
+        let v2_ref_owned = v2.reference_variant.as_ref().map(|c| c.borrow().clone());
+        if !v2var.is_good_var(v2_ref_owned.as_ref(), Some(&v2var.vartype), splice, conf) {
             continue;
         }
 
         let nt = v2var.description_string.clone();
-        if let Some(v1nt_ref) =
+        if let Some(v1nt_cell) =
             get_var_maybe_from_vars(v1, VarsType::Varn, VarMaybeArg::Description(&nt))
         {
-            let mut v1nt = v1nt_ref.clone();
+            let mut v1nt = v1nt_cell.borrow().clone();
             if v1nt.refallele == v1nt.varallele {
                 continue;
             }
@@ -372,14 +370,21 @@ fn print_variations_from_first_sample(
             if v2var.refallele == v2var.varallele {
                 continue;
             }
-            let v1var = get_var_maybe_from_vars(v1, VarsType::Var, VarMaybeArg::Index(0));
-            let tcov = v1var.map_or(0, |variant| variant.total_pos_coverage);
-            let v1ref = v1.reference_variant.as_ref();
-            let fwd = v1ref.map_or(0, |variant| variant.vars_count_on_forward);
-            let rev = v1ref.map_or(0, |variant| variant.vars_count_on_reverse);
-            let genotype = if let Some(v1var) = v1var {
+            let v1var_cell = get_var_maybe_from_vars(v1, VarsType::Var, VarMaybeArg::Index(0));
+            let v1var_owned = v1var_cell.as_ref().map(|c| c.borrow().clone());
+            let tcov = v1var_owned
+                .as_ref()
+                .map_or(0, |variant| variant.total_pos_coverage);
+            let v1ref_owned = v1.reference_variant.as_ref().map(|c| c.borrow().clone());
+            let fwd = v1ref_owned
+                .as_ref()
+                .map_or(0, |variant| variant.vars_count_on_forward);
+            let rev = v1ref_owned
+                .as_ref()
+                .map_or(0, |variant| variant.vars_count_on_reverse);
+            let genotype = if let Some(v1var) = v1var_owned.as_ref() {
                 v1var.genotype.clone().unwrap_or_else(|| String::from("0"))
-            } else if let Some(v1ref) = v1ref {
+            } else if let Some(v1ref) = v1ref_owned.as_ref() {
                 format!("{0}/{0}", v1ref.description_string)
             } else {
                 String::from("N/N")
@@ -421,42 +426,44 @@ fn print_variations_from_second_sample(
     reference_resource: &ReferenceResource,
     max_read_length: &mut i32,
 ) {
-    for v2var_original in v2.variants.clone() {
-        let mut v2var = v2var_original;
+    let v2_ref_owned = v2.reference_variant.as_ref().map(|c| c.borrow().clone());
+    for v2var_cell in v2.variants.iter() {
+        let mut v2var = v2var_cell.borrow().clone();
         if v2var.refallele == v2var.varallele {
             continue;
         }
         v2var.vartype = v2var.var_type();
-        if !v2var.is_good_var(
-            v2.reference_variant.as_ref(),
-            Some(&v2var.vartype),
-            splice,
-            conf,
-        ) {
+        if !v2var.is_good_var(v2_ref_owned.as_ref(), Some(&v2var.vartype), splice, conf) {
             continue;
         }
 
         let description_string = v2var.description_string.clone();
         let mut type_ = String::from(STRONG_LOH);
         let mut new_type = String::new();
-        let v1nt = v1
+        let v1nt_cell = v1
             .var_description_string_to_variants
             .entry(description_string.clone())
-            .or_default();
-        v1nt.position_coverage = 0;
+            .or_insert_with(|| std::rc::Rc::new(std::cell::RefCell::new(Variant::default())))
+            .clone();
+        v1nt_cell.borrow_mut().position_coverage = 0;
 
         if v2
             .var_description_string_to_variants
             .get(&description_string)
-            .is_some_and(|variant| variant.position_coverage < conf.minr + 3)
+            .is_some_and(|cell| cell.borrow().position_coverage < conf.minr + 3)
             && !description_string.contains('<')
             && (description_string.len() > 10 || MINUS_NUM_NUM.is_match(&description_string))
         {
+            let v2_desc_owned = v2
+                .var_description_string_to_variants
+                .get(&description_string)
+                .expect("BAM2 variant description must exist")
+                .borrow()
+                .clone();
+            let mut v1nt_val = v1nt_cell.borrow().clone();
             let combine_data = combine_analysis(
-                v2.var_description_string_to_variants
-                    .get(&description_string)
-                    .expect("BAM2 variant description must exist"),
-                v1nt,
+                &v2_desc_owned,
+                &mut v1nt_val,
                 &region.chr,
                 position,
                 &description_string,
@@ -464,6 +471,8 @@ fn print_variations_from_second_sample(
                 *max_read_length,
                 reference_resource,
             );
+            // Write back the mutated v1nt_val into the cell
+            *v1nt_cell.borrow_mut() = v1nt_val;
             *max_read_length = combine_data.max_read_length;
             new_type = combine_data.type_;
             if new_type == FALSE {
@@ -473,9 +482,9 @@ fn print_variations_from_second_sample(
 
         let var_for_print = if !new_type.is_empty() {
             type_ = new_type;
-            Some(v1nt.clone())
+            Some(v1nt_cell.borrow().clone())
         } else {
-            v1.reference_variant.clone()
+            v1.reference_variant.as_ref().map(|c| c.borrow().clone())
         };
 
         if v2var.vartype == COMPLEX {
@@ -604,7 +613,7 @@ fn combine_analysis(
                 VarMaybeArg::Description(description_string),
             )
         })
-        .cloned();
+        .map(|cell| cell.borrow().clone());
 
     if let Some(vref) = vref {
         if vref.position_coverage - variant1.position_coverage >= conf.minr {

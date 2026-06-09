@@ -2,8 +2,10 @@ use indexmap::IndexMap;
 use serde::de::Deserializer;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize, Serializer};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::BuildHasher;
+use std::rc::Rc;
 
 use crate::data::VecMap;
 
@@ -124,30 +126,82 @@ where
     Ok(map)
 }
 
-/// Serializes a BTreeMap<String, V> as sorted array of pairs: [["key", value], ...]
-/// Matches Java LinkedHashMap serialization format used in golden fixtures.
-pub fn serialize_btreemap_as_pairs<V: Serialize, S: Serializer>(
-    map: &std::collections::BTreeMap<String, V>,
+/// Serializes an Option<Rc<RefCell<Variant>>> by serializing the inner Variant (or null).
+pub fn serialize_option_rc_variant<S: Serializer>(
+    opt: &Option<Rc<RefCell<crate::data::Variant>>>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let mut seq = serializer.serialize_seq(Some(map.len()))?;
-    for (key, value) in map {
-        seq.serialize_element(&(key, value))?;
+    match opt {
+        Some(cell) => serializer.serialize_some(&*cell.borrow()),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Deserializes an Option<Variant> → Option<Rc<RefCell<Variant>>>.
+pub fn deserialize_option_rc_variant<'de, D>(
+    deserializer: D,
+) -> Result<Option<Rc<RefCell<crate::data::Variant>>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<crate::data::Variant>::deserialize(deserializer)?;
+    Ok(opt.map(|v| Rc::new(RefCell::new(v))))
+}
+
+/// Serializes a Vec<Rc<RefCell<Variant>>> by serializing each inner Variant.
+pub fn serialize_vec_rc_variant<S: Serializer>(
+    vec: &[Rc<RefCell<crate::data::Variant>>],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut seq = serializer.serialize_seq(Some(vec.len()))?;
+    for cell in vec {
+        seq.serialize_element(&*cell.borrow())?;
     }
     seq.end()
 }
 
-/// Deserializes [["key", value], ...] JSON array → BTreeMap<String, V>
-/// Mirror of serialize_btreemap_as_pairs.
-pub fn deserialize_btreemap_as_pairs<'de, V, D>(
+/// Deserializes a Vec<Variant> → Vec<Rc<RefCell<Variant>>>.
+pub fn deserialize_vec_rc_variant<'de, D>(
     deserializer: D,
-) -> Result<std::collections::BTreeMap<String, V>, D::Error>
+) -> Result<Vec<Rc<RefCell<crate::data::Variant>>>, D::Error>
 where
-    V: Deserialize<'de>,
     D: Deserializer<'de>,
 {
-    let entries = Vec::<(String, V)>::deserialize(deserializer)?;
-    Ok(entries.into_iter().collect())
+    let entries = Vec::<crate::data::Variant>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .map(|v| Rc::new(RefCell::new(v)))
+        .collect())
+}
+
+/// Serializes a BTreeMap<String, Rc<RefCell<Variant>>> as sorted array of pairs: [["key", value], ...]
+/// Matches Java LinkedHashMap serialization format used in golden fixtures.
+/// Serializes the inner Variant value (not the Rc/RefCell wrapper) to preserve byte-identical output.
+pub fn serialize_btreemap_as_pairs<S: Serializer>(
+    map: &std::collections::BTreeMap<String, Rc<RefCell<crate::data::Variant>>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut seq = serializer.serialize_seq(Some(map.len()))?;
+    for (key, cell) in map {
+        seq.serialize_element(&(key, &*cell.borrow()))?;
+    }
+    seq.end()
+}
+
+/// Deserializes [["key", value], ...] JSON array → BTreeMap<String, Rc<RefCell<Variant>>>
+/// Mirror of serialize_btreemap_as_pairs.
+/// Wraps each deserialized Variant into Rc<RefCell<_>>.
+pub fn deserialize_btreemap_as_pairs<'de, D>(
+    deserializer: D,
+) -> Result<std::collections::BTreeMap<String, Rc<RefCell<crate::data::Variant>>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let entries = Vec::<(String, crate::data::Variant)>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .map(|(k, v)| (k, Rc::new(RefCell::new(v))))
+        .collect())
 }
 
 #[cfg(test)]
