@@ -2,10 +2,8 @@ use indexmap::IndexMap;
 use serde::de::Deserializer;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize, Serializer};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::BuildHasher;
-use std::rc::Rc;
 
 use crate::data::VecMap;
 
@@ -126,91 +124,13 @@ where
     Ok(map)
 }
 
-/// Serializes an Option<Rc<RefCell<Variant>>> by serializing the inner Variant (or null).
-pub fn serialize_option_rc_variant<S: Serializer>(
-    opt: &Option<Rc<RefCell<crate::data::Variant>>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    match opt {
-        Some(cell) => serializer.serialize_some(&*cell.borrow()),
-        None => serializer.serialize_none(),
-    }
-}
-
-/// Deserializes an Option<Variant> → Option<Rc<RefCell<Variant>>>.
-pub fn deserialize_option_rc_variant<'de, D>(
-    deserializer: D,
-) -> Result<Option<Rc<RefCell<crate::data::Variant>>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let opt = Option::<crate::data::Variant>::deserialize(deserializer)?;
-    Ok(opt.map(|v| Rc::new(RefCell::new(v))))
-}
-
-/// Serializes a Vec<Rc<RefCell<Variant>>> by serializing each inner Variant.
-pub fn serialize_vec_rc_variant<S: Serializer>(
-    vec: &[Rc<RefCell<crate::data::Variant>>],
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    let mut seq = serializer.serialize_seq(Some(vec.len()))?;
-    for cell in vec {
-        seq.serialize_element(&*cell.borrow())?;
-    }
-    seq.end()
-}
-
-/// Deserializes a Vec<Variant> → Vec<Rc<RefCell<Variant>>>.
-pub fn deserialize_vec_rc_variant<'de, D>(
-    deserializer: D,
-) -> Result<Vec<Rc<RefCell<crate::data::Variant>>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let entries = Vec::<crate::data::Variant>::deserialize(deserializer)?;
-    Ok(entries
-        .into_iter()
-        .map(|v| Rc::new(RefCell::new(v)))
-        .collect())
-}
-
-/// Serializes a BTreeMap<String, Rc<RefCell<Variant>>> as sorted array of pairs: [["key", value], ...]
-/// Matches Java LinkedHashMap serialization format used in golden fixtures.
-/// Serializes the inner Variant value (not the Rc/RefCell wrapper) to preserve byte-identical output.
-pub fn serialize_btreemap_as_pairs<S: Serializer>(
-    map: &std::collections::BTreeMap<String, Rc<RefCell<crate::data::Variant>>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    let mut seq = serializer.serialize_seq(Some(map.len()))?;
-    for (key, cell) in map {
-        seq.serialize_element(&(key, &*cell.borrow()))?;
-    }
-    seq.end()
-}
-
-/// Deserializes [["key", value], ...] JSON array → BTreeMap<String, Rc<RefCell<Variant>>>
-/// Mirror of serialize_btreemap_as_pairs.
-/// Wraps each deserialized Variant into Rc<RefCell<_>>.
-pub fn deserialize_btreemap_as_pairs<'de, D>(
-    deserializer: D,
-) -> Result<std::collections::BTreeMap<String, Rc<RefCell<crate::data::Variant>>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let entries = Vec::<(String, crate::data::Variant)>::deserialize(deserializer)?;
-    Ok(entries
-        .into_iter()
-        .map(|(k, v)| (k, Rc::new(RefCell::new(v))))
-        .collect())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::data::{
         AlignedVarsData, CoverageMap, PositionMap, RealignedVariationData, SortedStringMap,
         Variation, VariationData, VariationEntries, VariationMap, Vars,
     };
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
 
     /// Helper: serialize → deserialize → re-serialize, assert JSON strings are byte-equal.
     fn assert_round_trip<T>(value: &T)
@@ -326,19 +246,29 @@ mod tests {
     #[test]
     fn test_aligned_vars_data_round_trip() {
         let mut aligned = HashMap::new();
-        aligned.insert(
-            300,
-            Vars {
-                reference_variant: None,
-                variants: vec![],
-                var_description_string_to_variants: BTreeMap::new(),
-                sv: String::new(),
-            },
-        );
+        aligned.insert(300, Vars::default());
         let avdata = AlignedVarsData {
             max_read_length: 150,
             aligned_variants: aligned,
         };
         assert_round_trip(&avdata);
+    }
+
+    #[test]
+    fn test_vars_with_variants_round_trip() {
+        use crate::data::Variant;
+        // Build a Vars with one variant in the arena/list/varn
+        let mut vars = Vars::default();
+        let v = Variant {
+            description_string: String::from("A"),
+            frequency: 0.5,
+            ..Variant::default()
+        };
+        let idx = vars.arena.len();
+        let desc = v.description_string.clone();
+        vars.arena.push(v);
+        vars.variants.push(idx);
+        vars.var_description_string_to_variants.insert(desc, idx);
+        assert_round_trip(&vars);
     }
 }

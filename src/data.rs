@@ -1,9 +1,7 @@
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 use indexmap::IndexMap;
 use rustc_hash::FxBuildHasher;
@@ -1532,25 +1530,117 @@ impl Variant {
 }
 
 // Java: Vars L11-L27
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+// NOTE: Serialize/Deserialize are hand-written below (no derive) to keep wire format identical
+// while using an arena+indices representation internally.
+#[derive(Clone, Debug, Default)]
 pub struct Vars {
-    #[serde(rename = "referenceVariant")]
-    #[serde(serialize_with = "crate::parity::format::serialize_option_rc_variant")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_option_rc_variant")]
-    pub reference_variant: Option<Rc<RefCell<Variant>>>,
+    /// Reference variant — owned directly, NEVER placed in the arena.
+    pub reference_variant: Option<Variant>,
 
-    #[serde(rename = "variants")]
-    #[serde(serialize_with = "crate::parity::format::serialize_vec_rc_variant")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_vec_rc_variant")]
-    pub variants: Vec<Rc<RefCell<Variant>>>,
+    /// Arena: owns all non-reference variants. Never reordered or removed.
+    pub arena: Vec<Variant>,
 
-    #[serde(rename = "varDescriptionStringToVariants")]
-    #[serde(serialize_with = "crate::parity::format::serialize_btreemap_as_pairs")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_btreemap_as_pairs")]
-    pub var_description_string_to_variants: BTreeMap<String, Rc<RefCell<Variant>>>,
+    /// Ordered/filtered list of indices into `arena`.
+    pub variants: Vec<usize>,
 
-    #[serde(rename = "sv")]
+    /// description_string → arena index, covering ALL non-reference variants.
+    pub var_description_string_to_variants: BTreeMap<String, usize>,
+
     pub sv: String,
+}
+
+impl serde::Serialize for Vars {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("Vars", 4)?;
+        // referenceVariant: Option<Variant>
+        s.serialize_field("referenceVariant", &self.reference_variant)?;
+        // variants: array of Variant values in list order
+        let variant_values: Vec<&Variant> = self.variants.iter().map(|&i| &self.arena[i]).collect();
+        s.serialize_field("variants", &variant_values)?;
+        // varDescriptionStringToVariants: array of [key, Variant] pairs in BTreeMap (sorted-key) order
+        let varn_pairs: Vec<(&str, &Variant)> = self
+            .var_description_string_to_variants
+            .iter()
+            .map(|(k, &i)| (k.as_str(), &self.arena[i]))
+            .collect();
+        s.serialize_field("varDescriptionStringToVariants", &varn_pairs)?;
+        s.serialize_field("sv", &self.sv)?;
+        s.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Vars {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{MapAccess, Visitor};
+        use std::fmt;
+
+        struct VarsVisitor;
+
+        impl<'de> Visitor<'de> for VarsVisitor {
+            type Value = Vars;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "struct Vars")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Vars, A::Error> {
+                let mut reference_variant: Option<Option<Variant>> = None;
+                let mut variants_raw: Option<Vec<Variant>> = None;
+                let mut varn_raw: Option<Vec<(String, Variant)>> = None;
+                let mut sv: Option<String> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "referenceVariant" => {
+                            reference_variant = Some(map.next_value()?);
+                        }
+                        "variants" => {
+                            variants_raw = Some(map.next_value()?);
+                        }
+                        "varDescriptionStringToVariants" => {
+                            varn_raw = Some(map.next_value()?);
+                        }
+                        "sv" => {
+                            sv = Some(map.next_value()?);
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                let reference_variant = reference_variant.unwrap_or(None);
+                let variants_list = variants_raw.unwrap_or_default();
+                let varn_pairs = varn_raw.unwrap_or_default();
+                let sv = sv.unwrap_or_default();
+
+                // arena = the deserialized variants list values
+                let mut arena: Vec<Variant> = variants_list;
+                let variants_idx: Vec<usize> = (0..arena.len()).collect();
+                // Reconstruct varn map: for each (k, v), find existing arena slot or push new
+                let mut varn: BTreeMap<String, usize> = BTreeMap::new();
+                for (k, v) in varn_pairs {
+                    let idx = if let Some(i) = arena.iter().position(|a| a.description_string == k)
+                    {
+                        i
+                    } else {
+                        let i = arena.len();
+                        arena.push(v);
+                        i
+                    };
+                    varn.insert(k, idx);
+                }
+                Ok(Vars {
+                    reference_variant,
+                    arena,
+                    variants: variants_idx,
+                    var_description_string_to_variants: varn,
+                    sv,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(VarsVisitor)
+    }
 }
 
 // Java: RealignedVariationData (VariationRealigner output boundary type)

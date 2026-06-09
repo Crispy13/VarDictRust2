@@ -599,14 +599,14 @@ pub fn collect_vars_at_position(
             .unwrap_or_else(|| "null".to_string());
 
         if tvar.description_string == ref_desc {
-            get_or_put_vars(aligned_variants, position).reference_variant =
-                Some(std::rc::Rc::new(std::cell::RefCell::new(tvar.clone())));
+            get_or_put_vars(aligned_variants, position).reference_variant = Some(tvar.clone());
         } else {
-            let cell = std::rc::Rc::new(std::cell::RefCell::new(tvar.clone()));
-            let desc = cell.borrow().description_string.clone();
+            let desc = tvar.description_string.clone();
             let vars = get_or_put_vars(aligned_variants, position);
-            vars.variants.push(std::rc::Rc::clone(&cell));
-            vars.var_description_string_to_variants.insert(desc, cell);
+            let idx = vars.arena.len();
+            vars.arena.push(tvar.clone());
+            vars.variants.push(idx);
+            vars.var_description_string_to_variants.insert(desc, idx);
             if tvar.frequency > maxfreq {
                 maxfreq = tvar.frequency;
             }
@@ -802,21 +802,18 @@ pub fn collect_reference_variants(
     // Step 3: Determine genotype1
     // Trap T9: referenceVariant can be None
     let genotype1: String;
-    if let Some(ref rv_cell) = variations_at_pos.reference_variant {
-        let rv = rv_cell.borrow();
+    if let Some(ref rv) = variations_at_pos.reference_variant {
         if rv.frequency >= conf.freq {
             genotype1 = rv.description_string.clone();
         } else if !variations_at_pos.variants.is_empty() {
-            genotype1 = variations_at_pos.variants[0]
-                .borrow()
+            genotype1 = variations_at_pos.arena[variations_at_pos.variants[0]]
                 .description_string
                 .clone();
         } else {
             genotype1 = rv.description_string.clone();
         }
     } else if !variations_at_pos.variants.is_empty() {
-        genotype1 = variations_at_pos.variants[0]
-            .borrow()
+        genotype1 = variations_at_pos.arena[variations_at_pos.variants[0]]
             .description_string
             .clone();
     } else {
@@ -826,8 +823,7 @@ pub fn collect_reference_variants(
     }
 
     // Step 4: reference fwd/rev coverage
-    if let Some(ref rv_cell) = variations_at_pos.reference_variant {
-        let rv = rv_cell.borrow();
+    if let Some(ref rv) = variations_at_pos.reference_variant {
         reference_forward_coverage = rv.vars_count_on_forward;
         reference_reverse_coverage = rv.vars_count_on_reverse;
     }
@@ -872,8 +868,7 @@ pub fn collect_reference_variants(
         let variant_count = variations_at_pos.variants.len();
         for vi in 0..variant_count {
             let mut genotype1current = genotype1.clone();
-            let description_string = variations_at_pos.variants[vi]
-                .borrow()
+            let description_string = variations_at_pos.arena[variations_at_pos.variants[vi]]
                 .description_string
                 .clone();
             let mut genotype2 = description_string.clone();
@@ -1097,18 +1092,20 @@ pub fn collect_reference_variants(
         }
 
         // Trap T29: disableSV removal after full variant construction
+        // Drop indices from the list; arena + varn keep them (faithful to Java :958).
         if conf.disable_sv {
+            let arena = &variations_at_pos.arena;
             variations_at_pos
                 .variants
-                .retain(|vref| !ANY_SV.is_match(&vref.borrow().varallele));
+                .retain(|&idx| !ANY_SV.is_match(&arena[idx].varallele));
         }
     } else if variations_at_pos.reference_variant.is_some() {
         // No non-reference variants; fill reference variant fields
-        let vref_cell = variations_at_pos.reference_variant.as_ref().unwrap();
+        let vref = variations_at_pos.reference_variant.as_mut().unwrap();
         update_ref_variant(
             position,
             total_pos_coverage,
-            &mut *vref_cell.borrow_mut(),
+            vref,
             debug_lines,
             reference_forward_coverage,
             reference_reverse_coverage,
@@ -1118,9 +1115,7 @@ pub fn collect_reference_variants(
         );
     } else {
         // No variants at all — create empty Variant
-        variations_at_pos.reference_variant = Some(std::rc::Rc::new(std::cell::RefCell::new(
-            Variant::default(),
-        )));
+        variations_at_pos.reference_variant = Some(Variant::default());
     }
 
     // Trap T30: Pileup ref variant double-update
@@ -1128,11 +1123,11 @@ pub fn collect_reference_variants(
         && conf.do_pileup
         && (positions_for_changed_ref_variant.contains(&position) || has_amplicon_based_calling)
     {
-        let vref_cell = variations_at_pos.reference_variant.as_ref().unwrap();
+        let vref = variations_at_pos.reference_variant.as_mut().unwrap();
         update_ref_variant(
             position,
             total_pos_coverage,
-            &mut *vref_cell.borrow_mut(),
+            vref,
             debug_lines,
             reference_forward_coverage,
             reference_reverse_coverage,
@@ -1217,12 +1212,12 @@ fn process_variant_finalization(
             if ref_coverage.contains_key(&(start_position - 1)) {
                 *total_pos_coverage = *ref_coverage.get(&(start_position - 1)).unwrap();
             }
-            if variations_at_pos.variants[vi].borrow().position_coverage > *total_pos_coverage {
-                *total_pos_coverage = variations_at_pos.variants[vi].borrow().position_coverage;
+            let ai = variations_at_pos.variants[vi];
+            if variations_at_pos.arena[ai].position_coverage > *total_pos_coverage {
+                *total_pos_coverage = variations_at_pos.arena[ai].position_coverage;
             }
-            let pos_cov = variations_at_pos.variants[vi].borrow().position_coverage;
-            variations_at_pos.variants[vi].borrow_mut().frequency =
-                pos_cov as f64 / *total_pos_coverage as f64;
+            let pos_cov = variations_at_pos.arena[ai].position_coverage;
+            variations_at_pos.arena[ai].frequency = pos_cov as f64 / *total_pos_coverage as f64;
         }
     }
 
@@ -1349,17 +1344,18 @@ fn process_variant_finalization(
                     tva
                 );
             }
-            variations_at_pos.variants[vi].borrow_mut().crispr = n;
+            variations_at_pos.arena[variations_at_pos.variants[vi]].crispr = n;
         }
     }
 
     // Set flanking sequences
-    variations_at_pos.variants[vi].borrow_mut().leftseq = join_ref(
+    let ai = variations_at_pos.variants[vi];
+    variations_at_pos.arena[ai].leftseq = join_ref(
         ref_map,
         (start_position - REF_20_BASES).max(1),
         start_position - 1,
     );
-    variations_at_pos.variants[vi].borrow_mut().rightseq = join_ref(
+    variations_at_pos.arena[ai].rightseq = join_ref(
         ref_map,
         end_position + 1,
         (end_position + REF_20_BASES).min(chr0),
@@ -1374,7 +1370,8 @@ fn process_variant_finalization(
     // Round and set final fields
     // Trap T14: msint field = length of MSI unit string
     {
-        let mut vref = variations_at_pos.variants[vi].borrow_mut();
+        let ai = variations_at_pos.variants[vi];
+        let vref = &mut variations_at_pos.arena[ai];
         vref.extra_frequency = round_half_even("0.0000", vref.extra_frequency);
         vref.frequency = round_half_even("0.0000", vref.frequency);
         vref.high_quality_reads_frequency =
@@ -1395,25 +1392,22 @@ fn process_variant_finalization(
         let ref_sbf = variations_at_pos
             .reference_variant
             .as_ref()
-            .map(|c| c.borrow().strand_bias_flag.clone());
+            .map(|rv| rv.strand_bias_flag.clone());
         if let Some(rv_sbf) = ref_sbf {
             vref.strand_bias_flag = format!("{};{}", rv_sbf, vref.strand_bias_flag);
         } else {
             vref.strand_bias_flag = format!("0;{}", vref.strand_bias_flag);
         }
 
-        adjust_variant_counts(position, &mut *vref);
+        adjust_variant_counts(position, vref);
     }
 
     if start_position != position && conf.do_pileup {
         positions_for_changed_ref_variant.push(position);
     }
 
-    construct_debug_lines(
-        debug_lines,
-        &mut *variations_at_pos.variants[vi].borrow_mut(),
-        conf,
-    );
+    let ai = variations_at_pos.variants[vi];
+    construct_debug_lines(debug_lines, &mut variations_at_pos.arena[ai], conf);
 }
 
 /// Ported from: ToVarsBuilder.java:L88-L190
@@ -1752,11 +1746,8 @@ fn process_position(
         has_amplicon_based_calling,
     );
 
-    variations_at_pos.var_description_string_to_variants = variations_at_pos
-        .variants
-        .iter()
-        .map(|c| (c.borrow().description_string.clone(), std::rc::Rc::clone(c)))
-        .collect();
+    // Arena + index views are already consistent after collect_vars_at_position;
+    // the former `:1730` rebuild is not needed.
 }
 
 // ---------------------------------------------------------------------------

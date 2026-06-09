@@ -1,8 +1,6 @@
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::BuildHasher;
 use std::hash::Hash;
-use std::rc::Rc;
 use std::sync::RwLock;
 
 use indexmap::map::{RawEntryApiV1, raw_entry_v1::RawEntryMut};
@@ -520,36 +518,36 @@ pub fn correct_cnt(var_to_correct: &mut Variation) {
 }
 
 /// Ported from: VariationUtils.java:L324-L355
-pub fn get_var_maybe(
-    aligned_variants: &HashMap<i32, Vars>,
+pub fn get_var_maybe<'a>(
+    aligned_variants: &'a HashMap<i32, Vars>,
     key: i32,
     vars_type: VarsType,
     arg: VarMaybeArg<'_>,
-) -> Option<Rc<RefCell<Variant>>> {
+) -> Option<&'a Variant> {
     aligned_variants
         .get(&key)
         .and_then(|vars| get_var_maybe_from_vars(vars, vars_type, arg))
 }
 
 /// Ported from: VariationUtils.java:L362-L378
-pub fn get_var_maybe_from_vars(
-    vars: &Vars,
+pub fn get_var_maybe_from_vars<'a>(
+    vars: &'a Vars,
     vars_type: VarsType,
     arg: VarMaybeArg<'_>,
-) -> Option<Rc<RefCell<Variant>>> {
+) -> Option<&'a Variant> {
     match vars_type {
         VarsType::Var => match arg {
-            VarMaybeArg::Index(index) => vars.variants.get(index).cloned(),
+            VarMaybeArg::Index(index) => vars.variants.get(index).map(|&ai| &vars.arena[ai]),
             VarMaybeArg::Description(_) | VarMaybeArg::None => None,
         },
         VarsType::Varn => match arg {
             VarMaybeArg::Description(description) => vars
                 .var_description_string_to_variants
                 .get(description)
-                .cloned(),
+                .map(|&ai| &vars.arena[ai]),
             VarMaybeArg::Index(_) | VarMaybeArg::None => None,
         },
-        VarsType::Ref => vars.reference_variant.clone(),
+        VarsType::Ref => vars.reference_variant.as_ref(),
     }
 }
 
@@ -937,16 +935,17 @@ mod tests {
             description_string: String::from("A"),
             ..Variant::default()
         };
-        let cell = Rc::new(RefCell::new(variant));
-        let vars = Vars {
-            reference_variant: Some(Rc::clone(&cell)),
-            variants: vec![Rc::clone(&cell)],
-            var_description_string_to_variants: BTreeMap::from([(
-                String::from("A"),
-                Rc::clone(&cell),
-            )]),
-            sv: String::new(),
+        // reference_variant is separate; arena holds the non-ref variants
+        let mut vars = Vars {
+            reference_variant: Some(variant.clone()),
+            ..Vars::default()
         };
+        // Put the variant in the arena too (as a non-ref copy for Var/Varn lookup)
+        let idx = vars.arena.len();
+        vars.arena.push(variant);
+        vars.variants.push(idx);
+        vars.var_description_string_to_variants
+            .insert(String::from("A"), idx);
         let aligned = HashMap::from([(7, vars)]);
 
         assert!(get_var_maybe(&aligned, 7, VarsType::Ref, VarMaybeArg::None).is_some());
@@ -1361,15 +1360,10 @@ mod tests {
 
     #[test]
     fn get_or_put_vars_preserves_existing_variants() {
-        let mut vars_map = HashMap::from([(
-            3,
-            Vars {
-                reference_variant: None,
-                variants: vec![Rc::new(RefCell::new(Variant::default()))],
-                var_description_string_to_variants: BTreeMap::new(),
-                sv: String::new(),
-            },
-        )]);
+        let mut vars = Vars::default();
+        vars.arena.push(Variant::default());
+        vars.variants.push(0);
+        let mut vars_map = HashMap::from([(3, vars)]);
         assert_eq!(get_or_put_vars(&mut vars_map, 3).variants.len(), 1);
     }
 
@@ -1471,10 +1465,9 @@ mod tests {
 
     #[test]
     fn get_var_maybe_index_out_of_range_returns_none() {
-        let vars = Vars {
-            variants: vec![Rc::new(RefCell::new(Variant::default()))],
-            ..Vars::default()
-        };
+        let mut vars = Vars::default();
+        vars.arena.push(Variant::default());
+        vars.variants.push(0);
         assert!(get_var_maybe_from_vars(&vars, VarsType::Var, VarMaybeArg::Index(1)).is_none());
     }
 
@@ -1560,7 +1553,7 @@ mod tests {
     #[test]
     fn get_var_maybe_ref_ignores_extra_arg() {
         let vars = Vars {
-            reference_variant: Some(Rc::new(RefCell::new(Variant::default()))),
+            reference_variant: Some(Variant::default()),
             ..Vars::default()
         };
 

@@ -58,8 +58,8 @@ pub fn simple_post_process_position_lines(
         if !conf.do_pileup {
             return lines;
         }
-        if let Some(ref ref_cell) = variants_on_position.reference_variant {
-            let mut vref = ref_cell.borrow().clone();
+        if let Some(ref rv) = variants_on_position.reference_variant {
+            let mut vref = rv.clone();
             vref.vartype.clear();
             vrefs.push(vref);
         } else {
@@ -70,12 +70,9 @@ pub fn simple_post_process_position_lines(
         }
     } else {
         let only_variant = variants_on_position.variants.len() == 1;
-        let ref_var_owned = variants_on_position
-            .reference_variant
-            .as_ref()
-            .map(|c| c.borrow().clone());
-        for vref_cell in &variants_on_position.variants {
-            let vref = vref_cell.borrow().clone();
+        let ref_var_owned = variants_on_position.reference_variant.clone();
+        for &idx in &variants_on_position.variants {
+            let vref = variants_on_position.arena[idx].clone();
             if vref.refallele.contains('N') {
                 continue;
             }
