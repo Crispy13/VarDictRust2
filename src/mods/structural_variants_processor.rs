@@ -668,8 +668,14 @@ pub fn fill_and_sort_tmp_sv(
 ) -> Vec<SortPositionSclip> {
     let mut tmp: Vec<SortPositionSclip> = Vec::new();
 
-    // Java: StructuralVariantsProcessor.java#L977-L985
-    for (&position, sclip) in entries.iter() {
+    // Java: StructuralVariantsProcessor.java#L977-L985 — iterate softClips entrySet (HashMap
+    // bucket order) and skip used / out-of-segment entries. We reproduce Java's HashMap bucket
+    // order over the full key set so equal-count ties match Java after the stable sort below.
+    for position in java_hashmap_i32_order_from_keys(entries.keys().copied()) {
+        let sclip = match entries.get(&position) {
+            Some(sclip) => sclip,
+            None => continue,
+        };
         if sclip.used {
             continue;
         }
@@ -683,10 +689,10 @@ pub fn fill_and_sort_tmp_sv(
         ));
     }
 
-    // Java: StructuralVariantsProcessor.java#L986-L987
-    // Keep equal-count candidates in ascending position order so the winning
-    // soft-clip is deterministic across Rust HashMap iteration.
-    tmp.sort_by(|a, b| b.count.cmp(&a.count).then(a.position.cmp(&b.position)));
+    // Java: StructuralVariantsProcessor.java#L986-L987 — stable sort by count descending only.
+    // Vec::sort_by is stable, so equal-count entries keep their HashMap bucket order (matches
+    // Java's stable List.sort over entrySet). Do NOT add a position tie-break.
+    tmp.sort_by(|a, b| b.count.cmp(&a.count));
 
     tmp
 }
@@ -3915,7 +3921,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fill_and_sort_tmp_sv_tiebreaks_by_position() {
+    fn test_fill_and_sort_tmp_sv_tiebreaks_by_hashmap_bucket_order() {
         let curseg = CurrentSegment::new("chr1", 100, 200);
         let mut entries = HashMap::new();
 
@@ -3931,8 +3937,8 @@ mod tests {
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].count, 7);
-        assert_eq!(result[0].position, 120);
-        assert_eq!(result[1].position, 180);
+        assert_eq!(result[0].position, 180);
+        assert_eq!(result[1].position, 120);
     }
 
     #[test]
