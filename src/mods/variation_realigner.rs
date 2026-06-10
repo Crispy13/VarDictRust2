@@ -3816,25 +3816,34 @@ pub fn realignlgins30(
             continue;
         }
 
+        // p5 is present and not used here. Track its used-state locally to avoid re-probing the
+        // invariant key p5 (a cache miss) on every inner iteration. p5 is never removed in this
+        // function, so this mirrors soft_clips_5_end[p5].used exactly.
+        let mut p5_used = false;
+
         // Java: VariationRealigner.java#L1413
         for t3 in &tmp3 {
             let p3 = t3.position;
             let cnt3 = t3.count;
 
-            // Java: VariationRealigner.java#L1418 — if sc5v.used, break inner
-            if soft_clips_5_end.get(&p5).map_or(true, |s| s.used) {
+            // Java: VariationRealigner.java#L1418 — if sc5v.used, break inner.
+            // Local flag mirrors soft_clips_5_end[p5].used (p5 never removed here); avoids an
+            // O(N^2) probe of the invariant key p5.
+            if p5_used {
                 break;
             }
-            // Java: VariationRealigner.java#L1421
-            if soft_clips_3_end.get(&p3).map_or(true, |s| s.used) {
-                continue;
-            }
-            // Java: VariationRealigner.java#L1424
+            // Java: VariationRealigner.java#L1424 — cheap position filters first (no map lookup) so
+            // position-rejected pairs skip the p3 probe. These are pure `continue` guards; reordering
+            // them relative to the p3 used-check does not change the surviving (p5,p3) set.
             if p5 - p3 > (max_read_length as f64 * 2.5) as i32 {
                 continue;
             }
             // Java: VariationRealigner.java#L1427
             if p3 - p5 > max_read_length - 10 {
+                continue;
+            }
+            // Java: VariationRealigner.java#L1421
+            if soft_clips_3_end.get(&p3).map_or(true, |s| s.used) {
                 continue;
             }
 
@@ -3844,7 +3853,11 @@ pub fn realignlgins30(
                     Some(s) => s,
                     None => break,
                 };
-                find_conseq(sc5v, 5)
+                let conseq = find_conseq(sc5v, 5);
+                // find_conseq may set `used` (low-complex/poly-T seeds); mirror it into the flag so
+                // the next iteration's `if p5_used { break; }` matches the original `get(&p5).used`.
+                p5_used = sc5v.used;
+                conseq
             };
             let seq3 = {
                 let sc3v = match soft_clips_3_end.get_mut(&p3) {
@@ -4092,6 +4105,7 @@ pub fn realignlgins30(
             if let Some(sc5v) = soft_clips_5_end.get_mut(&p5) {
                 sc5v.used = true;
             }
+            p5_used = true;
 
             // Java: VariationRealigner.java#L1549-L1551 — set pstd/qstd
             {
