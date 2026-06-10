@@ -2,7 +2,7 @@
 /// Core variant detection engine: iterates BAM records, parses CIGAR strings
 /// operation-by-operation, populates variant maps, coverage, soft-clip structures,
 /// and structural variant accumulators.
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use rust_htslib::bam::{self, HeaderView, record::Aux};
@@ -217,8 +217,8 @@ pub struct CigarParser {
     pub non_insertion_variants: PositionMap<VariationMap>,
     pub insertion_variants: PositionMap<VariationMap>,
     pub ref_coverage: CoverageMap,
-    pub soft_clips_3_end: HashMap<i32, Sclip>,
-    pub soft_clips_5_end: HashMap<i32, Sclip>,
+    pub soft_clips_3_end: PositionMap<Sclip>,
+    pub soft_clips_5_end: PositionMap<Sclip>,
     pub position_to_insertion_count: PositionMap<SortedStringMap<i32>>,
     pub mnp: PositionMap<SortedStringMap<i32>>,
     pub position_to_deletion_count: PositionMap<SortedStringMap<i32>>,
@@ -261,8 +261,8 @@ impl CigarParser {
             non_insertion_variants: PositionMap::default(),
             insertion_variants: PositionMap::default(),
             ref_coverage: CoverageMap::default(),
-            soft_clips_3_end: HashMap::new(),
-            soft_clips_5_end: HashMap::new(),
+            soft_clips_3_end: PositionMap::default(),
+            soft_clips_5_end: PositionMap::default(),
             position_to_insertion_count: PositionMap::default(),
             mnp: PositionMap::default(),
             position_to_deletion_count: PositionMap::default(),
@@ -308,8 +308,8 @@ impl CigarParser {
         non_insertion_variants: PositionMap<VariationMap>,
         insertion_variants: PositionMap<VariationMap>,
         ref_coverage: CoverageMap,
-        soft_clips_3_end: HashMap<i32, Sclip>,
-        soft_clips_5_end: HashMap<i32, Sclip>,
+        soft_clips_3_end: PositionMap<Sclip>,
+        soft_clips_5_end: PositionMap<Sclip>,
         total_reads: i32,
         duplicate_reads: i32,
     ) {

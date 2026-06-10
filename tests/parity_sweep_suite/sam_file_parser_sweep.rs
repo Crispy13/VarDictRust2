@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -38,8 +38,8 @@ fn collect_sam_file_parser_result(
         Default::default(),
         Default::default(),
         Default::default(),
-        HashMap::new(),
-        HashMap::new(),
+        Default::default(),
+        Default::default(),
     );
     let scope = Scope::new(
         bam_path,

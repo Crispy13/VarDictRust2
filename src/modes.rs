@@ -272,8 +272,8 @@ fn process_structural_variants(
     };
     let mut prev_non_insertion_variants = PositionMap::<VariationMap>::default();
     let mut prev_ref_coverage = CoverageMap::default();
-    let mut prev_soft_clips_3_end = HashMap::<i32, Sclip>::new();
-    let mut prev_soft_clips_5_end = HashMap::<i32, Sclip>::new();
+    let mut prev_soft_clips_3_end = PositionMap::<Sclip>::default();
+    let mut prev_soft_clips_5_end = PositionMap::<Sclip>::default();
     let prev_reference_sequences = ReferenceSequenceMap::default();
     structural_variants_processor::process(
         &mut data,

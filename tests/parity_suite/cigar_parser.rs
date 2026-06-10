@@ -55,8 +55,8 @@ fn parity_cigar_parser_all_regions() {
             PositionMap::<VariationMap>::default(),
             PositionMap::<VariationMap>::default(),
             CoverageMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            PositionMap::default(),
+            PositionMap::default(),
         );
         let scope = Scope::new(
             bam_str,
@@ -84,8 +84,8 @@ fn parity_cigar_parser_all_regions() {
             PositionMap::<VariationMap>::default(),
             PositionMap::<VariationMap>::default(),
             CoverageMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            PositionMap::default(),
+            PositionMap::default(),
             0,
             0,
         );
@@ -145,8 +145,8 @@ fn parity_cigar_parser_config_t1_02_10_116065606_116065839() {
         PositionMap::<VariationMap>::default(),
         PositionMap::<VariationMap>::default(),
         CoverageMap::default(),
-        HashMap::new(),
-        HashMap::new(),
+        PositionMap::default(),
+        PositionMap::default(),
     );
     let scope = Scope::new(
         bam_str,
@@ -172,8 +172,8 @@ fn parity_cigar_parser_config_t1_02_10_116065606_116065839() {
         PositionMap::<VariationMap>::default(),
         PositionMap::<VariationMap>::default(),
         CoverageMap::default(),
-        HashMap::new(),
-        HashMap::new(),
+        PositionMap::default(),
+        PositionMap::default(),
         0,
         0,
     );

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -6,7 +6,7 @@ use crossbeam_channel::bounded;
 use rayon::prelude::*;
 use rust_htslib::bam::{self, Read as BamRead};
 
-use vardict_rs::data::InitialData;
+use vardict_rs::data::{InitialData, PositionMap};
 use vardict_rs::mods::cigar_parser::CigarParser;
 use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::{Scope, VariantPrinter};
@@ -125,8 +125,8 @@ fn parity_cigar_parser_sweep() {
                     Default::default(),
                     Default::default(),
                     Default::default(),
-                    HashMap::new(),
-                    HashMap::new(),
+                    PositionMap::default(),
+                    PositionMap::default(),
                 );
                 let scope = Scope::new(
                     bam_path,
@@ -153,8 +153,8 @@ fn parity_cigar_parser_sweep() {
                     Default::default(),
                     Default::default(),
                     Default::default(),
-                    HashMap::new(),
-                    HashMap::new(),
+                    PositionMap::default(),
+                    PositionMap::default(),
                     0, // NOTE: total_reads=0 - real value from RecordPreprocessor not available in sweep. Affects duprate only.
                     0, // NOTE: duplicate_reads=0 - same limitation.
                 );

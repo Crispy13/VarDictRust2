@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -160,8 +159,8 @@ fn parity_sv_processor_sweep() {
                 let mut prev_non_insertion_variants: PositionMap<VariationMap> =
                     PositionMap::default();
                 let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
-                let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
-                let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
+                let mut prev_soft_clips_3_end: PositionMap<Sclip> = PositionMap::default();
+                let mut prev_soft_clips_5_end: PositionMap<Sclip> = PositionMap::default();
                 let prev_reference_sequences = ReferenceSequenceMap::default();
 
                 structural_variants_processor::process(
