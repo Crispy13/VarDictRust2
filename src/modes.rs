@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::data::{
-    AlignedVarsData, InitialData, PositionMap, RealignedVariationData, Region, Sclip, VariationMap,
+    AlignedVarsData, CoverageMap, InitialData, PositionMap, RealignedVariationData, Region, Sclip,
+    VariationMap,
 };
 use crate::mods::amplicon_post_process::amplicon_post_process;
 use crate::mods::cigar_parser::CigarParser;
@@ -239,7 +240,7 @@ fn run_realigned_pipeline(scope: Scope<InitialData>) -> Scope<RealignedVariation
     realigned_scope
 }
 
-fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
+pub(crate) fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
     finalize_pipeline(run_realigned_pipeline(scope))
 }
 
@@ -270,9 +271,9 @@ fn process_structural_variants(
         Some(splice.iter().cloned().collect::<BTreeSet<_>>())
     };
     let mut prev_non_insertion_variants = PositionMap::<VariationMap>::default();
-    let mut prev_ref_coverage = PositionMap::<i32>::default();
-    let mut prev_soft_clips_3_end = HashMap::<i32, Sclip>::new();
-    let mut prev_soft_clips_5_end = HashMap::<i32, Sclip>::new();
+    let mut prev_ref_coverage = CoverageMap::default();
+    let mut prev_soft_clips_3_end = PositionMap::<Sclip>::default();
+    let mut prev_soft_clips_5_end = PositionMap::<Sclip>::default();
     let prev_reference_sequences = ReferenceSequenceMap::default();
     structural_variants_processor::process(
         &mut data,
@@ -661,21 +662,26 @@ impl SomaticMode {
         let bam1_scope = Scope::new(
             bam_names.get_bam1(),
             region.clone(),
-            Arc::new(reference.clone()),
+            Arc::new(reference),
             Arc::new(self.reference_resource.clone()),
             0,
-            splice.clone(),
+            splice,
             printer.clone(),
             InitialData::default(),
         );
         let bam1_aligned = run_pipeline(bam1_scope);
+        // Java SomaticMode.processBothBamsInPipeline passes the SAME Reference and splice
+        // object to both pipelines (initialScope1 and initialScope2). The tumor pass's
+        // SV-breakpoint reference extensions and splice sites are therefore visible to the
+        // normal pass, which lets it skip the partial-pipeline re-parse at already-loaded
+        // breakpoints. Share the tumor-extended reference + splice with the normal pipeline.
         let bam2_scope = Scope::new(
             bam_names.get_bam2().expect("Somatic mode requires BAM2"),
             region.clone(),
-            Arc::new(reference),
+            bam1_aligned.region_ref.clone(),
             Arc::new(self.reference_resource.clone()),
             bam1_aligned.max_read_length,
-            splice,
+            (*bam1_aligned.splice).clone(),
             printer,
             InitialData::default(),
         );

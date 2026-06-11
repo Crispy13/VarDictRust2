@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
+use crate::data::VecMap;
+
 /// Serializes a HashMap<i32, V, H> as sorted array of pairs: [[key, value], ...]
 pub fn serialize_sorted_int_map<V: Serialize, H: BuildHasher, S: Serializer>(
     map: &HashMap<i32, V, H>,
@@ -35,6 +37,33 @@ where
         seq.serialize_element(&(key, value))?;
     }
     seq.end()
+}
+
+/// Serializes a VecMap<V> as array of pairs in insertion order: [["key", value], ...]
+pub fn serialize_vecmap_as_pairs<V: Serialize, S: Serializer>(
+    map: &VecMap<V>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut seq = serializer.serialize_seq(Some(map.len()))?;
+    for (key, value) in map.iter() {
+        seq.serialize_element(&(key, value))?;
+    }
+    seq.end()
+}
+
+/// Deserializes [["key", value], ...] JSON array → VecMap<V>
+/// Mirror of serialize_vecmap_as_pairs.
+pub fn deserialize_vecmap_as_pairs<'de, V, D>(deserializer: D) -> Result<VecMap<V>, D::Error>
+where
+    V: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    let entries = Vec::<(String, V)>::deserialize(deserializer)?;
+    let mut map = VecMap::new();
+    for (k, v) in entries {
+        map.insert(k, v);
+    }
+    Ok(map)
 }
 
 /// Serializes a HashMap<String, V> as sorted array of pairs: [[key, value], ...]
@@ -95,39 +124,13 @@ where
     Ok(map)
 }
 
-/// Serializes a BTreeMap<String, V> as sorted array of pairs: [["key", value], ...]
-/// Matches Java LinkedHashMap serialization format used in golden fixtures.
-pub fn serialize_btreemap_as_pairs<V: Serialize, S: Serializer>(
-    map: &std::collections::BTreeMap<String, V>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    let mut seq = serializer.serialize_seq(Some(map.len()))?;
-    for (key, value) in map {
-        seq.serialize_element(&(key, value))?;
-    }
-    seq.end()
-}
-
-/// Deserializes [["key", value], ...] JSON array → BTreeMap<String, V>
-/// Mirror of serialize_btreemap_as_pairs.
-pub fn deserialize_btreemap_as_pairs<'de, V, D>(
-    deserializer: D,
-) -> Result<std::collections::BTreeMap<String, V>, D::Error>
-where
-    V: Deserialize<'de>,
-    D: Deserializer<'de>,
-{
-    let entries = Vec::<(String, V)>::deserialize(deserializer)?;
-    Ok(entries.into_iter().collect())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::data::{
-        AlignedVarsData, PositionMap, RealignedVariationData, SortedStringMap, Variation,
-        VariationData, VariationEntries, VariationMap, Vars,
+        AlignedVarsData, CoverageMap, PositionMap, RealignedVariationData, SortedStringMap,
+        Variation, VariationData, VariationEntries, VariationMap, Vars,
     };
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
 
     /// Helper: serialize → deserialize → re-serialize, assert JSON strings are byte-equal.
     fn assert_round_trip<T>(value: &T)
@@ -182,7 +185,7 @@ mod tests {
             },
         );
 
-        let mut ref_cov = PositionMap::default();
+        let mut ref_cov = CoverageMap::default();
         ref_cov.insert(100, 50);
         ref_cov.insert(101, 55);
 
@@ -219,7 +222,7 @@ mod tests {
             },
         );
 
-        let mut ref_cov = PositionMap::default();
+        let mut ref_cov = CoverageMap::default();
         ref_cov.insert(50, 42);
 
         let rdata = RealignedVariationData {
@@ -243,19 +246,29 @@ mod tests {
     #[test]
     fn test_aligned_vars_data_round_trip() {
         let mut aligned = HashMap::new();
-        aligned.insert(
-            300,
-            Vars {
-                reference_variant: None,
-                variants: vec![],
-                var_description_string_to_variants: BTreeMap::new(),
-                sv: String::new(),
-            },
-        );
+        aligned.insert(300, Vars::default());
         let avdata = AlignedVarsData {
             max_read_length: 150,
             aligned_variants: aligned,
         };
         assert_round_trip(&avdata);
+    }
+
+    #[test]
+    fn test_vars_with_variants_round_trip() {
+        use crate::data::Variant;
+        // Build a Vars with one variant in the arena/list/varn
+        let mut vars = Vars::default();
+        let v = Variant {
+            description_string: String::from("A"),
+            frequency: 0.5,
+            ..Variant::default()
+        };
+        let idx = vars.arena.len();
+        let desc = v.description_string.clone();
+        vars.arena.push(v);
+        vars.variants.push(idx);
+        vars.var_description_string_to_variants.insert(desc, idx);
+        assert_round_trip(&vars);
     }
 }

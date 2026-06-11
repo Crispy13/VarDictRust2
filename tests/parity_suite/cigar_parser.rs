@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use rust_htslib::bam::{self, Read as BamRead};
 
-use vardict_rs::data::{InitialData, PositionMap, VariationMap};
+use vardict_rs::data::{CoverageMap, InitialData, PositionMap, VariationMap};
 use vardict_rs::mods::cigar_parser::CigarParser;
 use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::{Scope, VariantPrinter};
@@ -54,9 +54,9 @@ fn parity_cigar_parser_all_regions() {
         let initial_data = InitialData::new(
             PositionMap::<VariationMap>::default(),
             PositionMap::<VariationMap>::default(),
-            PositionMap::<i32>::default(),
-            HashMap::new(),
-            HashMap::new(),
+            CoverageMap::default(),
+            PositionMap::default(),
+            PositionMap::default(),
         );
         let scope = Scope::new(
             bam_str,
@@ -83,9 +83,9 @@ fn parity_cigar_parser_all_regions() {
             0,
             PositionMap::<VariationMap>::default(),
             PositionMap::<VariationMap>::default(),
-            PositionMap::<i32>::default(),
-            HashMap::new(),
-            HashMap::new(),
+            CoverageMap::default(),
+            PositionMap::default(),
+            PositionMap::default(),
             0,
             0,
         );
@@ -144,9 +144,9 @@ fn parity_cigar_parser_config_t1_02_10_116065606_116065839() {
     let initial_data = InitialData::new(
         PositionMap::<VariationMap>::default(),
         PositionMap::<VariationMap>::default(),
-        PositionMap::<i32>::default(),
-        HashMap::new(),
-        HashMap::new(),
+        CoverageMap::default(),
+        PositionMap::default(),
+        PositionMap::default(),
     );
     let scope = Scope::new(
         bam_str,
@@ -171,9 +171,9 @@ fn parity_cigar_parser_config_t1_02_10_116065606_116065839() {
         0,
         PositionMap::<VariationMap>::default(),
         PositionMap::<VariationMap>::default(),
-        PositionMap::<i32>::default(),
-        HashMap::new(),
-        HashMap::new(),
+        CoverageMap::default(),
+        PositionMap::default(),
+        PositionMap::default(),
         0,
         0,
     );

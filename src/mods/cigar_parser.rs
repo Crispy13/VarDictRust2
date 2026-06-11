@@ -2,15 +2,15 @@
 /// Core variant detection engine: iterates BAM records, parses CIGAR strings
 /// operation-by-operation, populates variant maps, coverage, soft-clip structures,
 /// and structural variant accumulators.
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use rust_htslib::bam::{self, HeaderView, record::Aux};
 
 use crate::config::{Configuration, MINMAPBASE, MINSVCDIST, MINSVPOS, SEED_1};
 use crate::data::{
-    BaseInsertion, Mate, ModifiedCigar, PositionMap, Region, SVStructures, Sclip, SortedStringMap,
-    Variation, VariationData, VariationMap,
+    BaseInsertion, CoverageMap, Mate, ModifiedCigar, PositionMap, Region, SVStructures, Sclip,
+    SortedStringMap, Variation, VariationData, VariationMap,
 };
 use crate::mods::cigar_modifier::modify_cigar;
 use crate::mods::sam_file_parser::{RecordPreprocessor, get_mate_reference_name};
@@ -216,9 +216,9 @@ pub struct CigarParser {
     // ── Output maps (populated across all records) ──
     pub non_insertion_variants: PositionMap<VariationMap>,
     pub insertion_variants: PositionMap<VariationMap>,
-    pub ref_coverage: PositionMap<i32>,
-    pub soft_clips_3_end: HashMap<i32, Sclip>,
-    pub soft_clips_5_end: HashMap<i32, Sclip>,
+    pub ref_coverage: CoverageMap,
+    pub soft_clips_3_end: PositionMap<Sclip>,
+    pub soft_clips_5_end: PositionMap<Sclip>,
     pub position_to_insertion_count: PositionMap<SortedStringMap<i32>>,
     pub mnp: PositionMap<SortedStringMap<i32>>,
     pub position_to_deletion_count: PositionMap<SortedStringMap<i32>>,
@@ -260,9 +260,9 @@ impl CigarParser {
             // Output maps — initialized empty
             non_insertion_variants: PositionMap::default(),
             insertion_variants: PositionMap::default(),
-            ref_coverage: PositionMap::default(),
-            soft_clips_3_end: HashMap::new(),
-            soft_clips_5_end: HashMap::new(),
+            ref_coverage: CoverageMap::default(),
+            soft_clips_3_end: PositionMap::default(),
+            soft_clips_5_end: PositionMap::default(),
             position_to_insertion_count: PositionMap::default(),
             mnp: PositionMap::default(),
             position_to_deletion_count: PositionMap::default(),
@@ -307,9 +307,9 @@ impl CigarParser {
         // Fields from RecordPreprocessor / InitialData:
         non_insertion_variants: PositionMap<VariationMap>,
         insertion_variants: PositionMap<VariationMap>,
-        ref_coverage: PositionMap<i32>,
-        soft_clips_3_end: HashMap<i32, Sclip>,
-        soft_clips_5_end: HashMap<i32, Sclip>,
+        ref_coverage: CoverageMap,
+        soft_clips_3_end: PositionMap<Sclip>,
+        soft_clips_5_end: PositionMap<Sclip>,
         total_reads: i32,
         duplicate_reads: i32,
     ) {
@@ -957,9 +957,24 @@ impl CigarParser {
         }
 
         // Java: CigarParser.java#L305-L306 — double soft-clip filter
-        let cigar_string = self.cigar.to_string();
-        if BEGIN_dig_dig_S_ANY_dig_dig_S_END.is_match(&cigar_string) {
-            return;
+        // Equivalent to regex ^\d\dS.*\d\dS$: both endpoints are S with exactly 2-digit length
+        // (10..=99) AND the CIGAR has at least 2 elements. The `len >= 2` guard is required
+        // because for a single-element CIGAR (e.g. "76S"), `first()` and `last()` return the
+        // same element, which would incorrectly fire. The regex `^\d\dS.*\d\dS$` requires two
+        // distinct `\d\dS` tokens separated by `.*`, so it cannot match a single-element CIGAR.
+        // Checking directly on ParsedCigar avoids a String allocation + regex evaluation per read.
+        {
+            let elems = &self.cigar.elements;
+            let double_soft_clip = elems.len() >= 2
+                && elems
+                    .first()
+                    .is_some_and(|e| e.operator == CigarOp::S && (10..=99).contains(&e.length))
+                && elems
+                    .last()
+                    .is_some_and(|e| e.operator == CigarOp::S && (10..=99).contains(&e.length));
+            if double_soft_clip {
+                return;
+            }
         }
 
         // Java: CigarParser.java#L309-L312
@@ -3217,7 +3232,7 @@ impl CigarParser {
         query_sequence: &str,
         query_quality: &str,
         reference: &ReferenceSequenceMap,
-        ref_coverage: &mut PositionMap<i32>,
+        ref_coverage: &mut CoverageMap,
     ) -> Offset {
         let (vext, goodq) = Self::with_conf(|conf| (conf.vext, conf.goodq));
         let mut offset = 0i32;

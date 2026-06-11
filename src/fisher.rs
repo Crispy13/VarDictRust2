@@ -35,6 +35,123 @@ fn sanitize_log_probability(value: f64) -> f64 {
     }
 }
 
+// ── Apache Commons Math3 3.6.1 SaddlePointExpansion (faithful port) ──
+// Java FisherExact uses org.apache.commons.math3.distribution.HypergeometricDistribution
+// .logProbability, which is computed by SaddlePointExpansion.logBinomialProbability — NOT a
+// direct lgamma-based log binomial coefficient. The two methods differ at ~1e-12, which the
+// 7-decimal rounding in `sanitize_log_probability` occasionally amplifies into a 5th-decimal
+// p-value divergence. Porting the saddle-point method makes logProbability bit-identical to Java.
+
+/// MathUtils.TWO_PI (= 2π as the nearest f64), matching commons-math3.
+const TWO_PI: f64 = std::f64::consts::TAU;
+/// 0.5 * log(2π); only used by get_stirling_error's non-half-integer branch (unreachable for
+/// integer counts, so libm log vs FastMath.log here cannot affect parity).
+const HALF_LOG_2_PI: f64 = 0.918_938_533_204_672_7;
+
+/// SaddlePointExpansion.EXACT_STIRLING_ERRORS — exact Stirling error for z = 0, 0.5, … , 15.0.
+const EXACT_STIRLING_ERRORS: [f64; 31] = [
+    0.0,                           // 0.0
+    0.153_426_409_720_027_345_291, // 0.5
+    0.081_061_466_795_327_258_220, // 1.0
+    0.054_814_121_051_917_653_896, // 1.5
+    0.041_340_695_955_409_294_094, // 2.0
+    0.033_162_873_519_936_287_485, // 2.5
+    0.027_677_925_684_998_339_149, // 3.0
+    0.023_746_163_656_297_495_971, // 3.5
+    0.020_790_672_103_765_093_112, // 4.0
+    0.018_488_450_532_673_185_231, // 4.5
+    0.016_644_691_189_821_192_163, // 5.0
+    0.015_134_973_221_917_378_874, // 5.5
+    0.013_876_128_823_070_747_999, // 6.0
+    0.012_810_465_242_920_226_924, // 6.5
+    0.011_896_709_945_891_770_095, // 7.0
+    0.011_104_559_758_206_917_327, // 7.5
+    0.010_411_265_261_972_096_497, // 8.0
+    0.009_799_416_126_158_803_298, // 8.5
+    0.009_255_462_182_712_732_918, // 9.0
+    0.008_768_700_134_139_385_463, // 9.5
+    0.008_330_563_433_362_871_256, // 10.0
+    0.007_934_114_564_314_020_547, // 10.5
+    0.007_573_675_487_951_840_795, // 11.0
+    0.007_244_554_301_320_383_180, // 11.5
+    0.006_942_840_107_209_529_866, // 12.0
+    0.006_665_247_032_707_682_442, // 12.5
+    0.006_408_994_188_004_207_068, // 13.0
+    0.006_171_712_263_039_457_648, // 13.5
+    0.005_951_370_112_758_847_736, // 14.0
+    0.005_746_216_513_010_115_682, // 14.5
+    0.005_554_733_551_962_801_371, // 15.0
+];
+
+/// SaddlePointExpansion.getStirlingError(z).
+fn get_stirling_error(z: f64) -> f64 {
+    if z < 15.0 {
+        let z2 = 2.0 * z;
+        if z2.floor() == z2 {
+            EXACT_STIRLING_ERRORS[z2 as usize]
+        } else {
+            ln_gamma(z + 1.0) - (z + 0.5) * z.ln() + z - HALF_LOG_2_PI
+        }
+    } else {
+        let z2 = z * z;
+        (0.083_333_333_333_333_333_333
+            - (0.002_777_777_777_777_777_778
+                - (0.000_793_650_793_650_793_651
+                    - (0.000_595_238_095_238_095_238 - 0.000_841_750_841_750_841_751 / z2) / z2)
+                    / z2)
+                / z2)
+            / z
+    }
+}
+
+/// SaddlePointExpansion.getDeviancePart(x, mu).
+fn get_deviance_part(x: f64, mu: f64) -> f64 {
+    if (x - mu).abs() < 0.1 * (x + mu) {
+        let d = x - mu;
+        let mut v = d / (x + mu);
+        let mut s1 = v * d;
+        let mut s = f64::NAN;
+        let mut ej = 2.0 * x * v;
+        v *= v;
+        let mut j = 1i32;
+        while s1 != s {
+            s = s1;
+            ej *= v;
+            s1 = s + ej / f64::from(j * 2 + 1);
+            j += 1;
+        }
+        s1
+    } else {
+        x * (x / mu).ln() + mu - x
+    }
+}
+
+/// SaddlePointExpansion.logBinomialProbability(x, n, p, q).
+fn log_binomial_probability(x: i32, n: i32, p: f64, q: f64) -> f64 {
+    if x == 0 {
+        if p < 0.1 {
+            -get_deviance_part(f64::from(n), f64::from(n) * q) - f64::from(n) * p
+        } else {
+            f64::from(n) * q.ln()
+        }
+    } else if x == n {
+        if q < 0.1 {
+            -get_deviance_part(f64::from(n), f64::from(n) * p) - f64::from(n) * q
+        } else {
+            f64::from(n) * p.ln()
+        }
+    } else {
+        let ret = get_stirling_error(f64::from(n))
+            - get_stirling_error(f64::from(x))
+            - get_stirling_error(f64::from(n - x))
+            - get_deviance_part(f64::from(x), f64::from(n) * p)
+            - get_deviance_part(f64::from(n - x), f64::from(n) * q);
+        let f = (TWO_PI * f64::from(x) * f64::from(n - x)) / f64::from(n);
+        -0.5 * f.ln() + ret
+    }
+}
+
+#[cfg(test)]
 fn log_binomial_coefficient(n: i32, k: i32) -> f64 {
     if k < 0 || k > n {
         return f64::NEG_INFINITY;
@@ -55,10 +172,14 @@ fn hypergeometric_log_probability(
         return f64::NEG_INFINITY;
     }
 
-    let failures = population - successes;
-    log_binomial_coefficient(successes, observed)
-        + log_binomial_coefficient(failures, draws - observed)
-        - log_binomial_coefficient(population, draws)
+    // commons-math3 HypergeometricDistribution.logProbability(x):
+    // populationSize = population, numberOfSuccesses = successes, sampleSize = draws.
+    let p = f64::from(draws) / f64::from(population);
+    let q = f64::from(population - draws) / f64::from(population);
+    let p1 = log_binomial_probability(observed, successes, p, q);
+    let p2 = log_binomial_probability(draws - observed, population - successes, p, q);
+    let p3 = log_binomial_probability(draws, population, p, q);
+    p1 + p2 - p3
 }
 
 fn hypergeometric_probability(population: i32, successes: i32, draws: i32, observed: i32) -> f64 {
@@ -117,8 +238,29 @@ fn round_as_r(value: f64) -> f64 {
     }
 }
 
+/// Mirror Java `String.valueOf(double)` / `Double.toString(double)`.
+///
+/// Java uses plain decimal notation for `1e-3 <= |m| < 1e7` and "computerized scientific
+/// notation" (e.g. `8.8E-4`, `5.0E-5`, `1.0E7`) outside that range. Rust's `f64::to_string`
+/// only ever emits decimal, so small odds ratios like `0.00088` printed as `0.00088` instead
+/// of Java's `8.8E-4`. Both languages emit the shortest round-tripping digit sequence, so we
+/// reuse Rust's formatting for the digits and only reshape decimal vs scientific to match Java.
 fn java_double_string(value: f64) -> String {
-    if value.is_finite() && value.fract() == 0.0 {
+    if !value.is_finite() {
+        return value.to_string();
+    }
+    let abs = value.abs();
+    if abs != 0.0 && (abs < 1e-3 || abs >= 1e7) {
+        // Java computerized scientific notation.
+        let sci = format!("{value:e}"); // shortest round-trip, e.g. "8.8e-4" or "5e-5"
+        let (mantissa, exponent) = sci.split_once('e').expect("LowerExp always contains 'e'");
+        let mantissa = if mantissa.contains('.') {
+            mantissa.to_string()
+        } else {
+            format!("{mantissa}.0")
+        };
+        format!("{mantissa}E{exponent}")
+    } else if value.fract() == 0.0 {
         format!("{value:.1}")
     } else {
         value.to_string()

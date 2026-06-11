@@ -537,13 +537,14 @@ pub fn get_var_maybe_from_vars<'a>(
 ) -> Option<&'a Variant> {
     match vars_type {
         VarsType::Var => match arg {
-            VarMaybeArg::Index(index) => vars.variants.get(index),
+            VarMaybeArg::Index(index) => vars.variants.get(index).map(|&ai| &vars.arena[ai]),
             VarMaybeArg::Description(_) | VarMaybeArg::None => None,
         },
         VarsType::Varn => match arg {
-            VarMaybeArg::Description(description) => {
-                vars.var_description_string_to_variants.get(description)
-            }
+            VarMaybeArg::Description(description) => vars
+                .var_description_string_to_variants
+                .get(description)
+                .map(|&ai| &vars.arena[ai]),
             VarMaybeArg::Index(_) | VarMaybeArg::None => None,
         },
         VarsType::Ref => vars.reference_variant.as_ref(),
@@ -587,18 +588,8 @@ where
     H: BuildHasher,
 {
     let map = hash.entry(start).or_default();
-    let entries = &mut map.entries;
-
-    match entries
-        .raw_entry_mut_v1()
-        .from_key(description_string.as_ref())
-    {
-        RawEntryMut::Occupied(entry) => entry.into_mut(),
-        RawEntryMut::Vacant(entry) => {
-            let (_, variation) = entry.insert(description_string.into(), Variation::default());
-            variation
-        }
-    }
+    map.entries
+        .get_or_insert_with_default(description_string.as_ref())
 }
 
 /// Ported from: VariationUtils.java:L446-L458
@@ -944,12 +935,17 @@ mod tests {
             description_string: String::from("A"),
             ..Variant::default()
         };
-        let vars = Vars {
+        // reference_variant is separate; arena holds the non-ref variants
+        let mut vars = Vars {
             reference_variant: Some(variant.clone()),
-            variants: vec![variant.clone()],
-            var_description_string_to_variants: BTreeMap::from([(String::from("A"), variant)]),
-            sv: String::new(),
+            ..Vars::default()
         };
+        // Put the variant in the arena too (as a non-ref copy for Var/Varn lookup)
+        let idx = vars.arena.len();
+        vars.arena.push(variant);
+        vars.variants.push(idx);
+        vars.var_description_string_to_variants
+            .insert(String::from("A"), idx);
         let aligned = HashMap::from([(7, vars)]);
 
         assert!(get_var_maybe(&aligned, 7, VarsType::Ref, VarMaybeArg::None).is_some());
@@ -1364,15 +1360,10 @@ mod tests {
 
     #[test]
     fn get_or_put_vars_preserves_existing_variants() {
-        let mut vars_map = HashMap::from([(
-            3,
-            Vars {
-                reference_variant: None,
-                variants: vec![Variant::default()],
-                var_description_string_to_variants: BTreeMap::new(),
-                sv: String::new(),
-            },
-        )]);
+        let mut vars = Vars::default();
+        vars.arena.push(Variant::default());
+        vars.variants.push(0);
+        let mut vars_map = HashMap::from([(3, vars)]);
         assert_eq!(get_or_put_vars(&mut vars_map, 3).variants.len(), 1);
     }
 
@@ -1474,10 +1465,9 @@ mod tests {
 
     #[test]
     fn get_var_maybe_index_out_of_range_returns_none() {
-        let vars = Vars {
-            variants: vec![Variant::default()],
-            ..Vars::default()
-        };
+        let mut vars = Vars::default();
+        vars.arena.push(Variant::default());
+        vars.variants.push(0);
         assert!(get_var_maybe_from_vars(&vars, VarsType::Var, VarMaybeArg::Index(1)).is_none());
     }
 
