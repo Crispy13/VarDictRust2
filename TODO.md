@@ -4,6 +4,9 @@ Deferred work items in the VarDict-rs port that must be resolved before full pro
 
 ---
 # Planned
+## Insepct and optimize high memory usage in testing:
+- T1-02 somatic bam running with 12 threads takes about 18G.
+
 ## Optimize memory usage for pileup
 
 ## Do we really need dynamic dispatch for line sinks?

@@ -751,24 +751,17 @@ fn run_partial_pipeline(
     }
 
     let modified_region = Region::new_modified_region(context.region, modified_start, modified_end);
-    if !ReferenceResource::is_loaded(
-        &modified_region.chr,
-        modified_region.start,
-        modified_region.end,
-        reference,
-    ) {
-        let current_reference = std::mem::take(reference);
-        *reference = context
-            .reference_resource
-            .get_reference_with_extension(&modified_region, max_read_length, current_reference)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "Failed to fetch reference for {}: {}",
-                    modified_region.print_region(),
-                    error
-                )
-            });
-    }
+    // Java parity: AbstractMode.partialPipeline runs only SAMFileParser + CigarParser over the
+    // modified region — it does NOT call getReference. The caller's prefetch
+    // (prefetch_dup_breakpoint_reference_if_missing) plus the main-region load supply the bases,
+    // and CigarParser tolerates positions whose reference base is absent (Option-based lookup,
+    // mirroring Java's ref.containsKey guards). Fetching the full [ms-200, me+200] span here
+    // recorded a wide loadedRegion that Java never records; in somatic mode that leaked into the
+    // second (normal) pass's isLoaded(ms, me) check via the shared Reference, suppressing the
+    // normal pass's own partial pipeline and leaving ref_coverage[me] unpopulated (the DUP
+    // refCoverage[bp]=refCoverage[me] bump then could not fire). See StructuralVariantsProcessor
+    // findDUPdisc L1511-1519 (reverse) / L1419-1425 (forward): only the narrow pe/bp prefetch is
+    // loaded; partialPipeline itself loads no reference.
 
     let initial_data = InitialData::new(
         std::mem::take(non_insertion_variants),
