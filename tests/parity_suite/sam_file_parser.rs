@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use vardict_rs::data::{CoverageMap, InitialData, PositionMap, Region, VariationMap};
@@ -32,8 +32,8 @@ fn collect_sam_file_parser_result(
         PositionMap::<VariationMap>::default(),
         PositionMap::<VariationMap>::default(),
         CoverageMap::default(),
-        HashMap::new(),
-        HashMap::new(),
+        PositionMap::default(),
+        PositionMap::default(),
     );
     let scope = Scope::new(
         bam_path,

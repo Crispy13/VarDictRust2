@@ -650,7 +650,7 @@ pub fn find_mm5(
     ref_map: &ReferenceSequenceMap,
     position: i32,
     wupseq: &str,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
 ) -> MismatchResult {
     // Java: VariationRealigner.java#L2735
     let seq: String = wupseq.chars().filter(|c| *c != '#' && *c != '^').collect();
@@ -770,7 +770,7 @@ pub fn find_mm3(
     ref_map: &ReferenceSequenceMap,
     p: i32,
     sanpseq: &str,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
 ) -> MismatchResult {
     // Java: VariationRealigner.java#L2793
     let seq: String = sanpseq.chars().filter(|c| *c != '#' && *c != '^').collect();
@@ -1481,8 +1481,8 @@ pub fn adjust_mnp<M, H>(
     mnp: &HashMap<i32, M, H>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference_sequences: &ReferenceSequenceMap,
 ) where
     H: BuildHasher,
@@ -1711,8 +1711,8 @@ pub fn realigndel<M, H>(
     position_to_deletions_count: &HashMap<i32, M, H>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference_sequences: &ReferenceSequenceMap,
     chr: &str,
     max_read_length: i32,
@@ -2259,8 +2259,8 @@ pub fn realignins<M, H>(
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference_sequences: &ReferenceSequenceMap,
     chr: &str,
     max_read_length: i32,
@@ -2923,8 +2923,8 @@ fn run_partial_pipeline(
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
 ) {
     if modified_start > modified_end {
         return;
@@ -3029,8 +3029,8 @@ fn realignlgdel(
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     chr: &str,
     max_read_length: i32,
@@ -3773,8 +3773,8 @@ pub fn realignlgins30(
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &Reference,
     reference_sequences: &ReferenceSequenceMap,
     chr: &str,
@@ -3816,25 +3816,34 @@ pub fn realignlgins30(
             continue;
         }
 
+        // p5 is present and not used here. Track its used-state locally to avoid re-probing the
+        // invariant key p5 (a cache miss) on every inner iteration. p5 is never removed in this
+        // function, so this mirrors soft_clips_5_end[p5].used exactly.
+        let mut p5_used = false;
+
         // Java: VariationRealigner.java#L1413
         for t3 in &tmp3 {
             let p3 = t3.position;
             let cnt3 = t3.count;
 
-            // Java: VariationRealigner.java#L1418 — if sc5v.used, break inner
-            if soft_clips_5_end.get(&p5).map_or(true, |s| s.used) {
+            // Java: VariationRealigner.java#L1418 — if sc5v.used, break inner.
+            // Local flag mirrors soft_clips_5_end[p5].used (p5 never removed here); avoids an
+            // O(N^2) probe of the invariant key p5.
+            if p5_used {
                 break;
             }
-            // Java: VariationRealigner.java#L1421
-            if soft_clips_3_end.get(&p3).map_or(true, |s| s.used) {
-                continue;
-            }
-            // Java: VariationRealigner.java#L1424
+            // Java: VariationRealigner.java#L1424 — cheap position filters first (no map lookup) so
+            // position-rejected pairs skip the p3 probe. These are pure `continue` guards; reordering
+            // them relative to the p3 used-check does not change the surviving (p5,p3) set.
             if p5 - p3 > (max_read_length as f64 * 2.5) as i32 {
                 continue;
             }
             // Java: VariationRealigner.java#L1427
             if p3 - p5 > max_read_length - 10 {
+                continue;
+            }
+            // Java: VariationRealigner.java#L1421
+            if soft_clips_3_end.get(&p3).map_or(true, |s| s.used) {
                 continue;
             }
 
@@ -3844,7 +3853,11 @@ pub fn realignlgins30(
                     Some(s) => s,
                     None => break,
                 };
-                find_conseq(sc5v, 5)
+                let conseq = find_conseq(sc5v, 5);
+                // find_conseq may set `used` (low-complex/poly-T seeds); mirror it into the flag so
+                // the next iteration's `if p5_used { break; }` matches the original `get(&p5).used`.
+                p5_used = sc5v.used;
+                conseq
             };
             let seq3 = {
                 let sc3v = match soft_clips_3_end.get_mut(&p3) {
@@ -4092,6 +4105,7 @@ pub fn realignlgins30(
             if let Some(sc5v) = soft_clips_5_end.get_mut(&p5) {
                 sc5v.used = true;
             }
+            p5_used = true;
 
             // Java: VariationRealigner.java#L1549-L1551 — set pstd/qstd
             {
@@ -4280,8 +4294,8 @@ fn realignlgins(
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     chr: &str,
     max_read_length: i32,
@@ -4959,8 +4973,8 @@ pub fn realign_indels<MDel, HDel, MIns, HIns>(
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     chr: &str,
     max_read_length: i32,

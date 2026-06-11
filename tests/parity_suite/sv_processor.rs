@@ -58,8 +58,8 @@ fn parity_sv_processor_all_regions() {
         // Empty prev_* arguments (single-region, no prior segment)
         let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
         let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
-        let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
-        let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
+        let mut prev_soft_clips_3_end: PositionMap<Sclip> = PositionMap::default();
+        let mut prev_soft_clips_5_end: PositionMap<Sclip> = PositionMap::default();
         let prev_reference_sequences = ReferenceSequenceMap::default();
         let prev_chr = "";
         let prev_max_read_length: i32 = 0;
@@ -123,8 +123,8 @@ fn parity_sv_processor_region_1_9967324_9968024() {
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
     let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
-    let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
-    let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
+    let mut prev_soft_clips_3_end: PositionMap<Sclip> = PositionMap::default();
+    let mut prev_soft_clips_5_end: PositionMap<Sclip> = PositionMap::default();
     let prev_reference_sequences = ReferenceSequenceMap::default();
     let prev_chr = "";
     let prev_max_read_length: i32 = 0;
@@ -193,8 +193,8 @@ fn parity_sv_processor_config_t1_01_14_106517915_106518615() {
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
     let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
-    let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
-    let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
+    let mut prev_soft_clips_3_end: PositionMap<Sclip> = PositionMap::default();
+    let mut prev_soft_clips_5_end: PositionMap<Sclip> = PositionMap::default();
     let prev_reference_sequences = ReferenceSequenceMap::default();
     let prev_chr = "";
     let prev_max_read_length: i32 = 0;
@@ -269,8 +269,8 @@ fn parity_sv_processor_config_t1_01_8_20002977_20003677() {
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
     let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
-    let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
-    let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
+    let mut prev_soft_clips_3_end: PositionMap<Sclip> = PositionMap::default();
+    let mut prev_soft_clips_5_end: PositionMap<Sclip> = PositionMap::default();
     let prev_reference_sequences = ReferenceSequenceMap::default();
     let prev_chr = "";
     let prev_max_read_length: i32 = 0;
@@ -345,8 +345,8 @@ fn parity_sv_processor_config_t1_02_1_9967324_9968024() {
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
     let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
-    let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
-    let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
+    let mut prev_soft_clips_3_end: PositionMap<Sclip> = PositionMap::default();
+    let mut prev_soft_clips_5_end: PositionMap<Sclip> = PositionMap::default();
     let prev_reference_sequences = ReferenceSequenceMap::default();
     let prev_chr = "";
     let prev_max_read_length: i32 = 0;
@@ -421,8 +421,8 @@ fn parity_sv_processor_config_cm_noreal_11_7717216_7717916() {
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
     let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
-    let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
-    let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
+    let mut prev_soft_clips_3_end: PositionMap<Sclip> = PositionMap::default();
+    let mut prev_soft_clips_5_end: PositionMap<Sclip> = PositionMap::default();
     let prev_reference_sequences = ReferenceSequenceMap::default();
     let prev_chr = "";
     let prev_max_read_length: i32 = 0;
@@ -498,8 +498,8 @@ fn parity_sv_processor_config_cm_noreal_X_134988591_134989291() {
 
     let mut prev_non_insertion_variants: PositionMap<VariationMap> = PositionMap::default();
     let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
-    let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
-    let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
+    let mut prev_soft_clips_3_end: PositionMap<Sclip> = PositionMap::default();
+    let mut prev_soft_clips_5_end: PositionMap<Sclip> = PositionMap::default();
     let prev_reference_sequences = ReferenceSequenceMap::default();
     let prev_chr = "";
     let prev_max_read_length: i32 = 0;

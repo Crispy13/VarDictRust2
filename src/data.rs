@@ -973,12 +973,12 @@ pub struct InitialData {
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_5_end: HashMap<i32, Sclip>,
+    pub soft_clips_5_end: PositionMap<Sclip>,
 
     #[serde(rename = "softClips3End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_3_end: HashMap<i32, Sclip>,
+    pub soft_clips_3_end: PositionMap<Sclip>,
 }
 
 impl InitialData {
@@ -986,8 +986,8 @@ impl InitialData {
         non_insertion_variants: PositionMap<VariationMap>,
         insertion_variants: PositionMap<VariationMap>,
         ref_coverage: CoverageMap,
-        soft_clips_3_end: HashMap<i32, Sclip>,
-        soft_clips_5_end: HashMap<i32, Sclip>,
+        soft_clips_3_end: PositionMap<Sclip>,
+        soft_clips_5_end: PositionMap<Sclip>,
     ) -> Self {
         Self {
             non_insertion_variants,
@@ -1030,12 +1030,12 @@ pub struct VariationData {
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_5_end: HashMap<i32, Sclip>,
+    pub soft_clips_5_end: PositionMap<Sclip>,
 
     #[serde(rename = "softClips3End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_3_end: HashMap<i32, Sclip>,
+    pub soft_clips_3_end: PositionMap<Sclip>,
 
     #[serde(rename = "svStructures")]
     pub sv_structures: SVStructures,
@@ -1665,12 +1665,12 @@ pub struct RealignedVariationData {
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_5_end: HashMap<i32, Sclip>,
+    pub soft_clips_5_end: PositionMap<Sclip>,
 
     #[serde(rename = "softClips3End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_3_end: HashMap<i32, Sclip>,
+    pub soft_clips_3_end: PositionMap<Sclip>,
 
     #[serde(rename = "refCoverage")]
     #[serde(serialize_with = "crate::data::serialize_coverage_map")]
