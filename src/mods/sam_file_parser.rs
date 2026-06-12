@@ -4,13 +4,26 @@
 //! opens overlapping-query iterators, and streams filtered reads through
 //! RecordPreprocessor's filter cascade to CigarParser.
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use rust_htslib::bam::{self, HeaderView, Read as BamRead};
 
 use crate::data::{InitialData, Region};
 use crate::mods::indexed_reader_cache;
 use crate::scope::{GlobalReadOnlyScope, Scope};
+
+thread_local! {
+    // Cache one deep-cloned HeaderView per BAM path, per thread. A BAM's header is
+    // identical for every tile/region of the file, and `HeaderView::clone` is a deep
+    // `sam_hdr_dup` (expensive for headers with thousands of @SQ contigs, e.g.
+    // GRCh38+decoy+HLA). The per-region pipeline previously re-cloned it once per tile
+    // (~tens of thousands of times in a WES sweep); memoizing one clone per file and
+    // handing out cheap `Rc` clones removes that. Byte-identical: the cached header has
+    // the same content as a fresh `sam_hdr_dup`.
+    static HEADER_CACHE: RefCell<HashMap<String, Rc<HeaderView>>> = RefCell::new(HashMap::new());
+}
 
 // ─── Integer.decode() equivalent ──────────────────────────────────────────────
 // Java: SamView constructor calls Integer.decode(samfilter) which handles
@@ -434,10 +447,17 @@ impl RecordPreprocessor {
     }
 
     /// Returns a clone of the current BAM header for downstream CIGAR parsing.
-    pub fn header_view(&self) -> Option<HeaderView> {
-        self.current_reader
-            .as_ref()
-            .map(|reader| reader.header().clone())
+    pub fn header_view(&self) -> Option<Rc<HeaderView>> {
+        let reader = self.current_reader.as_ref()?;
+        let path = self.current_bam_path.as_ref()?;
+        let header = HEADER_CACHE.with(|cache| {
+            cache
+                .borrow_mut()
+                .entry(path.clone())
+                .or_insert_with(|| Rc::new(reader.header().clone()))
+                .clone()
+        });
+        Some(header)
     }
 
     /// Returns the chromosome name, optionally stripping "chr" prefix if -C flag is set.
