@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use crate::prelude::{HashMap, HashSet};
 use std::fmt;
 use std::io::Write;
 use std::sync::{Arc, Mutex, RwLock};
@@ -512,12 +512,12 @@ mod tests {
     fn install_global_scope(sample: &str) {
         write_global_scope(Some(Arc::new(GlobalReadOnlyScope::new(
             Configuration::default(),
-            HashMap::new(),
+            HashMap::default(),
             sample,
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         ))));
         write_global_mode(None);
     }
@@ -525,12 +525,12 @@ mod tests {
     fn init_thread_local_scope(sample: &str) {
         GlobalReadOnlyScope::init_thread_local(
             Configuration::default(),
-            HashMap::new(),
+            HashMap::default(),
             sample,
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         );
     }
 
@@ -538,7 +538,7 @@ mod tests {
     fn scope_with_data_preserves_shared_context() {
         let region_ref = Arc::new(Reference::default());
         let reference_resource = Arc::new(ReferenceResource::default());
-        let mut splice = HashSet::new();
+        let mut splice = HashSet::default();
         splice.insert(String::from("10-12"));
         let scope = Scope::new(
             "sample.bam",
@@ -572,11 +572,11 @@ mod tests {
 
         GlobalReadOnlyScope::clear();
 
-        let mut chr_lengths = HashMap::new();
+        let mut chr_lengths = HashMap::default();
         chr_lengths.insert(String::from("chr1"), 249_250_621);
-        let mut adaptor_forward = HashMap::new();
+        let mut adaptor_forward = HashMap::default();
         adaptor_forward.insert(String::from("AAAAAA"), 1);
-        let mut adaptor_reverse = HashMap::new();
+        let mut adaptor_reverse = HashMap::default();
         adaptor_reverse.insert(String::from("TTTTTT"), 1);
 
         GlobalReadOnlyScope::init(
@@ -607,12 +607,12 @@ mod tests {
 
         GlobalReadOnlyScope::init(
             Configuration::default(),
-            HashMap::new(),
+            HashMap::default(),
             "sample",
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         );
 
         assert_eq!(GlobalReadOnlyScope::instance().sample, "sample");
@@ -750,12 +750,12 @@ mod tests {
 
         let next_scope = Arc::new(GlobalReadOnlyScope::new(
             Configuration::default(),
-            HashMap::new(),
+            HashMap::default(),
             "next",
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         ));
         let next_mode: SharedMode = Arc::new(DummyMode);
 
@@ -787,12 +787,12 @@ mod tests {
 
         let local_scope = Arc::new(GlobalReadOnlyScope::new(
             Configuration::default(),
-            HashMap::new(),
+            HashMap::default(),
             "local",
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         ));
         let local_mode: SharedMode = Arc::new(AlternateDummyMode);
 

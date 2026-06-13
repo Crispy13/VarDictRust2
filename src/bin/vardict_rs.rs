@@ -1,7 +1,7 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use std::collections::HashMap;
+use vardict_rs::prelude::HashMap;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, ErrorKind};
@@ -147,7 +147,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         config.threads = threads;
     }
 
-    configure_variation_utils_scope(config.clone(), HashMap::new(), HashMap::new());
+    configure_variation_utils_scope(config.clone(), HashMap::default(), HashMap::default());
 
     GlobalReadOnlyScope::init(
         config,
@@ -155,8 +155,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         cli.sample_name,
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
     let _cleanup = ScopeCleanup;
 
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn resolve_regions_rejects_missing_region_and_bed() {
         let cli = sample_cli();
-        let error = resolve_regions(&cli, &HashMap::new()).unwrap_err();
+        let error = resolve_regions(&cli, &HashMap::default()).unwrap_err();
 
         assert_eq!(error.kind(), ErrorKind::InvalidInput);
         assert!(
@@ -550,7 +550,7 @@ mod tests {
             7,
             Path::new("regions.bed"),
             &columns,
-            &HashMap::new(),
+            &HashMap::default(),
         )
         .unwrap();
 
@@ -573,7 +573,7 @@ mod tests {
             3,
             Path::new("broken.bed"),
             &columns,
-            &HashMap::new(),
+            &HashMap::default(),
         )
         .unwrap_err();
 

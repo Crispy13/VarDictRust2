@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use crate::prelude::{HashMap, HashSet};
 use std::panic;
 
 use indexmap::IndexMap;
@@ -31,7 +31,7 @@ pub fn amplicon_post_process(
             let mut gvs: Vec<VariantRegion> = Vec::new();
             let mut ref_variants: Vec<Variant> = Vec::new();
             let mut vref_list: Vec<Variant> = Vec::new();
-            let mut goodmap: HashSet<String> = HashSet::new();
+            let mut goodmap: HashSet<String> = HashSet::default();
             let mut vcovs: Vec<i32> = Vec::new();
             let mut good_variants_on_amp: IndexMap<i32, Vec<Variant>> = IndexMap::new();
             let mut nocov = 0;

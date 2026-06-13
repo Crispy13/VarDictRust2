@@ -59,7 +59,8 @@
 //! `:somatic:` entries are ignored here and consumed by the Phase 5 somatic validator instead.
 // Phase 4 (somatic): pub(crate) visibility on helpers cross-binary somatic reuse.
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use vardict_rs::prelude::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
@@ -1733,7 +1734,7 @@ impl ChunkRowBuckets {
             .collect::<BTreeMap<_, _>>()
             .into_keys()
             .collect();
-        let mut tile_index_by_region = HashMap::with_capacity(unique_tiles.len());
+        let mut tile_index_by_region = HashMap::with_capacity_and_hasher(unique_tiles.len(), Default::default());
         for (index, tile) in unique_tiles.iter().enumerate() {
             tile_index_by_region.insert(tile.to_region_string(), index);
         }
@@ -3062,8 +3063,8 @@ fn init_sweep_scope(
         sample,
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
     SweepScopeGuard
 }

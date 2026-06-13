@@ -2,7 +2,7 @@
 /// Core variant detection engine: iterates BAM records, parses CIGAR strings
 /// operation-by-operation, populates variant maps, coverage, soft-clip structures,
 /// and structural variant accumulators.
-use std::collections::HashSet;
+use crate::prelude::HashSet;
 use std::sync::Arc;
 
 use rust_htslib::bam::{self, HeaderView, record::Aux};
@@ -271,7 +271,7 @@ impl CigarParser {
 
             // Scope copies — placeholder defaults, set by init_from_scope
             region: Region::new("", 0, 0, ""),
-            splice: HashSet::new(),
+            splice: HashSet::default(),
             reference: Arc::new(Reference::default()),
             max_read_length: 0,
 

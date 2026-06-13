@@ -1,6 +1,6 @@
 mod common;
 
-use std::collections::HashSet;
+use vardict_rs::prelude::HashSet;
 
 #[test]
 fn slugs_unique_and_well_formed() {
@@ -16,7 +16,7 @@ fn slugs_unique_and_well_formed() {
         "Parsed config preset names must match common::CONFIG_PRESETS"
     );
 
-    let mut seen_slugs = HashSet::new();
+    let mut seen_slugs = HashSet::default();
     for (name, _) in preset_rows {
         let slug = common::config_name_to_slug(&name);
         assert!(!slug.is_empty(), "Slug was empty for preset name {name}");

@@ -2,14 +2,16 @@ use indexmap::IndexMap;
 use serde::de::Deserializer;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize, Serializer};
-use std::collections::HashMap;
+use std::collections::HashMap as StdHashMap;
 use std::hash::BuildHasher;
+
+use crate::prelude::HashMap;
 
 use crate::data::VecMap;
 
 /// Serializes a HashMap<i32, V, H> as sorted array of pairs: [[key, value], ...]
 pub fn serialize_sorted_int_map<V: Serialize, H: BuildHasher, S: Serializer>(
-    map: &HashMap<i32, V, H>,
+    map: &StdHashMap<i32, V, H>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     let mut entries: Vec<_> = map.iter().collect();
@@ -95,14 +97,14 @@ where
 /// Mirror of serialize_sorted_int_map.
 pub fn deserialize_sorted_int_map<'de, V, H, D>(
     deserializer: D,
-) -> Result<HashMap<i32, V, H>, D::Error>
+) -> Result<StdHashMap<i32, V, H>, D::Error>
 where
     V: Deserialize<'de>,
     H: BuildHasher + Default,
     D: Deserializer<'de>,
 {
     let entries = Vec::<(i32, V)>::deserialize(deserializer)?;
-    let mut map = HashMap::with_capacity_and_hasher(entries.len(), H::default());
+    let mut map = StdHashMap::with_capacity_and_hasher(entries.len(), H::default());
     map.extend(entries);
     Ok(map)
 }
@@ -130,7 +132,7 @@ mod tests {
         AlignedVarsData, CoverageMap, PositionMap, RealignedVariationData, SortedStringMap,
         Variation, VariationData, VariationEntries, VariationMap, Vars,
     };
-    use std::collections::HashMap;
+    use crate::prelude::HashMap;
 
     /// Helper: serialize → deserialize → re-serialize, assert JSON strings are byte-equal.
     fn assert_round_trip<T>(value: &T)
@@ -245,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_aligned_vars_data_round_trip() {
-        let mut aligned = HashMap::new();
+        let mut aligned = HashMap::default();
         aligned.insert(300, Vars::default());
         let avdata = AlignedVarsData {
             max_read_length: 150,

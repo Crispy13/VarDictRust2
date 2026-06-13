@@ -1,6 +1,7 @@
 //! Somatic full-BAM E2E parity harness against cached Java TSV shards.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use vardict_rs::prelude::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -558,8 +559,8 @@ fn init_sweep_scope(
         sample,
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
     SweepScopeGuard
 }

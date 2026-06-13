@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use vardict_rs::prelude::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -47,7 +47,7 @@ fn collect_sam_file_parser_result(
         Arc::new(Reference::new()),
         reference_resource,
         0,
-        HashSet::new(),
+        HashSet::default(),
         VariantPrinter::Out,
         initial_data,
     );

@@ -1,6 +1,6 @@
 mod common;
 
-use std::collections::{HashMap, HashSet};
+use vardict_rs::prelude::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::atomic::Ordering;
 
@@ -225,9 +225,9 @@ fn binary_b_list_terse_format_regression() {
     let expected_region_count = common::load_region_config().len();
     let expected_indices: HashSet<usize> = (0..expected_region_count).collect();
     let expected_trial_count = expected_slugs.len() * expected_region_count;
-    let mut seen_names = HashSet::new();
-    let mut slug_counts: HashMap<String, usize> = HashMap::new();
-    let mut slug_indices: HashMap<String, HashSet<usize>> = HashMap::new();
+    let mut seen_names = HashSet::default();
+    let mut slug_counts: HashMap<String, usize> = HashMap::default();
+    let mut slug_indices: HashMap<String, HashSet<usize>> = HashMap::default();
     let mut trial_count = 0usize;
 
     for line in stdout.lines() {

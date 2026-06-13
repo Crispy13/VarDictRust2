@@ -6,6 +6,7 @@ pub mod modes;
 pub mod mods;
 pub mod parity;
 pub mod patterns;
+pub mod prelude;
 pub mod reference;
 pub mod scope;
 pub mod utils;

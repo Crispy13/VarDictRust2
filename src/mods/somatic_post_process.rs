@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::prelude::HashSet;
 use std::panic;
 use std::sync::{Arc, Mutex};
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use vardict_rs::prelude::HashMap;
 use std::sync::Arc;
 
 use vardict_rs::data::{CoverageMap, PositionMap, RealignedVariationData, Sclip, VariationMap};

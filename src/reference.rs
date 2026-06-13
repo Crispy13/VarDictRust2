@@ -1,7 +1,6 @@
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -16,6 +15,7 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::data::Region;
 use crate::patterns::{UNABLE_FIND_CONTIG, WRONG_START_OR_END};
+use crate::prelude::HashMap;
 
 // Java: Configuration.SEED_1 L203
 const SEED_1: i32 = 17;
@@ -24,7 +24,7 @@ const SEED_2: i32 = 12;
 const MAX_REFERENCE_SEED_LEN: usize = SEED_1 as usize;
 
 thread_local! {
-    static THREAD_LOCAL_FASTA_FILES: RefCell<HashMap<String, faidx::Reader>> = RefCell::new(HashMap::new());
+    static THREAD_LOCAL_FASTA_FILES: RefCell<HashMap<String, faidx::Reader>> = RefCell::new(HashMap::default());
 }
 
 const _: fn() = {

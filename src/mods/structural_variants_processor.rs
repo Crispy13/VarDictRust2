@@ -6,7 +6,7 @@
 //! Cluster C: adjSNV, outputClipping.
 //! Cluster D: process() entry point.
 
-use std::collections::{HashMap, HashSet};
+use crate::prelude::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::config::{DISCPAIRQUAL, MINSVCDIST, SEED_1, SEED_2, SVFLANK};
@@ -1941,8 +1941,8 @@ fn find_inv_sub(
                 }
 
                 // Java: StructuralVariantsProcessor.java#L844-L847 — dels5 for realigndel
-                let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-                let mut map_inner: HashMap<String, i32> = HashMap::new();
+                let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+                let mut map_inner: HashMap<String, i32> = HashMap::default();
                 map_inner.insert(gt.clone(), inv_vars_count);
                 dels5.insert(softp, map_inner);
 
@@ -3821,19 +3821,19 @@ pub fn process(
 mod tests {
     use super::*;
     use crate::config::Configuration;
-    use std::collections::HashMap;
+    use crate::prelude::HashMap;
 
     fn init_test_scope() {
         GlobalReadOnlyScope::clear();
         let conf = Configuration::default();
         GlobalReadOnlyScope::init(
             conf,
-            HashMap::new(),
+            HashMap::default(),
             "test_sample",
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         );
     }
 

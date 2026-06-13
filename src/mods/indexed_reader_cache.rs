@@ -4,7 +4,7 @@
 //! requested region, read locally, and return the reader when done.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use crate::prelude::HashMap;
 
 use rust_htslib::bam;
 use rust_htslib::bam::Read;
@@ -19,7 +19,7 @@ const BGZF_CACHE_BYTES: i32 = 4 * 1024 * 1024;
 
 thread_local! {
     static INDEXED_READERS: RefCell<HashMap<String, bam::IndexedReader>> =
-        RefCell::new(HashMap::new());
+        RefCell::new(HashMap::default());
 }
 
 pub fn take_or_open(bam_path: &str) -> Result<bam::IndexedReader, rust_htslib::errors::Error> {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use vardict_rs::prelude::HashMap;
 use vardict_rs::data::RealignedVariationData;
 use vardict_rs::mods::to_vars_builder;
 use vardict_rs::reference::ReferenceResource;

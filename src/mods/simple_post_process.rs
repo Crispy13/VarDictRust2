@@ -1,6 +1,7 @@
 use crate::config::Configuration;
 use crate::data::{AlignedVarsData, Region, Variant, Vars};
 use crate::mods::output::SimpleOutputVariant;
+use crate::prelude::HashSet;
 use crate::scope::{GlobalReadOnlyScope, Scope};
 use std::panic;
 
@@ -45,7 +46,7 @@ pub fn simple_post_process_position_lines(
     position: i32,
     variants_on_position: &Vars,
     region: &Region,
-    splice: &std::collections::HashSet<String>,
+    splice: &HashSet<String>,
     conf: &Configuration,
 ) -> Vec<String> {
     if variants_on_position.sv.is_empty() && (position < region.start || position > region.end) {

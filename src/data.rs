@@ -1,18 +1,18 @@
 use std::collections::BTreeMap;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use indexmap::IndexMap;
-use rustc_hash::FxBuildHasher;
 use serde::de::Deserializer;
 use serde::ser::{SerializeSeq, Serializer};
 
 use crate::config::Configuration;
 use crate::patterns::ANY_SV;
+use crate::prelude::{HashMap, HashSet};
 use crate::utils::{substr, substr_with_len};
 
-pub type PositionMap<V> = HashMap<i32, V, FxBuildHasher>;
+pub type PositionMap<V> = HashMap<i32, V>;
 
 // ─── CoverageMap: dense Vec-backed map for ref_coverage (i32 → i32) ──────────
 //
@@ -52,7 +52,7 @@ pub struct CoverageMap {
     /// Count of present slots in dense (for is_empty).
     present: u32,
     /// Positions < base (rare); also used as fallback for far-future positions.
-    fallback: HashMap<i32, i32, FxBuildHasher>,
+    fallback: HashMap<i32, i32>,
 }
 
 impl Default for CoverageMap {
@@ -1971,7 +1971,7 @@ mod tests {
             end_position: 101,
             ..baseline_variant()
         };
-        let mut splice = HashSet::new();
+        let mut splice = HashSet::default();
         splice.insert(String::from("100-101"));
 
         assert!(!variant.is_good_var(None, Some("Deletion"), &splice, &base_config()));
@@ -1987,7 +1987,7 @@ mod tests {
             ..baseline_variant()
         };
 
-        assert!(!variant.is_good_var(None, Some("SNV"), &HashSet::new(), &config));
+        assert!(!variant.is_good_var(None, Some("SNV"), &HashSet::default(), &config));
     }
 
     #[test]
@@ -2008,7 +2008,7 @@ mod tests {
         assert!(!variant.is_good_var(
             Some(&reference_variant),
             Some("Insertion"),
-            &HashSet::new(),
+            &HashSet::default(),
             &base_config()
         ));
     }
@@ -2019,7 +2019,7 @@ mod tests {
         config.mapq = 60.0;
         let variant = baseline_variant();
 
-        assert!(variant.is_good_var(None, None, &HashSet::new(), &config));
+        assert!(variant.is_good_var(None, None, &HashSet::default(), &config));
     }
 
     #[test]

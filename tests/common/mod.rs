@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use vardict_rs::prelude::{HashMap, HashSet};
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -945,7 +945,7 @@ pub fn load_config_presets_tsv() -> Vec<(String, HashMap<String, String>)> {
 fn parse_java_flags(flags: &str) -> HashMap<String, String> {
     let tokens: Vec<&str> = flags.split_whitespace().collect();
 
-    let mut parsed = HashMap::new();
+    let mut parsed = HashMap::default();
     let mut index = 0;
     while index < tokens.len() {
         let flag = tokens[index];
@@ -1318,8 +1318,8 @@ pub fn init_test_scope(chr_lengths: HashMap<String, i32>) -> TestScopeGuard {
         "test_sample",
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
     TestScopeGuard
 }
@@ -1342,8 +1342,8 @@ pub fn init_test_scope_with_bam(
         "test_sample",
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
 
     TestScopeGuard
@@ -1367,8 +1367,8 @@ pub fn init_test_scope_with_config(
         "test_sample",
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
 
     TestScopeGuard
@@ -1392,8 +1392,8 @@ pub fn init_test_scope_with_bam_global(
         "test_sample",
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
 
     GlobalTestScopeGuard
@@ -1413,7 +1413,7 @@ pub fn build_scope_for_test<D>(
         ref_path,
         0,
         0,
-        HashMap::new(),
+        HashMap::default(),
         false,
     ));
     Scope::new(
@@ -1422,7 +1422,7 @@ pub fn build_scope_for_test<D>(
         reference,
         reference_resource,
         0,
-        HashSet::new(),
+        HashSet::default(),
         VariantPrinter::Out,
         data,
     )

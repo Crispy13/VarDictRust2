@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use vardict_rs::prelude::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -162,7 +162,7 @@ fn parity_realigner_sweep() {
                     reference,
                     Arc::clone(&reference_resource),
                     variation_data.max_read_length.unwrap_or(0),
-                    HashSet::new(),
+                    HashSet::default(),
                     VariantPrinter::Out,
                     variation_data,
                 );

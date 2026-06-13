@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use vardict_rs::prelude::{HashMap, HashSet};
 use std::sync::Arc;
 
 use rust_htslib::bam::{self, Read as BamRead};
@@ -64,7 +64,7 @@ fn parity_cigar_parser_all_regions() {
             Arc::clone(&reference),
             Arc::new(reference_resource),
             0,
-            HashSet::new(),
+            HashSet::default(),
             VariantPrinter::Out,
             initial_data,
         );
@@ -79,7 +79,7 @@ fn parity_cigar_parser_all_regions() {
         parser.init_from_scope(
             &region,
             &reference,
-            &HashSet::new(),
+            &HashSet::default(),
             0,
             PositionMap::<VariationMap>::default(),
             PositionMap::<VariationMap>::default(),
@@ -154,7 +154,7 @@ fn parity_cigar_parser_config_t1_02_10_116065606_116065839() {
         Arc::clone(&reference),
         Arc::new(reference_resource),
         0,
-        HashSet::new(),
+        HashSet::default(),
         VariantPrinter::Out,
         initial_data,
     );
@@ -167,7 +167,7 @@ fn parity_cigar_parser_config_t1_02_10_116065606_116065839() {
     parser.init_from_scope(
         &region,
         &reference,
-        &HashSet::new(),
+        &HashSet::default(),
         0,
         PositionMap::<VariationMap>::default(),
         PositionMap::<VariationMap>::default(),

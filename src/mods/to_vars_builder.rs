@@ -3,7 +3,7 @@
 //! Ported from: ToVarsBuilder.java (1,194 LOC)
 //! Pipeline stage: `Scope<RealignedVariationData>` → `Scope<AlignedVarsData>`
 
-use std::collections::HashMap;
+use crate::prelude::HashMap;
 
 use regex::Regex;
 
@@ -1434,7 +1434,7 @@ pub fn process(
         );
     }
 
-    let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
+    let mut aligned_variants: HashMap<i32, Vars> = HashMap::default();
 
     // Java iterates the outer HashMap directly. Use current-key bucket order so
     // position+1 mutations from createInsertion see the same visit order surface.
@@ -1505,7 +1505,7 @@ where
         );
     }
 
-    let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
+    let mut aligned_variants: HashMap<i32, Vars> = HashMap::default();
 
     // Java iterates the outer HashMap directly. Use current-key bucket order so
     // position+1 mutations from createInsertion see the same visit order surface.

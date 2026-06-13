@@ -7,9 +7,11 @@
 //! Cluster A: Pure utility functions with no inter-cluster dependencies.
 //! All other clusters call into these.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap as StdHashMap;
 use std::hash::BuildHasher;
 use std::sync::Arc;
+
+use crate::prelude::{HashMap, HashSet};
 
 use rust_htslib::bam::{self, Read as BamRead};
 
@@ -130,7 +132,7 @@ pub fn comp3(a: &SortPositionSclip, b: &SortPositionSclip) -> std::cmp::Ordering
 /// Flatten a position→{description→count} map into a sorted vec.
 /// Sort: descending count → ascending position → descending description_string.
 /// **Parity trap T1**: tertiary sort is DESC descriptionString (reversed compareTo).
-pub fn fill_and_sort_tmp<M, H>(changes: &HashMap<i32, M, H>) -> Vec<SortPositionDescription>
+pub fn fill_and_sort_tmp<M, H>(changes: &StdHashMap<i32, M, H>) -> Vec<SortPositionDescription>
 where
     H: BuildHasher,
     for<'a> &'a M: IntoIterator<Item = (&'a String, &'a i32)>,
@@ -916,7 +918,7 @@ pub fn findbi(
         }
         let mut mm = 0i32;
         let mut i = 0i32;
-        let mut m: HashSet<u8> = HashSet::new();
+        let mut m: HashSet<u8> = HashSet::default();
 
         // Java: VariationRealigner.java#L2449 — for (i = 0; i + n < seq.length(); i++)
         while i + n < seq_len {
@@ -1099,7 +1101,7 @@ pub fn findbp(
     for n in 0..instance.conf.indelsize {
         let mut mm = 0i32;
         let mut i = 0i32;
-        let mut m: HashSet<u8> = HashSet::new();
+        let mut m: HashSet<u8> = HashSet::default();
 
         // Java: for (i = 0; i < sequence.length(); i++)
         while i < seq_len {
@@ -1478,7 +1480,7 @@ pub fn filter_all_sv_structures(
 /// and absorbs matching soft clips.
 /// **Parity trap T3**: left uses `<= 0`, right uses `< 0`.
 pub fn adjust_mnp<M, H>(
-    mnp: &HashMap<i32, M, H>,
+    mnp: &StdHashMap<i32, M, H>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &mut PositionMap<Sclip>,
@@ -1708,7 +1710,7 @@ pub fn adjust_mnp<M, H>(
 pub fn realigndel<M, H>(
     bams_parameter: Option<&[String]>,
     instance_bams: &Option<Vec<String>>,
-    position_to_deletions_count: &HashMap<i32, M, H>,
+    position_to_deletions_count: &StdHashMap<i32, M, H>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
     soft_clips_3_end: &mut PositionMap<Sclip>,
@@ -2255,7 +2257,7 @@ pub fn realigndel<M, H>(
 /// Returns NEWINS string (modified insertion description, or empty).
 /// **Parity trap T12**: Pass 2 loop `i > 0` (skips element 0).
 pub fn realignins<M, H>(
-    position_to_insertion_count: &HashMap<i32, M, H>,
+    position_to_insertion_count: &StdHashMap<i32, M, H>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
     ref_coverage: &mut CoverageMap,
@@ -3396,8 +3398,8 @@ fn realignlgdel(
             .and_then(|m| m.entries.get(&gt))
             .map(|v| v.vars_count)
             .unwrap_or(0);
-        let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-        let mut inner = HashMap::new();
+        let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+        let mut inner = HashMap::default();
         inner.insert(gt.clone(), tv_vc);
         dels5.insert(bp, inner);
         realigndel(
@@ -3697,8 +3699,8 @@ fn realignlgdel(
             .and_then(|m| m.entries.get(&gt))
             .map(|v| v.vars_count)
             .unwrap_or(0);
-        let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-        let mut inner = HashMap::new();
+        let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+        let mut inner = HashMap::default();
         inner.insert(gt.clone(), tv_vc);
         dels5.insert(bp, inner);
         realigndel(
@@ -4195,8 +4197,8 @@ pub fn realignlgins30(
                     .and_then(|m| m.entries.get(&vref_key))
                     .map(|v| v.vars_count)
                     .unwrap_or(0);
-                let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-                let mut inner = HashMap::new();
+                let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+                let mut inner = HashMap::default();
                 inner.insert(ins.clone(), vref_vc);
                 tins.insert(bi, inner);
                 realignins(
@@ -4243,8 +4245,8 @@ pub fn realignlgins30(
                     .and_then(|m| m.entries.get(&vref_key))
                     .map(|v| v.vars_count)
                     .unwrap_or(0);
-                let mut tdel: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-                let mut inner = HashMap::new();
+                let mut tdel: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+                let mut inner = HashMap::default();
                 inner.insert(ins.clone(), vref_vc);
                 tdel.insert(bi, inner);
                 realigndel(
@@ -4530,8 +4532,8 @@ fn realignlgins(
             .map(|v| v.vars_count)
             .unwrap_or(0);
         let ins_key = format!("+{}", ins);
-        let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-        let mut inner = HashMap::new();
+        let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+        let mut inner = HashMap::default();
         inner.insert(ins_key.clone(), iref_vc);
         tins.insert(bi, inner);
         let newins = realignins(
@@ -4878,8 +4880,8 @@ fn realignlgins(
             .map(|v| v.vars_count)
             .unwrap_or(0);
         let ins_key = format!("+{}", ins);
-        let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-        let mut inner = HashMap::new();
+        let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+        let mut inner = HashMap::default();
         inner.insert(ins_key.clone(), iref_vc);
         tins.insert(bi, inner);
         realignins(
@@ -4967,8 +4969,8 @@ fn realignlgins(
 /// Mutation order is load-bearing — each step's mutations are visible to subsequent steps.
 pub fn realign_indels<MDel, HDel, MIns, HIns>(
     instance_bams: &Option<Vec<String>>,
-    position_to_deletions_count: &HashMap<i32, MDel, HDel>,
-    position_to_insertion_count: &HashMap<i32, MIns, HIns>,
+    position_to_deletions_count: &StdHashMap<i32, MDel, HDel>,
+    position_to_insertion_count: &StdHashMap<i32, MIns, HIns>,
     sv_structures: &mut crate::data::SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
@@ -5162,7 +5164,7 @@ pub fn process(scope: Scope<VariationData>) -> Scope<RealignedVariationData> {
     let curseg = CurrentSegment::new(region.chr.clone(), region.start, region.end);
 
     // Java: VariationRealigner.java#L79-L81
-    let mut softp2sv: HashMap<i32, Vec<Sclip>> = HashMap::new();
+    let mut softp2sv: HashMap<i32, Vec<Sclip>> = HashMap::default();
     if !instance.conf.disable_sv {
         filter_all_sv_structures(&mut sv_structures, max_read_length, &mut softp2sv);
     }
@@ -5254,18 +5256,18 @@ mod tests {
         let conf = Configuration::default();
         GlobalReadOnlyScope::init(
             conf,
-            HashMap::new(),
+            HashMap::default(),
             "test_sample",
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         );
     }
 
     #[test]
     fn test_fill_and_sort_tmp_basic() {
-        let mut changes: HashMap<i32, BTreeMap<String, i32>> = HashMap::new();
+        let mut changes: HashMap<i32, BTreeMap<String, i32>> = HashMap::default();
         let mut inner = BTreeMap::new();
         inner.insert("A".to_string(), 10);
         inner.insert("B".to_string(), 20);
@@ -5293,7 +5295,7 @@ mod tests {
     #[test]
     fn test_fill_and_sort_tmp_tertiary_sort() {
         // Same count, same position — must sort descending by description
-        let mut changes: HashMap<i32, BTreeMap<String, i32>> = HashMap::new();
+        let mut changes: HashMap<i32, BTreeMap<String, i32>> = HashMap::default();
         let mut inner = BTreeMap::new();
         inner.insert("AAA".to_string(), 5);
         inner.insert("ZZZ".to_string(), 5);

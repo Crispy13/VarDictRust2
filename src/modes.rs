@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use crate::prelude::{HashMap, HashSet};
 use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -541,7 +543,7 @@ impl SimpleMode {
             Arc::new(reference),
             Arc::new(self.reference_resource.clone()),
             0,
-            HashSet::new(),
+            HashSet::default(),
             printer,
             InitialData::default(),
         );
@@ -657,7 +659,7 @@ impl SomaticMode {
             .as_ref()
             .expect("BAM names must be configured")
             .clone();
-        let splice = HashSet::new();
+        let splice = HashSet::default();
         let reference = try_to_get_reference(&self.reference_resource, region);
         let bam1_scope = Scope::new(
             bam_names.get_bam1(),
@@ -805,12 +807,12 @@ impl AmpliconMode {
             .to_string();
 
         for regions in &self.segments {
-            let mut pos: HashMap<i32, Vec<(i32, Region)>> = HashMap::new();
+            let mut pos: HashMap<i32, Vec<(i32, Region)>> = HashMap::default();
             let mut current_region = regions
                 .first()
                 .cloned()
                 .unwrap_or_else(|| Region::new("", 0, 0, ""));
-            let splice = HashSet::new();
+            let splice = HashSet::default();
             let mut vars = Vec::new();
 
             for (amplicon_number, region) in regions.iter().enumerate() {

@@ -5,7 +5,7 @@
 //! RecordPreprocessor's filter cascade to CigarParser.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use crate::prelude::{HashMap, HashSet};
 use std::rc::Rc;
 
 use rust_htslib::bam::{self, HeaderView, Read as BamRead};
@@ -22,7 +22,7 @@ thread_local! {
     // (~tens of thousands of times in a WES sweep); memoizing one clone per file and
     // handing out cheap `Rc` clones removes that. Byte-identical: the cached header has
     // the same content as a fresh `sam_hdr_dup`.
-    static HEADER_CACHE: RefCell<HashMap<String, Rc<HeaderView>>> = RefCell::new(HashMap::new());
+    static HEADER_CACHE: RefCell<HashMap<String, Rc<HeaderView>>> = RefCell::new(HashMap::default());
 }
 
 // ─── Integer.decode() equivalent ──────────────────────────────────────────────
@@ -192,7 +192,7 @@ impl RecordPreprocessor {
             current_reader: None,
             current_record: bam::Record::new(),
             filter,
-            duplicates: HashSet::new(),
+            duplicates: HashSet::default(),
             first_matching_position: -1,
             current_bam_path: None,
         };
@@ -283,7 +283,7 @@ impl RecordPreprocessor {
         self.current_bam_path = Some(bam_path);
 
         // Java: duplicates = new HashSet<>()
-        self.duplicates = HashSet::new();
+        self.duplicates = HashSet::default();
         // Java: firstMatchingPosition = -1
         self.first_matching_position = -1;
     }
