@@ -414,7 +414,17 @@ pub trait ParallelMode: AbstractMode + Sync {
             .num_threads(threads)
             .build()
             .expect("failed to build simple-mode rayon pool");
-        let (outer_tx, outer_rx) = bounded::<Receiver<Vec<u8>>>(threads.max(10));
+        // In-flight / reorder window for the ordered-output pipeline. The consumer below drains
+        // `outer_rx` in strict submission order, so output is byte-identical regardless of this cap;
+        // the cap only bounds how far fast regions may run ahead of a slow predecessor. Sizing it to
+        // the thread count (the old `threads.max(10)`) left zero slack: one slow region stalled the
+        // consumer, the queue filled with finished downstream regions, `outer_tx.send` below blocked,
+        // and the remaining workers idled (parked on a futex) — capping a 10-thread run at ~200-300%
+        // CPU on high-variance exome BEDs. A window several times the worker count absorbs that
+        // variance and keeps the pool saturated; the backlog is small per-region output buffers, so
+        // memory stays bounded.
+        let in_flight_window = threads * 64;
+        let (outer_tx, outer_rx) = bounded::<Receiver<Vec<u8>>>(in_flight_window);
         let printer = GlobalReadOnlyScope::instance().variant_printer.clone();
         let worker_scope = GlobalReadOnlyScope::try_thread_local_instance();
         let worker_mode = GlobalReadOnlyScope::try_thread_local_mode();
