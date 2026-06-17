@@ -240,6 +240,16 @@ pub struct ReferenceSeedMap {
 }
 
 impl ReferenceSeedMap {
+    /// Reserve capacity for `additional` more seed entries, sizing the map to the
+    /// per-region window up front. The seed map is built by inserting ~2 entries
+    /// (SEED_1 + SEED_2) for every base of the exon window; starting from an empty
+    /// map otherwise forces an O(log n) rehash storm during construction, which the
+    /// allocation profile showed as the single largest allocation site (~20% of all
+    /// allocation). Pure capacity hint -- no effect on contents or lookups.
+    pub fn reserve(&mut self, additional: usize) {
+        self.entries.reserve(additional);
+    }
+
     pub fn get(&self, sequence: &str) -> Option<&ReferenceSeedPositions> {
         self.entries.get(sequence)
     }
@@ -554,6 +564,12 @@ impl ReferenceResource {
             sequence_start,
             sequence_end,
         ));
+
+        // Pre-size the seed map to this window's seed count (2 seeds per base: SEED_1 + SEED_2),
+        // eliminating the FxHashMap rehash storm during per-region construction. Use `reserve`
+        // (additional capacity), not `with_capacity`, because this may extend an already-loaded
+        // `Reference` on the realign/SV path.
+        reference.seed.reserve(2usize * (site_end.max(0) as usize));
 
         for i in 0..site_end.max(0) {
             let position = i + sequence_start;
