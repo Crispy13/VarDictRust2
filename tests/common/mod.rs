@@ -1460,6 +1460,11 @@ pub const BAM_TAG_MAP: &[(&str, &str, &str)] = &[
         "testdata/hs37d5.fa",
     ),
     (
+        "hg005_exome",
+        "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG005-EEogPU_v02-KIT-Av5_CGCATACA_L008.posiSrt.markDup.bam",
+        "testdata/hs37d5.fa",
+    ),
+    (
         "na12878_lowcov",
         "testdata/NA12878.mapped.ILLUMINA.bwa.CEU.low_coverage.20121211.bam",
         "testdata/hs37d5.fa",

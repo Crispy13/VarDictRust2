@@ -19,6 +19,9 @@ mod sweep_common;
 #[path = "parity_e2e_sweep/hg002_sweep.rs"]
 mod hg002_sweep;
 
+#[path = "parity_e2e_sweep/hg005_exome_sweep.rs"]
+mod hg005_exome_sweep;
+
 #[path = "parity_e2e_sweep/na12878_exome_sweep.rs"]
 mod na12878_exome_sweep;
 
@@ -38,6 +41,7 @@ fn main() {
     common::init_thread_budget(args.test_threads);
     let mut trials = Vec::new();
     trials.extend(hg002_sweep::build_trials());
+    trials.extend(hg005_exome_sweep::build_trials());
     trials.extend(na12878_exome_sweep::build_trials());
     trials.extend(na12878_lowcov_sweep::build_trials());
     trials.extend(wes_il_pair_sweep::build_trials());

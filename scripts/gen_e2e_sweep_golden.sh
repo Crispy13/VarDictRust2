@@ -13,7 +13,7 @@ IFS=$'\n\t'
 #   merges per-(config, tag) cache fingerprint records back in after a successful run.
 
 readonly DEFAULT_CONFIG="default"
-readonly DEFAULT_TAGS="hg002,na12878_exome,na12878_lowcov"
+readonly DEFAULT_TAGS="hg002,na12878_exome,na12878_lowcov,hg005_exome"
 readonly DEFAULT_SOMATIC_TAGS="wes_il_pair"
 readonly DEFAULT_SWEEP_BED_ROOT="tmp/sweep_beds"
 readonly OUTPUT_ROOT="tmp/sweep_fixtures"
@@ -22,6 +22,7 @@ readonly TILE_RATE=250
 
 declare -Ar TILE_COUNTS=(
     [hg002]=4991705
+    [hg005_exome]=403123
     [na12878_exome]=144853
     [na12878_lowcov]=4899382
     [wes_il_pair]=4880000
@@ -46,8 +47,8 @@ Options:
     --inverted            With --all-configs, run a single Python invocation with
                                                 --presets ALL instead of spawning one child per preset.
                                                 --parallel becomes preset-level worker count in Python.
-  --tags <csv>      Comma-separated subset of hg002,na12878_exome,na12878_lowcov.
-                    Default: hg002,na12878_exome,na12878_lowcov
+  --tags <csv>      Comma-separated subset of hg002,na12878_exome,na12878_lowcov,hg005_exome.
+                    Default: hg002,na12878_exome,na12878_lowcov,hg005_exome
                                         With --somatic, this is treated as pair tags.
     --somatic         Regenerate tumor/normal pair output-only shards.
   --force           Skip confirmation. Required when stdin has no response available.
@@ -61,6 +62,7 @@ Options:
 
 Approximate tile counts:
   hg002           4991705
+  hg005_exome      403123
   na12878_exome    144853
   na12878_lowcov  4899382
 
@@ -315,6 +317,7 @@ somatic = os.environ["SOMATIC"] == "1"
 
 bam_paths = {
     "hg002": "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam",
+    "hg005_exome": "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG005-EEogPU_v02-KIT-Av5_CGCATACA_L008.posiSrt.markDup.bam",
     "na12878_exome": "testdata/NA12878.chrom20.ILLUMINA.bwa.CEU.exome.20121211.bam",
     "na12878_lowcov": "testdata/NA12878.mapped.ILLUMINA.bwa.CEU.low_coverage.20121211.bam",
 }
@@ -488,7 +491,9 @@ if [[ $all_configs -eq 1 ]]; then
         if [[ $no_shm -eq 1 ]]; then
             actual_cmd+=(--no-shm)
         fi
-        actual_cmd+=(--force)
+        # Honor --force like the non-inverted path; omit it so a killed run can resume
+        # (skip already-complete shards) instead of regenerating everything.
+        [[ $force -eq 1 ]] && actual_cmd+=(--force)
 
         if [[ $dry_run -eq 1 ]]; then
             printf '%q ' "${actual_cmd[@]}"
@@ -622,6 +627,10 @@ if [[ $somatic -eq 1 ]]; then
     actual_cmd=(python3 scripts/sweep_fixtures_parallel.py --output-only --pair-tags "$tags_csv" --tags "" --sweep-bed-root "$sweep_bed_root")
 else
     actual_cmd=(python3 scripts/sweep_fixtures_parallel.py --output-only --tags "$tags_csv" --sweep-bed-root "$sweep_bed_root")
+fi
+# Forward an explicit worker count when --parallel N (N>1) is given on a single-config run.
+if [[ $parallel_jobs -gt 1 ]]; then
+    actual_cmd+=(--workers "$parallel_jobs")
 fi
 if [[ -n "$shm_root" ]]; then
     actual_cmd+=(--shm-root "$shm_root")

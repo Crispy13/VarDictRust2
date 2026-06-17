@@ -416,14 +416,19 @@ pub trait ParallelMode: AbstractMode + Sync {
             .expect("failed to build simple-mode rayon pool");
         // In-flight / reorder window for the ordered-output pipeline. The consumer below drains
         // `outer_rx` in strict submission order, so output is byte-identical regardless of this cap;
-        // the cap only bounds how far fast regions may run ahead of a slow predecessor. Sizing it to
-        // the thread count (the old `threads.max(10)`) left zero slack: one slow region stalled the
-        // consumer, the queue filled with finished downstream regions, `outer_tx.send` below blocked,
-        // and the remaining workers idled (parked on a futex) — capping a 10-thread run at ~200-300%
-        // CPU on high-variance exome BEDs. A window several times the worker count absorbs that
-        // variance and keeps the pool saturated; the backlog is small per-region output buffers, so
-        // memory stays bounded.
-        let in_flight_window = threads * 64;
+        // the cap only bounds how far fast regions may run ahead of a slow predecessor.
+        //
+        // Sizing it to the worker count (the original `threads.max(10)`) left zero slack: one slow
+        // region stalled the in-order consumer, the queue filled with finished downstream regions,
+        // `outer_tx.send` below blocked, and the rest of the pool idled (parked on a futex). A
+        // `threads * 64` window fixed the worst of it but still stalled on dense exome loci where a
+        // contiguous cluster of expensive regions outruns the window (per-region timing showed the
+        // cost is a tight cluster, not one giant region, so the makespan floor is total/threads and
+        // ~full utilization is achievable). Sizing the window to the region count lets the dispatch
+        // loop hand every region to the pool up front, so workers never starve on output ordering —
+        // out-of-order completions simply buffer (small per-region `Vec<u8>`s; bounded by total
+        // output) while the consumer drains in order.
+        let in_flight_window = self.regions().len().max(threads * 64);
         let (outer_tx, outer_rx) = bounded::<Receiver<Vec<u8>>>(in_flight_window);
         let printer = GlobalReadOnlyScope::instance().variant_printer.clone();
         let worker_scope = GlobalReadOnlyScope::try_thread_local_instance();
