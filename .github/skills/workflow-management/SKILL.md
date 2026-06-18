@@ -1,20 +1,14 @@
 ---
 name: workflow-management
 description: >
-  Mandatory protocol for modifying VarDict-rs workflow infrastructure — agents, skills,
-  instructions, test harness, CI workflows, or parity scripts. Use whenever the task
-  involves creating, editing, renaming, or deleting any agent (.agent.md), skill
-  (SKILL.md), instruction (.instructions.md), test file (tests/), CI workflow
-  (.github/workflows/), parity script (scripts/), or test configuration (Cargo.toml
-  dev-dependencies). Also trigger when adding tools to an agent, changing agent routing,
-  modifying skill descriptions, or restructuring the test tier system. Do NOT use for
-  porting Rust code, fixing parity mismatches, or running tests — those have their own
-  skills. This skill exists because workflow changes have high blast radius: a single
-  edit can break agent routing, stale cross-references, orphan skills, or silently
-  disable test coverage. Also use when you need to understand, orient on, or inspect
-  the VarDict-rs workflow structure (agents, skills, CI wiring, test tiers) without
-  making any changes. In orientation mode, read `references/workflow-structure.md`
-  directly — no phase protocol required.
+  Mandatory protocol for VarDict-rs Copilot CLI workflow infrastructure changes.
+  Use when creating, editing, renaming, deleting, inspecting, or migrating repo
+  agents, skills, instructions, CI workflows, parity scripts, test harness files,
+  or Cargo test configuration. Also use when changing agent tools/routing, skill
+  descriptions, test tiers, workflow references, or replacing VS Code Copilot
+  assumptions with CLI-compatible behavior. Do NOT use for Rust porting, parity
+  mismatch repair, or running parity tests; those have dedicated skills. In
+  orientation mode, read `references/workflow-structure.md` directly.
 ---
 
 # Workflow Management
@@ -190,7 +184,7 @@ every component being created or modified, trace its activation path.
 | Consumer | Examples |
 |----------|---------|
 | User-facing | Human invokes agent directly, selects a mode, runs a script manually |
-| Agent-facing | Orchestrator dispatches to agent; agent loads skill via description match |
+| Skill-facing | A Copilot CLI session follows one skill and invokes related skills directly |
 | CI-facing | GitHub event triggers workflow; workflow calls script |
 | Hybrid | Multiple activation paths (e.g., script used both by CI and manually) |
 
@@ -422,7 +416,7 @@ changed and why without re-reading the entire infrastructure.
 
 ### 6.1 File Location
 
-Write the report in workspace memory with file name: `wf-change-{short-slug}-{YYYYMMDD}.md`
+Write the report under the current CLI session-state artifact path with file name: `wf-change-{short-slug}-{YYYYMMDD}.md`
 
 where `{short-slug}` is a 2–4 word kebab-case summary of the change (e.g.
 `add-workflow-inspector-skill`, `rename-shard-debugger`, `add-somatic-parity-test`).

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Shard Diagnosis"
+  short_description: "Diagnose failing parity shards"
+  default_prompt: "Use $shard-diagnosis to diagnose a specific failing VarDict Java/Rust parity shard."

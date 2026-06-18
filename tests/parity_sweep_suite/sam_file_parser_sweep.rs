@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use vardict_rs::prelude::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -35,11 +35,11 @@ fn collect_sam_file_parser_result(
     reference_resource: Arc<ReferenceResource>,
 ) -> SamFileParserResult {
     let initial_data = InitialData::new(
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
     );
     let scope = Scope::new(
         bam_path,
@@ -47,7 +47,7 @@ fn collect_sam_file_parser_result(
         Arc::new(Reference::new()),
         reference_resource,
         0,
-        HashSet::new(),
+        HashSet::default(),
         VariantPrinter::Out,
         initial_data,
     );

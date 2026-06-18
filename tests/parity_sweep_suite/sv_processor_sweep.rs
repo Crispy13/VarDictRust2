@@ -1,10 +1,9 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_channel::bounded;
 use rayon::prelude::*;
-use vardict_rs::data::{RealignedVariationData, Sclip, VariationMap};
+use vardict_rs::data::{CoverageMap, PositionMap, RealignedVariationData, Sclip, VariationMap};
 use vardict_rs::mods::structural_variants_processor;
 use vardict_rs::reference::{ReferenceResource, ReferenceSequenceMap};
 
@@ -157,10 +156,11 @@ fn parity_sv_processor_sweep() {
 
                 let bams: Option<Vec<String>> = Some(vec![bam_path.to_string()]);
                 let splice: Option<std::collections::BTreeSet<String>> = None;
-                let mut prev_non_insertion_variants: HashMap<i32, VariationMap> = HashMap::new();
-                let mut prev_ref_coverage: HashMap<i32, i32> = HashMap::new();
-                let mut prev_soft_clips_3_end: HashMap<i32, Sclip> = HashMap::new();
-                let mut prev_soft_clips_5_end: HashMap<i32, Sclip> = HashMap::new();
+                let mut prev_non_insertion_variants: PositionMap<VariationMap> =
+                    PositionMap::default();
+                let mut prev_ref_coverage: CoverageMap = CoverageMap::default();
+                let mut prev_soft_clips_3_end: PositionMap<Sclip> = PositionMap::default();
+                let mut prev_soft_clips_5_end: PositionMap<Sclip> = PositionMap::default();
                 let prev_reference_sequences = ReferenceSequenceMap::default();
 
                 structural_variants_processor::process(

@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::collections::HashMap;
+use vardict_rs::prelude::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -258,8 +258,8 @@ fn run_somatic_mode(
         "test_sample",
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
 
     let captured = Arc::new(Mutex::new(String::new()));

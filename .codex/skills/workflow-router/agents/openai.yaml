@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workflow Router"
+  short_description: "Route VarDict workflow requests"
+  default_prompt: "Use $workflow-router to choose the correct VarDict parity workflow from the active state and user request."

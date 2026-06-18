@@ -13,7 +13,7 @@ argument-hint: "Specify tier like 'tier1', 'config-spread', or 'promote to core-
 
 ## Purpose
 
-Use a graduated testing pyramid to expand config coverage without defaulting to the full 44 x 25 release matrix on every change. Start with fast smoke validation, promote only after each gate passes, and reserve pairwise and full-release sweeps for broader interaction and ship-readiness checks.
+Use a graduated testing pyramid to expand config coverage without defaulting to the full 45 x 25 release matrix on every change. Start with fast smoke validation, promote only after each gate passes, and reserve pairwise and full-release sweeps for broader interaction and ship-readiness checks.
 Verify the `logic-parity-audit` report is all-VERIFIED or explicitly user-approved before starting Tier 2 or broader presets.
 
 ## Testing Pyramid
@@ -22,10 +22,10 @@ Verify the `logic-parity-audit` report is all-VERIFIED or explicitly user-approv
 |------|-------------|---------|-------------|-------------|----------------|-------------|
 | 0 | `smoke` | 3 (`T1-01`, `T1-03`, `T1-13`) | 3 (`20`, `22`, `MT`) | 9 | ~1 min | Every build, every code change |
 | 1 | `tier1` | 14 (all `T1-*`) | 3 (`20`, `22`, `MT`) | 42 | ~5 min | After any parity fix |
-| 2 | `config-spread` | 44 (all configs) | 3 (`20`, `22`, `MT`) | 132 | ~15 min | After CLI wiring changes, weekly |
+| 2 | `config-spread` | 45 (all configs) | 3 (`20`, `22`, `MT`) | 135 | ~15 min | After CLI wiring changes, weekly |
 | 3 | `core-wide` | 14 (all `T1-*`) | 25 (all real) | 350 | ~45 min | Pre-merge of major SV or pipeline changes |
 | 4 | `pairwise` | 10 (`PW-000`..`PW-009`) | 10 (representative) | 100 | ~30-60 min | Pre-release interaction testing |
-| 5 | `release` | 44 (all configs) | 25 (all real) | 1100 | ~8-12 hr | Release candidate validation |
+| 5 | `release` | 45 (all configs) | 25 (all real) | 1125 | ~8-12 hr | Release candidate validation |
 
 Note: the existing `dev` preset is 10 configs x 10 chromosomes = 100 cells, which places it between Testing Pyramid Tier `1` and Tier `2` in coverage and runtime.
 
@@ -54,7 +54,7 @@ Gate process:
 5. Promote only after the tier meets its pass threshold.
 
 ### Rubberduck Checkpoint
-Before any expensive rerun or promotion step above Tier `1`, run `rubberduck-review` in `tests` mode on the failing-tier summary, planned rerun scope, and cache-clearing plan when the next run is costly or the failure pattern is ambiguous. Use the review to challenge the preset choice, the rerun breadth, and whether a cheaper confirming run should happen first. Resolve concrete concerns before spending the broader tier budget.
+Before any expensive rerun or promotion step above Tier `1`, use Copilot CLI rubber-duck mode on the failing-tier summary, planned rerun scope, and cache-clearing plan when the next run is costly or the failure pattern is ambiguous. Use the review to challenge the preset choice, the rerun breadth, and whether a cheaper confirming run should happen first. Resolve concrete concerns before spending the broader tier budget.
 
 ## Promotion Procedure
 
@@ -80,7 +80,7 @@ bash <harness> --preset smoke --rust-only
 # Tier 1: All T1
 bash <harness> --preset tier1 --rust-only
 
-# Tier 2: Config spread (all 44, 3 chrs)
+# Tier 2: Config spread (all 45, 3 chrs)
 bash <harness> --preset config-spread --rust-only
 
 # Tier 3: Core wide (T1, all chrs)
@@ -104,7 +104,7 @@ The presets above are the standard entry points. For targeted debugging or custo
 # Tier 1 interim: all Tier 1 configs on 20, 22, MT
 bash <harness> --tier 1 --chr 20 --chr 22 --chr MT --rust-only
 
-# Config-spread interim: all 44 configs on 20, 22, MT
+# Config-spread interim: all 45 configs on 20, 22, MT
 bash <harness> --chr 20 --chr 22 --chr MT --rust-only
 
 # Core-wide interim: all Tier 1 configs on all chromosomes
@@ -126,15 +126,17 @@ bash <harness> --tier 1 --all-chr --rust-only --parallel 5
 ## Blocked Config Management
 
 - `BLOCKED_CONFIGS` and `--include-blocked` are implemented in the harness.
-- `BLOCKED_CONFIGS` currently starts empty, so all 44 configs are runnable by default.
+- `BLOCKED_CONFIGS` currently starts empty, so all 45 configs are runnable by default.
 - Add configs to `BLOCKED_CONFIGS` only when a failure is intentionally quarantined, and leave them visible in status output so the skipped scope stays explicit.
 
 ## Resource Constraints
 
 | Setting | Value | Reason |
 |---------|-------|--------|
-| Pileup parallelism | 5 | Java can OOM above this on a 23 GB RAM machine |
-| Non-pileup parallelism | 10 | Usually remains under 4 GB |
+| Harness budget units | 10 by default (`--test-threads=10`) | The libtest/libtest-mimic thread count is the shared concurrency budget |
+| Normal config cost | 1 | Single-thread, non-pileup presets consume one budget unit |
+| `CM-TH4` cost | 4 | Matches the four Rust worker threads exercised by the preset |
+| `CM-PILEUP` cost | 2 | Pileup cells/chunks are memory-heavy, so `--test-threads=10` permits at most five concurrent pileup trials |
 | Disk budget (full release) | 10-50 GB | Full-matrix artifacts and diffs accumulate quickly |
 | Java cache | Preserve always | Deterministic and expensive to regenerate |
 | Rust cache | Auto-invalidates on binary change | `.verified` markers track binary mtime |
@@ -143,6 +145,8 @@ bash <harness> --tier 1 --all-chr --rust-only --parallel 5
 
 - Stale Rust cache can invalidate conclusions. Clear `rust/` and `diff/` after code changes when re-testing the same scope.
 - Empty Java shard outputs usually mean OOM or interrupted generation. Delete 0-byte `.tsv` files before re-running.
-- Pileup-heavy presets can exceed memory budgets if parallelism drifts above `5`.
+- The harness budget is automatic, not a separate manual pileup cap: future pileup +
+  worker configs should charge `max(thread_cost, pileup_cost)` so memory-heavy presets
+  still throttle correctly.
 - Pairwise configs may expose unimplemented option interactions. Treat failures as real unless a config is explicitly quarantined in `BLOCKED_CONFIGS` after triage.
 - `full-gate` stops on the first failing tier, so switch to the individual tier preset when you need finer debugging.

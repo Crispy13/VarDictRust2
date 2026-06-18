@@ -1,0 +1,4 @@
+interface:
+  display_name: "Faithful Port"
+  short_description: "Port Java modules to Rust faithfully"
+  default_prompt: "Use $faithful-port to port a VarDictJava module to Rust with byte-identical parity as the acceptance bar."

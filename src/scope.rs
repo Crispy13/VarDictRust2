@@ -1,5 +1,6 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use crate::prelude::{HashMap, HashSet};
+use std::fmt;
 use std::io::Write;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -9,12 +10,29 @@ use crate::config::{Configuration, PrinterType};
 use crate::data::Region;
 use crate::reference::{Reference, ReferenceResource};
 
+pub type VariantLineSink = dyn Fn(&str) + Send + Sync + 'static;
+pub type VariantOwnedLineSink = dyn Fn(String) + Send + Sync + 'static;
+
 /// Ported from: VariantPrinter.java placeholder for Scope.java:L14-L24 consumers.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum VariantPrinter {
     Out,
     Err,
     Buffer(Arc<Mutex<String>>),
+    LineSink(Arc<VariantLineSink>),
+    OwnedLineSink(Arc<VariantOwnedLineSink>),
+}
+
+impl fmt::Debug for VariantPrinter {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Out => formatter.write_str("Out"),
+            Self::Err => formatter.write_str("Err"),
+            Self::Buffer(_) => formatter.write_str("Buffer(..)"),
+            Self::LineSink(_) => formatter.write_str("LineSink(..)"),
+            Self::OwnedLineSink(_) => formatter.write_str("OwnedLineSink(..)"),
+        }
+    }
 }
 
 impl PartialEq for VariantPrinter {
@@ -22,6 +40,8 @@ impl PartialEq for VariantPrinter {
         match (self, other) {
             (Self::Out, Self::Out) | (Self::Err, Self::Err) => true,
             (Self::Buffer(left), Self::Buffer(right)) => Arc::ptr_eq(left, right),
+            (Self::LineSink(left), Self::LineSink(right)) => Arc::ptr_eq(left, right),
+            (Self::OwnedLineSink(left), Self::OwnedLineSink(right)) => Arc::ptr_eq(left, right),
             _ => false,
         }
     }
@@ -64,6 +84,15 @@ impl VariantPrinter {
                 output.push_str(line);
                 output.push('\n');
             }
+            Self::LineSink(sink) => sink(line),
+            Self::OwnedLineSink(sink) => sink(line.to_string()),
+        }
+    }
+
+    pub fn print_owned_line(&self, line: String) {
+        match self {
+            Self::OwnedLineSink(sink) => sink(line),
+            _ => self.print_line(&line),
         }
     }
 }
@@ -207,6 +236,18 @@ fn write_global_mode(mode: Option<SharedMode>) {
     }
 }
 
+pub struct ThreadLocalContextGuard {
+    previous_scope: Option<Arc<GlobalReadOnlyScope>>,
+    previous_mode: Option<SharedMode>,
+}
+
+impl Drop for ThreadLocalContextGuard {
+    fn drop(&mut self) {
+        write_local_scope(self.previous_scope.take());
+        write_local_mode(self.previous_mode.take());
+    }
+}
+
 impl GlobalReadOnlyScope {
     /// Ported from: GlobalReadOnlyScope.GlobalReadOnlyScope(...)
     /// Java source: GlobalReadOnlyScope.java:L54-L69
@@ -241,6 +282,24 @@ impl GlobalReadOnlyScope {
 
     pub fn try_thread_local_instance() -> Option<Arc<GlobalReadOnlyScope>> {
         read_local_scope()
+    }
+
+    pub fn try_thread_local_mode() -> Option<SharedMode> {
+        read_local_mode()
+    }
+
+    pub fn enter_thread_local_context(
+        scope: Option<Arc<GlobalReadOnlyScope>>,
+        mode: Option<SharedMode>,
+    ) -> ThreadLocalContextGuard {
+        let previous_scope = read_local_scope();
+        let previous_mode = read_local_mode();
+        write_local_scope(scope);
+        write_local_mode(mode);
+        ThreadLocalContextGuard {
+            previous_scope,
+            previous_mode,
+        }
     }
 
     pub fn with_thread_local_instance<R>(f: impl FnOnce(Option<&GlobalReadOnlyScope>) -> R) -> R {
@@ -453,12 +512,12 @@ mod tests {
     fn install_global_scope(sample: &str) {
         write_global_scope(Some(Arc::new(GlobalReadOnlyScope::new(
             Configuration::default(),
-            HashMap::new(),
+            HashMap::default(),
             sample,
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         ))));
         write_global_mode(None);
     }
@@ -466,12 +525,12 @@ mod tests {
     fn init_thread_local_scope(sample: &str) {
         GlobalReadOnlyScope::init_thread_local(
             Configuration::default(),
-            HashMap::new(),
+            HashMap::default(),
             sample,
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         );
     }
 
@@ -479,7 +538,7 @@ mod tests {
     fn scope_with_data_preserves_shared_context() {
         let region_ref = Arc::new(Reference::default());
         let reference_resource = Arc::new(ReferenceResource::default());
-        let mut splice = HashSet::new();
+        let mut splice = HashSet::default();
         splice.insert(String::from("10-12"));
         let scope = Scope::new(
             "sample.bam",
@@ -513,11 +572,11 @@ mod tests {
 
         GlobalReadOnlyScope::clear();
 
-        let mut chr_lengths = HashMap::new();
+        let mut chr_lengths = HashMap::default();
         chr_lengths.insert(String::from("chr1"), 249_250_621);
-        let mut adaptor_forward = HashMap::new();
+        let mut adaptor_forward = HashMap::default();
         adaptor_forward.insert(String::from("AAAAAA"), 1);
-        let mut adaptor_reverse = HashMap::new();
+        let mut adaptor_reverse = HashMap::default();
         adaptor_reverse.insert(String::from("TTTTTT"), 1);
 
         GlobalReadOnlyScope::init(
@@ -548,12 +607,12 @@ mod tests {
 
         GlobalReadOnlyScope::init(
             Configuration::default(),
-            HashMap::new(),
+            HashMap::default(),
             "sample",
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         );
 
         assert_eq!(GlobalReadOnlyScope::instance().sample, "sample");
@@ -590,6 +649,22 @@ mod tests {
             GlobalReadOnlyScope::instance().variant_printer,
             local_printer
         );
+    }
+
+    #[test]
+    fn line_sink_printer_receives_printed_lines() {
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let sink_lines = lines.clone();
+        let printer = VariantPrinter::LineSink(Arc::new(move |line| {
+            let mut lines = sink_lines.lock().unwrap_or_else(|error| error.into_inner());
+            lines.push(line.to_string());
+        }));
+
+        printer.print_line("first");
+        printer.print_line("second");
+
+        let lines = lines.lock().unwrap_or_else(|error| error.into_inner());
+        assert_eq!(&*lines, &["first".to_string(), "second".to_string()]);
     }
 
     #[test]
@@ -659,5 +734,81 @@ mod tests {
         assert!(Arc::ptr_eq(&parent_mode, &local_mode));
         assert_eq!(child_sample, "global");
         assert!(Arc::ptr_eq(&child_mode, &global_mode));
+    }
+
+    #[test]
+    fn enter_thread_local_context_installs_and_restores_previous_values() {
+        let _guard = ScopeStateGuard::new();
+
+        install_global_scope("global");
+        let global_mode: SharedMode = Arc::new(DummyMode);
+        GlobalReadOnlyScope::set_mode(global_mode);
+
+        init_thread_local_scope("previous");
+        let previous_mode: SharedMode = Arc::new(AlternateDummyMode);
+        GlobalReadOnlyScope::set_mode_thread_local(previous_mode.clone());
+
+        let next_scope = Arc::new(GlobalReadOnlyScope::new(
+            Configuration::default(),
+            HashMap::default(),
+            "next",
+            None,
+            None,
+            HashMap::default(),
+            HashMap::default(),
+        ));
+        let next_mode: SharedMode = Arc::new(DummyMode);
+
+        {
+            let _context_guard = GlobalReadOnlyScope::enter_thread_local_context(
+                Some(next_scope),
+                Some(next_mode.clone()),
+            );
+
+            assert_eq!(GlobalReadOnlyScope::instance().sample, "next");
+            let active_mode =
+                GlobalReadOnlyScope::get_mode().expect("entered thread-local mode should exist");
+            assert!(Arc::ptr_eq(&active_mode, &next_mode));
+        }
+
+        assert_eq!(GlobalReadOnlyScope::instance().sample, "previous");
+        let restored_mode =
+            GlobalReadOnlyScope::get_mode().expect("previous thread-local mode should be restored");
+        assert!(Arc::ptr_eq(&restored_mode, &previous_mode));
+    }
+
+    #[test]
+    fn enter_thread_local_context_restores_empty_thread_local_state() {
+        let _guard = ScopeStateGuard::new();
+
+        install_global_scope("global");
+        let global_mode: SharedMode = Arc::new(DummyMode);
+        GlobalReadOnlyScope::set_mode(global_mode.clone());
+
+        let local_scope = Arc::new(GlobalReadOnlyScope::new(
+            Configuration::default(),
+            HashMap::default(),
+            "local",
+            None,
+            None,
+            HashMap::default(),
+            HashMap::default(),
+        ));
+        let local_mode: SharedMode = Arc::new(AlternateDummyMode);
+
+        {
+            let _context_guard = GlobalReadOnlyScope::enter_thread_local_context(
+                Some(local_scope),
+                Some(local_mode),
+            );
+
+            assert_eq!(GlobalReadOnlyScope::instance().sample, "local");
+        }
+
+        assert!(GlobalReadOnlyScope::try_thread_local_instance().is_none());
+        assert!(GlobalReadOnlyScope::try_thread_local_mode().is_none());
+        assert_eq!(GlobalReadOnlyScope::instance().sample, "global");
+        let active_mode = GlobalReadOnlyScope::get_mode().expect("global mode should be visible");
+        assert!(Arc::ptr_eq(&active_mode, &global_mode));
     }
 }

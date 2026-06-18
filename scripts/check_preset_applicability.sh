@@ -41,7 +41,7 @@ SOMATIC_ONLY_FLAGS="-M -V -I -A"
 
 # Covered flag set (from docs/parity-scope.md). Unknown flags are flagged as warnings
 # to encourage keeping the scope doc in sync.
-COVERED_FLAGS="-f -r -q -m -X -B --fisher -p -U -k --chimeric -Q -M -V -I"
+COVERED_FLAGS="-f -r -q -m -X -B --fisher -p -U -k --chimeric -Q -th -M -V -I --adaptor"
 
 fail_count=0
 warn_count=0

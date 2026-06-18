@@ -59,16 +59,16 @@ continue to the next source.
 
 1. Chat logs and your context: Probably you have been working based on user directions and workflow files(skills, agent mode, prompt, etc.). Refer to your activity history and context window.
 2. Current-session artifacts if they exist:
-   - `/memories/session/`
+   - the current CLI session-state artifact path
 
-If `/memories/session/` does not exist or contains no relevant files, report that as
+If the current CLI session-state artifact path does not exist or contains no relevant files, report that as
 an evidence gap. Do not fabricate a session state.
 
 ## Compliance Checks
 
 Look for evidence-backed gaps only. Good examples:
 
-- Workspace has the defined agent customization and workflow skills. Read "workflow-management" skill and understand the workspace workflows. There should be one more workflow files(skills or agent, etc.) you have been referred to.
+- Workspace has the defined workflow skills. Read "workflow-management" skill and understand the workspace workflows. There should be one more workflow file or skill you have been referred to.
 - Typically, your workflow is set by combining workspace workflow and user's directions. 
 
 ## Blocker Checks
@@ -76,7 +76,7 @@ You maybe have encountered some blockers while you were trying to follow the wor
 
 ## Report Format
 
-Make a new md file in your memory and show the path to chat.
+Make a new Markdown file under the current CLI session-state artifact path and show the path to chat.
 The following is the base structure. You can expand but can't ignore it:
 
 ```markdown

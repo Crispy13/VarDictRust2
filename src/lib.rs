@@ -1,10 +1,12 @@
 pub mod config;
 pub mod data;
 pub mod fisher;
+mod java_hashmap_order;
 pub mod modes;
 pub mod mods;
 pub mod parity;
 pub mod patterns;
+pub mod prelude;
 pub mod reference;
 pub mod scope;
 pub mod utils;

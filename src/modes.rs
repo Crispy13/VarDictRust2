@@ -1,15 +1,18 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::io::Write;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use crate::prelude::{HashMap, HashSet};
+use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::data::{
-    AlignedVarsData, InitialData, PositionMap, RealignedVariationData, Region, Sclip, VariationMap,
+    AlignedVarsData, CoverageMap, InitialData, PositionMap, RealignedVariationData, Region, Sclip,
+    VariationMap,
 };
 use crate::mods::amplicon_post_process::amplicon_post_process;
 use crate::mods::cigar_parser::CigarParser;
 use crate::mods::sam_file_parser::sam_file_parser_process;
-use crate::mods::simple_post_process::simple_post_process;
+use crate::mods::simple_post_process::{simple_post_process, simple_post_process_position_lines};
 use crate::mods::somatic_post_process::somatic_post_process;
 use crate::mods::{structural_variants_processor, to_vars_builder, variation_realigner};
 use crate::parity::snapshot::maybe_write_module_snapshot;
@@ -50,10 +53,130 @@ fn write_mode_output(printer: &VariantPrinter, buffer: &[u8]) {
             let mut output = captured.lock().unwrap_or_else(|error| error.into_inner());
             output.push_str(rendered);
         }
+        VariantPrinter::LineSink(sink) => {
+            let rendered = std::str::from_utf8(buffer).expect("mode output must be valid UTF-8");
+            for line in rendered.split_terminator('\n') {
+                sink(line);
+            }
+        }
+        VariantPrinter::OwnedLineSink(sink) => {
+            let rendered = std::str::from_utf8(buffer).expect("mode output must be valid UTF-8");
+            for line in rendered.split_terminator('\n') {
+                sink(line.to_string());
+            }
+        }
     }
 }
 
-fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
+fn buffered_streaming_printer(printer: &VariantPrinter) -> Option<VariantPrinter> {
+    match printer {
+        VariantPrinter::Out => {
+            let writer = Arc::new(Mutex::new(BufWriter::new(std::io::stdout())));
+            Some(VariantPrinter::LineSink(Arc::new(move |line| {
+                let mut writer = writer.lock().unwrap_or_else(|error| error.into_inner());
+                writeln!(writer, "{line}").expect("failed to write mode output to stdout");
+            })))
+        }
+        VariantPrinter::Err => {
+            let writer = Arc::new(Mutex::new(BufWriter::new(std::io::stderr())));
+            Some(VariantPrinter::LineSink(Arc::new(move |line| {
+                let mut writer = writer.lock().unwrap_or_else(|error| error.into_inner());
+                writeln!(writer, "{line}").expect("failed to write mode output to stderr");
+            })))
+        }
+        _ => None,
+    }
+}
+
+struct SimpleLineBuffer {
+    start: i32,
+    end: i32,
+    next_in_region_to_print: i32,
+    in_region: VecDeque<Option<Vec<String>>>,
+    extra: BTreeMap<i32, Vec<String>>,
+}
+
+impl SimpleLineBuffer {
+    fn new(region: &Region) -> Self {
+        Self {
+            start: region.start,
+            end: region.end,
+            next_in_region_to_print: region.start,
+            in_region: VecDeque::new(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn push(&mut self, position: i32, lines: Vec<String>) {
+        if lines.is_empty() {
+            return;
+        }
+        if position >= self.start && position <= self.end {
+            let offset = usize::try_from(position - self.next_in_region_to_print)
+                .expect("in-region position offset should fit usize");
+            if offset >= self.in_region.len() {
+                self.in_region.resize_with(offset + 1, || None);
+            }
+            match &mut self.in_region[offset] {
+                Some(existing) => existing.extend(lines),
+                slot @ None => *slot = Some(lines),
+            }
+        } else {
+            self.extra.entry(position).or_default().extend(lines);
+        }
+    }
+
+    fn flush_extra_before(&mut self, limit: i32, printer: &VariantPrinter) {
+        let remaining = self.extra.split_off(&limit);
+        let ready = std::mem::replace(&mut self.extra, remaining);
+        for (_position, lines) in ready {
+            for line in lines {
+                printer.print_owned_line(line);
+            }
+        }
+    }
+
+    fn flush_in_region_before(&mut self, limit: i32, printer: &VariantPrinter) {
+        while self.next_in_region_to_print < limit && self.next_in_region_to_print <= self.end {
+            if let Some(Some(lines)) = self.in_region.pop_front() {
+                for line in lines {
+                    printer.print_owned_line(line);
+                }
+            }
+            self.next_in_region_to_print += 1;
+        }
+    }
+
+    fn flush_before(&mut self, limit: i32, printer: &VariantPrinter) {
+        let pre_region_limit = limit.min(self.start);
+        if pre_region_limit > i32::MIN {
+            self.flush_extra_before(pre_region_limit, printer);
+        }
+
+        if limit > self.end {
+            self.flush_in_region_before(limit, printer);
+            self.flush_extra_before(limit, printer);
+        } else {
+            self.flush_in_region_before(limit, printer);
+        }
+    }
+
+    fn print(mut self, printer: &VariantPrinter) {
+        self.flush_before(i32::MAX, printer);
+        for lines in self.in_region.into_iter().flatten() {
+            for line in lines {
+                printer.print_owned_line(line);
+            }
+        }
+        for (_position, lines) in self.extra {
+            for line in lines {
+                printer.print_owned_line(line);
+            }
+        }
+    }
+}
+
+fn run_realigned_pipeline(scope: Scope<InitialData>) -> Scope<RealignedVariationData> {
     let parsed_scope = sam_file_parser_process(scope);
     maybe_write_module_snapshot(
         "SAM_FILE_PARSER",
@@ -116,10 +239,16 @@ fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
     };
     let realigned_scope = variation_realigner::process(variation_scope);
     maybe_write_module_snapshot("REALIGNER", &realigned_scope.region, &realigned_scope.data);
-    finalize_pipeline(realigned_scope)
+    realigned_scope
 }
 
-fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsData> {
+pub(crate) fn run_pipeline(scope: Scope<InitialData>) -> Scope<AlignedVarsData> {
+    finalize_pipeline(run_realigned_pipeline(scope))
+}
+
+fn process_structural_variants(
+    scope: Scope<RealignedVariationData>,
+) -> Scope<RealignedVariationData> {
     let Scope {
         bam,
         region,
@@ -144,9 +273,9 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
         Some(splice.iter().cloned().collect::<BTreeSet<_>>())
     };
     let mut prev_non_insertion_variants = PositionMap::<VariationMap>::default();
-    let mut prev_ref_coverage = PositionMap::<i32>::default();
-    let mut prev_soft_clips_3_end = HashMap::<i32, Sclip>::new();
-    let mut prev_soft_clips_5_end = HashMap::<i32, Sclip>::new();
+    let mut prev_ref_coverage = CoverageMap::default();
+    let mut prev_soft_clips_3_end = PositionMap::<Sclip>::default();
+    let mut prev_soft_clips_5_end = PositionMap::<Sclip>::default();
     let prev_reference_sequences = ReferenceSequenceMap::default();
     structural_variants_processor::process(
         &mut data,
@@ -165,10 +294,34 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
     );
     maybe_write_module_snapshot("SV_PROCESSOR", &region, &data);
 
+    Scope {
+        bam,
+        region,
+        region_ref: Arc::new(reference),
+        reference_resource,
+        max_read_length,
+        splice,
+        out,
+        data,
+    }
+}
+
+fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsData> {
+    let Scope {
+        bam,
+        region,
+        region_ref,
+        reference_resource,
+        max_read_length,
+        splice,
+        out,
+        mut data,
+    } = process_structural_variants(scope);
+
     let aligned_data = to_vars_builder::process(
         data.max_read_length.unwrap_or(max_read_length),
         &region,
-        &reference.reference_sequences,
+        &region_ref.reference_sequences,
         &data.ref_coverage,
         &data.insertion_variants,
         &mut data.non_insertion_variants,
@@ -179,7 +332,7 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
     Scope {
         bam,
         region,
-        region_ref: Arc::new(reference),
+        region_ref,
         reference_resource,
         max_read_length: aligned_data.max_read_length,
         splice,
@@ -188,11 +341,68 @@ fn finalize_pipeline(scope: Scope<RealignedVariationData>) -> Scope<AlignedVarsD
     }
 }
 
+fn run_simple_pipeline(scope: Scope<InitialData>) {
+    let Scope {
+        region,
+        region_ref,
+        max_read_length,
+        splice,
+        out,
+        data:
+            RealignedVariationData {
+                mut non_insertion_variants,
+                mut insertion_variants,
+                mut ref_coverage,
+                max_read_length: realigned_max_read_length,
+                duprate,
+                ..
+            },
+        ..
+    } = process_structural_variants(run_realigned_pipeline(scope));
+
+    let conf = GlobalReadOnlyScope::instance().conf.clone();
+    let mut lines = SimpleLineBuffer::new(&region);
+    let max_read_length = to_vars_builder::process_incremental(
+        realigned_max_read_length.unwrap_or(max_read_length),
+        &region,
+        &region_ref.reference_sequences,
+        &mut ref_coverage,
+        &mut insertion_variants,
+        &mut non_insertion_variants,
+        duprate,
+        |event| match event {
+            to_vars_builder::IncrementalProcessEvent::Position { position, vars } => {
+                let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    simple_post_process_position_lines(position, &vars, &region, &splice, &conf)
+                }));
+                if let Ok(position_lines) = rendered {
+                    lines.push(position, position_lines);
+                }
+            }
+            to_vars_builder::IncrementalProcessEvent::ReadyBefore(limit) => {
+                lines.flush_before(limit, &out);
+            }
+        },
+    );
+
+    drop(non_insertion_variants);
+    drop(insertion_variants);
+    drop(ref_coverage);
+    let _ = max_read_length;
+    lines.print(&out);
+}
+
 /// Ported from: AbstractMode.java:L100-L105 and AbstractMode.AbstractParallelMode.
 pub trait ParallelMode: AbstractMode + Sync {
     fn regions(&self) -> &[Region];
 
     fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>);
+
+    fn process_region_to_printer(&self, region: &Region, printer: VariantPrinter) {
+        let mut buffer = Vec::new();
+        self.process_region_to_buffer(region, &mut buffer);
+        write_mode_output(&printer, &buffer);
+    }
 
     fn post_parallel_hook(&self) {}
 
@@ -204,8 +414,25 @@ pub trait ParallelMode: AbstractMode + Sync {
             .num_threads(threads)
             .build()
             .expect("failed to build simple-mode rayon pool");
-        let (outer_tx, outer_rx) = bounded::<Receiver<Vec<u8>>>(threads.max(10));
+        // In-flight / reorder window for the ordered-output pipeline. The consumer below drains
+        // `outer_rx` in strict submission order, so output is byte-identical regardless of this cap;
+        // the cap only bounds how far fast regions may run ahead of a slow predecessor.
+        //
+        // Sizing it to the worker count (the original `threads.max(10)`) left zero slack: one slow
+        // region stalled the in-order consumer, the queue filled with finished downstream regions,
+        // `outer_tx.send` below blocked, and the rest of the pool idled (parked on a futex). A
+        // `threads * 64` window fixed the worst of it but still stalled on dense exome loci where a
+        // contiguous cluster of expensive regions outruns the window (per-region timing showed the
+        // cost is a tight cluster, not one giant region, so the makespan floor is total/threads and
+        // ~full utilization is achievable). Sizing the window to the region count lets the dispatch
+        // loop hand every region to the pool up front, so workers never starve on output ordering —
+        // out-of-order completions simply buffer (small per-region `Vec<u8>`s; bounded by total
+        // output) while the consumer drains in order.
+        let in_flight_window = self.regions().len().max(threads * 64);
+        let (outer_tx, outer_rx) = bounded::<Receiver<Vec<u8>>>(in_flight_window);
         let printer = GlobalReadOnlyScope::instance().variant_printer.clone();
+        let worker_scope = GlobalReadOnlyScope::try_thread_local_instance();
+        let worker_mode = GlobalReadOnlyScope::try_thread_local_mode();
 
         let consumer = std::thread::spawn(move || {
             while let Ok(inner_rx) = outer_rx.recv() {
@@ -221,7 +448,11 @@ pub trait ParallelMode: AbstractMode + Sync {
                     .send(inner_rx)
                     .expect("consumer dropped outer simple-mode queue");
                 let self_ref = self;
+                let worker_scope = worker_scope.clone();
+                let worker_mode = worker_mode.clone();
                 scope.spawn(move |_| {
+                    let _context_guard =
+                        GlobalReadOnlyScope::enter_thread_local_context(worker_scope, worker_mode);
                     let mut buffer = Vec::new();
                     self_ref.process_region_to_buffer(region, &mut buffer);
                     inner_tx
@@ -239,9 +470,23 @@ pub trait ParallelMode: AbstractMode + Sync {
     fn not_parallel(&self) {
         let printer = GlobalReadOnlyScope::instance().variant_printer.clone();
         for region in self.regions() {
-            let mut buffer = Vec::new();
-            self.process_region_to_buffer(region, &mut buffer);
-            write_mode_output(&printer, &buffer);
+            match buffered_streaming_printer(&printer) {
+                Some(streaming_printer) => {
+                    self.process_region_to_printer(region, streaming_printer);
+                }
+                None if matches!(
+                    printer,
+                    VariantPrinter::LineSink(_) | VariantPrinter::OwnedLineSink(_)
+                ) =>
+                {
+                    self.process_region_to_printer(region, printer.clone());
+                }
+                None => {
+                    let mut buffer = Vec::new();
+                    self.process_region_to_buffer(region, &mut buffer);
+                    write_mode_output(&printer, &buffer);
+                }
+            }
         }
         self.post_parallel_hook();
     }
@@ -264,6 +509,10 @@ impl ParallelMode for SimpleMode {
     fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>) {
         SimpleMode::process_region_to_buffer(self, region, out);
     }
+
+    fn process_region_to_printer(&self, region: &Region, printer: VariantPrinter) {
+        SimpleMode::process_region_to_printer(self, region, printer);
+    }
 }
 
 impl SimpleMode {
@@ -285,6 +534,14 @@ impl SimpleMode {
     pub fn process_region_to_buffer(&self, region: &Region, out: &mut Vec<u8>) {
         let buffer = Arc::new(Mutex::new(String::new()));
         let printer = VariantPrinter::Buffer(buffer.clone());
+        self.process_region_to_printer(region, printer);
+
+        let mut rendered = buffer.lock().unwrap_or_else(|error| error.into_inner());
+        let mut bytes = std::mem::take(&mut *rendered).into_bytes();
+        out.append(&mut bytes);
+    }
+
+    fn process_region_to_printer(&self, region: &Region, printer: VariantPrinter) {
         let reference = try_to_get_reference(&self.reference_resource, region);
         let bam1 = GlobalReadOnlyScope::with_instance(|scope| {
             scope
@@ -301,15 +558,15 @@ impl SimpleMode {
             Arc::new(reference),
             Arc::new(self.reference_resource.clone()),
             0,
-            HashSet::new(),
+            HashSet::default(),
             printer,
             InitialData::default(),
         );
-        simple_post_process(run_pipeline(initial_scope));
-
-        let mut rendered = buffer.lock().unwrap_or_else(|error| error.into_inner());
-        let mut bytes = std::mem::take(&mut *rendered).into_bytes();
-        out.append(&mut bytes);
+        if std::env::var_os("VARDICT_PARITY_TOVARS").is_some() {
+            simple_post_process(run_pipeline(initial_scope));
+        } else {
+            run_simple_pipeline(initial_scope);
+        }
     }
 
     pub fn parallel(&self, threads: usize) {
@@ -417,26 +674,31 @@ impl SomaticMode {
             .as_ref()
             .expect("BAM names must be configured")
             .clone();
-        let splice = HashSet::new();
+        let splice = HashSet::default();
         let reference = try_to_get_reference(&self.reference_resource, region);
         let bam1_scope = Scope::new(
             bam_names.get_bam1(),
             region.clone(),
-            Arc::new(reference.clone()),
+            Arc::new(reference),
             Arc::new(self.reference_resource.clone()),
             0,
-            splice.clone(),
+            splice,
             printer.clone(),
             InitialData::default(),
         );
         let bam1_aligned = run_pipeline(bam1_scope);
+        // Java SomaticMode.processBothBamsInPipeline passes the SAME Reference and splice
+        // object to both pipelines (initialScope1 and initialScope2). The tumor pass's
+        // SV-breakpoint reference extensions and splice sites are therefore visible to the
+        // normal pass, which lets it skip the partial-pipeline re-parse at already-loaded
+        // breakpoints. Share the tumor-extended reference + splice with the normal pipeline.
         let bam2_scope = Scope::new(
             bam_names.get_bam2().expect("Somatic mode requires BAM2"),
             region.clone(),
-            Arc::new(reference),
+            bam1_aligned.region_ref.clone(),
             Arc::new(self.reference_resource.clone()),
             bam1_aligned.max_read_length,
-            splice,
+            (*bam1_aligned.splice).clone(),
             printer,
             InitialData::default(),
         );
@@ -560,12 +822,12 @@ impl AmpliconMode {
             .to_string();
 
         for regions in &self.segments {
-            let mut pos: HashMap<i32, Vec<(i32, Region)>> = HashMap::new();
+            let mut pos: HashMap<i32, Vec<(i32, Region)>> = HashMap::default();
             let mut current_region = regions
                 .first()
                 .cloned()
                 .unwrap_or_else(|| Region::new("", 0, 0, ""));
-            let splice = HashSet::new();
+            let splice = HashSet::default();
             let mut vars = Vec::new();
 
             for (amplicon_number, region) in regions.iter().enumerate() {

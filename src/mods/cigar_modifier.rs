@@ -1,6 +1,6 @@
 /// Ported from: CigarModifier.java:L1-L787
 /// CIGAR string normalization before variant detection.
-use std::collections::HashSet;
+use crate::prelude::HashSet;
 
 use crate::config::{LOWQUAL, SEED_2};
 use crate::data::{ModifiedCigar, Region};
@@ -429,7 +429,7 @@ fn combine_begin_dig_m(s: &mut CigarModifierState<'_>, mut mch: i32) {
 /// Adjust the boundary between a leading soft-clip and matched region.
 fn combine_dig_s_dig_m(s: &mut CigarModifierState<'_>, mut soft: i32, mut mch: i32) {
     let mut rn: i32 = 0;
-    let mut rn_set: HashSet<u8> = HashSet::new();
+    let mut rn_set: HashSet<u8> = HashSet::default();
 
     // Part A: Extend M leftward into S (L290-L307)
     // Trap T7: quality threshold is > LOWQUAL (strict >)
@@ -627,7 +627,7 @@ fn capture_mis_softly_ms(s: &mut CigarModifierState<'_>, ov5: &str, mut mch: i32
 
     // Part B: Extend M rightward (L418-L431)
     let mut rn: i32 = 0;
-    let mut rn_set: HashSet<u8> = HashSet::new();
+    let mut rn_set: HashSet<u8> = HashSet::default();
     while rn < soft
         && is_has_and_equals_str(&s.reference, refoff + rn, &s.query_sequence, rdoff + rn)
         && (s.query_quality.as_bytes()[(rdoff + rn) as usize] as i32 - 33) > LOWQUAL
@@ -1044,7 +1044,7 @@ mod tests {
     use super::*;
     use crate::config::Configuration;
     use once_cell::sync::Lazy;
-    use std::collections::HashMap;
+    use crate::prelude::HashMap;
     use std::sync::Mutex;
 
     static TEST_SCOPE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
@@ -1054,12 +1054,12 @@ mod tests {
         let conf = Configuration::default();
         crate::scope::GlobalReadOnlyScope::init_thread_local(
             conf,
-            HashMap::new(),
+            HashMap::default(),
             "test",
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         );
     }
 
@@ -1106,7 +1106,9 @@ mod tests {
         init_test_scope();
 
         let mut reference = make_reference(&[]);
-        reference.seed.insert("TTTTTTTTTTTT".to_string(), vec![100]);
+        reference
+            .seed
+            .insert("TTTTTTTTTTTT".to_string(), smallvec::smallvec![100]);
         let region = Region::new("chr1", 1, 1000, "gene");
         let query_sequence = format!("{}{}", "A".repeat(35), "C".repeat(66));
         let query_quality = "I".repeat(101);
@@ -1137,7 +1139,9 @@ mod tests {
         init_test_scope();
 
         let mut reference = make_reference(&[]);
-        reference.seed.insert("TTTTTTTTTTTT".to_string(), vec![100]);
+        reference
+            .seed
+            .insert("TTTTTTTTTTTT".to_string(), smallvec::smallvec![100]);
         let region = Region::new("chr1", 1, 1000, "gene");
         let query_sequence = format!("{}{}{}", "C".repeat(66), "G".repeat(31), "A".repeat(35));
         let query_quality = "I".repeat(132);

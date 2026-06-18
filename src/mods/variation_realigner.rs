@@ -7,19 +7,21 @@
 //! Cluster A: Pure utility functions with no inter-cluster dependencies.
 //! All other clusters call into these.
 
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap as StdHashMap;
 use std::hash::BuildHasher;
 use std::sync::Arc;
+
+use crate::prelude::{HashMap, HashSet};
 
 use rust_htslib::bam::{self, Read as BamRead};
 
 use crate::config::{EXTENSION, MINSVCDIST, SEED_1, SVFLANK, SVMAXLEN};
 use crate::data::{
-    BaseInsertion, Cluster, CurrentSegment, InitialData, Match35, PositionMap,
+    BaseInsertion, Cluster, CoverageMap, CurrentSegment, InitialData, Match35, PositionMap,
     RealignedVariationData, Region, Sclip, SortPositionSclip, Variation, VariationData,
     VariationMap, VariationMapSV,
 };
+use crate::mods::indexed_reader_cache;
 use crate::patterns::{
     AMP_ATGC, ATGSs_AMP_ATGSs_END, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_ANY, BEGIN_PLUS_ATGC,
     CARET_ATGC_END, CARET_ATGNC, DUP_NUM_ATGC, HASH_ATGC, MINUS_NUMBER_AMP_ATGCs_END,
@@ -34,11 +36,6 @@ use crate::variations::{
     is_has_and_not_equals_base, is_not_equals, join_ref, join_ref_f64, join_ref_for_3_lgins,
     join_ref_for_5_lgins, sub_dir,
 };
-
-thread_local! {
-    static NO_PASSING_READERS: RefCell<HashMap<String, bam::IndexedReader>> =
-        RefCell::new(HashMap::new());
-}
 
 // ─── Supporting types ────────────────────────────────────────────────
 
@@ -135,7 +132,7 @@ pub fn comp3(a: &SortPositionSclip, b: &SortPositionSclip) -> std::cmp::Ordering
 /// Flatten a position→{description→count} map into a sorted vec.
 /// Sort: descending count → ascending position → descending description_string.
 /// **Parity trap T1**: tertiary sort is DESC descriptionString (reversed compareTo).
-pub fn fill_and_sort_tmp<M, H>(changes: &HashMap<i32, M, H>) -> Vec<SortPositionDescription>
+pub fn fill_and_sort_tmp<M, H>(changes: &StdHashMap<i32, M, H>) -> Vec<SortPositionDescription>
 where
     H: BuildHasher,
     for<'a> &'a M: IntoIterator<Item = (&'a String, &'a i32)>,
@@ -655,7 +652,7 @@ pub fn find_mm5(
     ref_map: &ReferenceSequenceMap,
     position: i32,
     wupseq: &str,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
 ) -> MismatchResult {
     // Java: VariationRealigner.java#L2735
     let seq: String = wupseq.chars().filter(|c| *c != '#' && *c != '^').collect();
@@ -775,7 +772,7 @@ pub fn find_mm3(
     ref_map: &ReferenceSequenceMap,
     p: i32,
     sanpseq: &str,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
 ) -> MismatchResult {
     // Java: VariationRealigner.java#L2793
     let seq: String = sanpseq.chars().filter(|c| *c != '#' && *c != '^').collect();
@@ -921,7 +918,7 @@ pub fn findbi(
         }
         let mut mm = 0i32;
         let mut i = 0i32;
-        let mut m: HashSet<u8> = HashSet::new();
+        let mut m: HashSet<u8> = HashSet::default();
 
         // Java: VariationRealigner.java#L2449 — for (i = 0; i + n < seq.length(); i++)
         while i + n < seq_len {
@@ -1095,7 +1092,7 @@ pub fn findbp(
         .chr_lengths
         .get(chr)
         .copied()
-        .or_else(|| ref_map.keys().copied().max())
+        .or_else(|| ref_map.max_position())
         .unwrap_or(0);
     let seq_bytes = sequence.as_bytes();
     let seq_len = seq_bytes.len() as i32;
@@ -1104,7 +1101,7 @@ pub fn findbp(
     for n in 0..instance.conf.indelsize {
         let mut mm = 0i32;
         let mut i = 0i32;
-        let mut m: HashSet<u8> = HashSet::new();
+        let mut m: HashSet<u8> = HashSet::default();
 
         // Java: for (i = 0; i < sequence.length(); i++)
         while i < seq_len {
@@ -1183,71 +1180,62 @@ pub fn no_passing_reads(chr: &str, start: i32, end: i32, bams: &[String]) -> boo
     let dlenqr = format!("{}D", dlen);
     let instance = GlobalReadOnlyScope::instance();
 
-    NO_PASSING_READERS.with(|cached_readers| {
-        let mut cached_readers = cached_readers.borrow_mut();
+    // Java: VariationRealigner.java#L2276 — for (String bam : bams)
+    for bam_path in bams {
+        // Java creates a SamView for each call. Reusing the same IndexedReader preserves
+        // fetch/read semantics while avoiding repeated index reloads for identical BAMs.
+        let mut reader = match indexed_reader_cache::take_or_open(bam_path) {
+            Ok(reader) => reader,
+            Err(_) => continue, // Java catches exceptions and continues
+        };
 
-        // Java: VariationRealigner.java#L2276 — for (String bam : bams)
-        for bam_path in bams {
-            // Java creates a SamView for each call. Reusing the same IndexedReader preserves
-            // fetch/read semantics while avoiding repeated index reloads for identical BAMs.
-            let reader = match cached_readers.entry(bam_path.clone()) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    let reader_result = bam::IndexedReader::from_path(bam_path);
-                    let mut reader = match reader_result {
-                        Ok(r) => r,
-                        Err(_) => continue, // Java catches exceptions and continues
-                    };
-                    reader.set_threads(1).ok();
-                    entry.insert(reader)
-                }
-            };
+        // Java: queryOverlapping(chr, start, end) — 1-based inclusive
+        let region_str = format!("{}:{}-{}", chr, start, end);
+        if reader.fetch(region_str.as_str()).is_err() {
+            indexed_reader_cache::return_reader(bam_path.clone(), reader);
+            continue;
+        }
 
-            // Java: queryOverlapping(chr, start, end) — 1-based inclusive
-            let region_str = format!("{}:{}-{}", chr, start, end);
-            if reader.fetch(region_str.as_str()).is_err() {
+        let mut record = bam::Record::new();
+        // Java: while ((record = reader.read()) != null)
+        while reader.read(&mut record).is_some() {
+            // Java: VariationRealigner.java#L2281 — record.getCigarString().contains(dlenqr)
+            let cigar = record.cigar();
+            let cigar_str = format!("{}", cigar);
+            if cigar_str.contains(&dlenqr) {
                 continue;
             }
 
-            let mut record = bam::Record::new();
-            // Java: while ((record = reader.read()) != null)
-            while reader.read(&mut record).is_some() {
-                // Java: VariationRealigner.java#L2281 — record.getCigarString().contains(dlenqr)
-                let cigar = record.cigar();
-                let cigar_str = format!("{}", cigar);
-                if cigar_str.contains(&dlenqr) {
-                    continue;
-                }
+            // Java: VariationRealigner.java#L2284
+            let read_start = record.pos() as i32 + 1; // 0-based to 1-based
 
-                // Java: VariationRealigner.java#L2284
-                let read_start = record.pos() as i32 + 1; // 0-based to 1-based
+            // Java: getAlignedLength(record.getCigar()) — sum M+D
+            let read_length_aligned: i32 = cigar
+                .iter()
+                .filter(|op| {
+                    matches!(
+                        op,
+                        rust_htslib::bam::record::Cigar::Match(_)
+                            | rust_htslib::bam::record::Cigar::Del(_)
+                    )
+                })
+                .map(|op| op.len() as i32)
+                .sum();
 
-                // Java: getAlignedLength(record.getCigar()) — sum M+D
-                let read_length_aligned: i32 = cigar
-                    .iter()
-                    .filter(|op| {
-                        matches!(
-                            op,
-                            rust_htslib::bam::record::Cigar::Match(_)
-                                | rust_htslib::bam::record::Cigar::Del(_)
-                        )
-                    })
-                    .map(|op| op.len() as i32)
-                    .sum();
+            let read_end = read_start + read_length_aligned;
 
-                let read_end = read_start + read_length_aligned;
-
-                // Java: VariationRealigner.java#L2288
-                if read_end > end + 2 && read_start < start - 2 {
-                    cnt += 1;
-                }
-                // Java: VariationRealigner.java#L2291
-                if read_start < start - 2 && read_end > start && read_end < end {
-                    midcnt += 1;
-                }
+            // Java: VariationRealigner.java#L2288
+            if read_end > end + 2 && read_start < start - 2 {
+                cnt += 1;
+            }
+            // Java: VariationRealigner.java#L2291
+            if read_start < start - 2 && read_end > start && read_end < end {
+                midcnt += 1;
             }
         }
-    });
+
+        indexed_reader_cache::return_reader(bam_path.clone(), reader);
+    }
 
     // Java: VariationRealigner.java#L2297
     if instance.conf.y {
@@ -1492,11 +1480,11 @@ pub fn filter_all_sv_structures(
 /// and absorbs matching soft clips.
 /// **Parity trap T3**: left uses `<= 0`, right uses `< 0`.
 pub fn adjust_mnp<M, H>(
-    mnp: &HashMap<i32, M, H>,
+    mnp: &StdHashMap<i32, M, H>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference_sequences: &ReferenceSequenceMap,
 ) where
     H: BuildHasher,
@@ -1722,11 +1710,11 @@ pub fn adjust_mnp<M, H>(
 pub fn realigndel<M, H>(
     bams_parameter: Option<&[String]>,
     instance_bams: &Option<Vec<String>>,
-    position_to_deletions_count: &HashMap<i32, M, H>,
+    position_to_deletions_count: &StdHashMap<i32, M, H>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference_sequences: &ReferenceSequenceMap,
     chr: &str,
     max_read_length: i32,
@@ -2269,12 +2257,12 @@ pub fn realigndel<M, H>(
 /// Returns NEWINS string (modified insertion description, or empty).
 /// **Parity trap T12**: Pass 2 loop `i > 0` (skips element 0).
 pub fn realignins<M, H>(
-    position_to_insertion_count: &HashMap<i32, M, H>,
+    position_to_insertion_count: &StdHashMap<i32, M, H>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference_sequences: &ReferenceSequenceMap,
     chr: &str,
     max_read_length: i32,
@@ -2936,9 +2924,9 @@ fn run_partial_pipeline(
     reference: &mut Reference,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
 ) {
     if modified_start > modified_end {
         return;
@@ -2971,10 +2959,11 @@ fn run_partial_pipeline(
         std::mem::take(soft_clips_3_end),
         std::mem::take(soft_clips_5_end),
     );
+    let scope_reference = std::mem::take(reference);
     let scope = Scope {
         bam: context.bam.to_string(),
         region: modified_region,
-        region_ref: Arc::new(reference.clone()),
+        region_ref: Arc::new(scope_reference),
         reference_resource: Arc::clone(context.reference_resource),
         max_read_length,
         splice: Arc::new(context.splice.clone()),
@@ -3019,6 +3008,8 @@ fn run_partial_pipeline(
         duplicate_reads,
     );
     let variation_data = parser.process_preprocessor(&mut data, &header, &chr_name);
+    drop(parser);
+    *reference = Arc::try_unwrap(region_ref).unwrap_or_else(|region_ref| (*region_ref).clone());
     *non_insertion_variants = variation_data.non_insertion_variants;
     *insertion_variants = variation_data.insertion_variants;
     *ref_coverage = variation_data.ref_coverage;
@@ -3039,9 +3030,9 @@ fn realignlgdel(
     svrdel: &mut Vec<Sclip>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     chr: &str,
     max_read_length: i32,
@@ -3407,8 +3398,8 @@ fn realignlgdel(
             .and_then(|m| m.entries.get(&gt))
             .map(|v| v.vars_count)
             .unwrap_or(0);
-        let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-        let mut inner = HashMap::new();
+        let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+        let mut inner = HashMap::default();
         inner.insert(gt.clone(), tv_vc);
         dels5.insert(bp, inner);
         realigndel(
@@ -3708,8 +3699,8 @@ fn realignlgdel(
             .and_then(|m| m.entries.get(&gt))
             .map(|v| v.vars_count)
             .unwrap_or(0);
-        let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-        let mut inner = HashMap::new();
+        let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+        let mut inner = HashMap::default();
         inner.insert(gt.clone(), tv_vc);
         dels5.insert(bp, inner);
         realigndel(
@@ -3783,9 +3774,9 @@ pub fn realignlgins30(
     instance_bams: &Option<Vec<String>>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &Reference,
     reference_sequences: &ReferenceSequenceMap,
     chr: &str,
@@ -3827,25 +3818,34 @@ pub fn realignlgins30(
             continue;
         }
 
+        // p5 is present and not used here. Track its used-state locally to avoid re-probing the
+        // invariant key p5 (a cache miss) on every inner iteration. p5 is never removed in this
+        // function, so this mirrors soft_clips_5_end[p5].used exactly.
+        let mut p5_used = false;
+
         // Java: VariationRealigner.java#L1413
         for t3 in &tmp3 {
             let p3 = t3.position;
             let cnt3 = t3.count;
 
-            // Java: VariationRealigner.java#L1418 — if sc5v.used, break inner
-            if soft_clips_5_end.get(&p5).map_or(true, |s| s.used) {
+            // Java: VariationRealigner.java#L1418 — if sc5v.used, break inner.
+            // Local flag mirrors soft_clips_5_end[p5].used (p5 never removed here); avoids an
+            // O(N^2) probe of the invariant key p5.
+            if p5_used {
                 break;
             }
-            // Java: VariationRealigner.java#L1421
-            if soft_clips_3_end.get(&p3).map_or(true, |s| s.used) {
-                continue;
-            }
-            // Java: VariationRealigner.java#L1424
+            // Java: VariationRealigner.java#L1424 — cheap position filters first (no map lookup) so
+            // position-rejected pairs skip the p3 probe. These are pure `continue` guards; reordering
+            // them relative to the p3 used-check does not change the surviving (p5,p3) set.
             if p5 - p3 > (max_read_length as f64 * 2.5) as i32 {
                 continue;
             }
             // Java: VariationRealigner.java#L1427
             if p3 - p5 > max_read_length - 10 {
+                continue;
+            }
+            // Java: VariationRealigner.java#L1421
+            if soft_clips_3_end.get(&p3).map_or(true, |s| s.used) {
                 continue;
             }
 
@@ -3855,7 +3855,11 @@ pub fn realignlgins30(
                     Some(s) => s,
                     None => break,
                 };
-                find_conseq(sc5v, 5)
+                let conseq = find_conseq(sc5v, 5);
+                // find_conseq may set `used` (low-complex/poly-T seeds); mirror it into the flag so
+                // the next iteration's `if p5_used { break; }` matches the original `get(&p5).used`.
+                p5_used = sc5v.used;
+                conseq
             };
             let seq3 = {
                 let sc3v = match soft_clips_3_end.get_mut(&p3) {
@@ -4103,6 +4107,7 @@ pub fn realignlgins30(
             if let Some(sc5v) = soft_clips_5_end.get_mut(&p5) {
                 sc5v.used = true;
             }
+            p5_used = true;
 
             // Java: VariationRealigner.java#L1549-L1551 — set pstd/qstd
             {
@@ -4192,8 +4197,8 @@ pub fn realignlgins30(
                     .and_then(|m| m.entries.get(&vref_key))
                     .map(|v| v.vars_count)
                     .unwrap_or(0);
-                let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-                let mut inner = HashMap::new();
+                let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+                let mut inner = HashMap::default();
                 inner.insert(ins.clone(), vref_vc);
                 tins.insert(bi, inner);
                 realignins(
@@ -4240,8 +4245,8 @@ pub fn realignlgins30(
                     .and_then(|m| m.entries.get(&vref_key))
                     .map(|v| v.vars_count)
                     .unwrap_or(0);
-                let mut tdel: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-                let mut inner = HashMap::new();
+                let mut tdel: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+                let mut inner = HashMap::default();
                 inner.insert(ins.clone(), vref_vc);
                 tdel.insert(bi, inner);
                 realigndel(
@@ -4290,9 +4295,9 @@ fn realignlgins(
     svrdup: &mut Vec<Sclip>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     chr: &str,
     max_read_length: i32,
@@ -4316,7 +4321,6 @@ fn realignlgins(
 
     // Java: VariationRealigner.java#L1623
     for &(p, _) in &tmp {
-
         let (cnt, seq) = {
             let sc5v = match soft_clips_5_end.get_mut(&p) {
                 Some(s) => s,
@@ -4528,8 +4532,8 @@ fn realignlgins(
             .map(|v| v.vars_count)
             .unwrap_or(0);
         let ins_key = format!("+{}", ins);
-        let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-        let mut inner = HashMap::new();
+        let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+        let mut inner = HashMap::default();
         inner.insert(ins_key.clone(), iref_vc);
         tins.insert(bi, inner);
         let newins = realignins(
@@ -4876,8 +4880,8 @@ fn realignlgins(
             .map(|v| v.vars_count)
             .unwrap_or(0);
         let ins_key = format!("+{}", ins);
-        let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-        let mut inner = HashMap::new();
+        let mut tins: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+        let mut inner = HashMap::default();
         inner.insert(ins_key.clone(), iref_vc);
         tins.insert(bi, inner);
         realignins(
@@ -4965,14 +4969,14 @@ fn realignlgins(
 /// Mutation order is load-bearing — each step's mutations are visible to subsequent steps.
 pub fn realign_indels<MDel, HDel, MIns, HIns>(
     instance_bams: &Option<Vec<String>>,
-    position_to_deletions_count: &HashMap<i32, MDel, HDel>,
-    position_to_insertion_count: &HashMap<i32, MIns, HIns>,
+    position_to_deletions_count: &StdHashMap<i32, MDel, HDel>,
+    position_to_insertion_count: &StdHashMap<i32, MIns, HIns>,
     sv_structures: &mut crate::data::SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     chr: &str,
     max_read_length: i32,
@@ -5160,7 +5164,7 @@ pub fn process(scope: Scope<VariationData>) -> Scope<RealignedVariationData> {
     let curseg = CurrentSegment::new(region.chr.clone(), region.start, region.end);
 
     // Java: VariationRealigner.java#L79-L81
-    let mut softp2sv: HashMap<i32, Vec<Sclip>> = HashMap::new();
+    let mut softp2sv: HashMap<i32, Vec<Sclip>> = HashMap::default();
     if !instance.conf.disable_sv {
         filter_all_sv_structures(&mut sv_structures, max_read_length, &mut softp2sv);
     }
@@ -5252,18 +5256,18 @@ mod tests {
         let conf = Configuration::default();
         GlobalReadOnlyScope::init(
             conf,
-            HashMap::new(),
+            HashMap::default(),
             "test_sample",
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         );
     }
 
     #[test]
     fn test_fill_and_sort_tmp_basic() {
-        let mut changes: HashMap<i32, BTreeMap<String, i32>> = HashMap::new();
+        let mut changes: HashMap<i32, BTreeMap<String, i32>> = HashMap::default();
         let mut inner = BTreeMap::new();
         inner.insert("A".to_string(), 10);
         inner.insert("B".to_string(), 20);
@@ -5291,7 +5295,7 @@ mod tests {
     #[test]
     fn test_fill_and_sort_tmp_tertiary_sort() {
         // Same count, same position — must sort descending by description
-        let mut changes: HashMap<i32, BTreeMap<String, i32>> = HashMap::new();
+        let mut changes: HashMap<i32, BTreeMap<String, i32>> = HashMap::default();
         let mut inner = BTreeMap::new();
         inner.insert("AAA".to_string(), 5);
         inner.insert("ZZZ".to_string(), 5);

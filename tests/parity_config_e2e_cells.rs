@@ -1,6 +1,8 @@
 use libtest_mimic::{Arguments, Failed, Trial};
 
 mod common;
+mod prelude;
+use prelude::*;
 
 fn main() {
     if std::env::var_os("PARITY_REGION_INDEX").is_some() {
@@ -11,6 +13,7 @@ fn main() {
     }
 
     let args = Arguments::from_args();
+    common::init_thread_budget(args.test_threads);
     let trials = build_cell_trials();
     libtest_mimic::run(&args, trials).exit();
 }
@@ -70,7 +73,10 @@ fn build_cell_trials() -> Vec<Trial> {
             (0..region_count).map(move |region_idx| {
                 let trial_name = format!("parity_config_e2e_cell_{}_r{:03}", slug, region_idx);
                 let config_name = config_name.to_string();
+                let config = common::config_preset(&config_name);
+                let cost = common::config_budget_cost(&config);
                 Trial::test(trial_name, move || {
+                    let _budget_guard = common::thread_budget().acquire(cost);
                     common::run_cell(&config_name, region_idx).map_err(Failed::from)
                 })
                 .with_ignored_flag(true)

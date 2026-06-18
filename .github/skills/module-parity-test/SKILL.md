@@ -10,7 +10,7 @@ Verify that a Rust module produces byte-identical output to Java by comparing ag
 
 ## When This Gets Called
 
-The `faithful-port` skill hands off here after Phase 3 (structural review) for pipeline modules. The porting agent invokes this skill with a module name. This skill runs the verification, then either confirms parity or routes failures to `shard-diagnosis`.
+The `faithful-port` skill hands off here after Phase 3 (structural review) for pipeline modules. In a skill-only Copilot CLI workflow, the current CLI session invokes this skill with a module name. This skill runs the verification, then either confirms parity or routes failures to `shard-diagnosis`.
 
 ```
 faithful-port → module-parity-test → PASS (advance module)

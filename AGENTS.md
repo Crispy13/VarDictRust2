@@ -1,0 +1,45 @@
+# Operational Policies
+
+## Build Profile
+- Use `cargo build --profile debug-release` for development, debugging, and verification.
+- Reserve `cargo build --release` for production or explicit release validation.
+
+## Environment
+- Activate `vdr` before builds or tests, then set `LIBCLANG_PATH=$CONDA_PREFIX/lib`.
+- If the conda env is broken, stop and ask whether to continue with Conda or switch to a Python `venv`.
+
+## Temporary Files
+- Create all temporary or intermediate files under `./tmp`.
+- Do not use the system `/tmp` directory.
+
+## Test Command
+- Use `cargo test --profile debug-release -- --include-ignored` for validation.
+- Include ignored tests because parity regressions are often parked there first.
+
+## Ignored Tests
+- Every `#[ignore]` must have a message explaining: why it's ignored, how to run it, and what prerequisite data/workflow it depends on.
+- Categories: `Sweep` (cost-gated, run via sweep.yml), `Nightly` (E2E all, run via sweep.yml or parity.yml), `Temporary` (remove when blocker resolved).
+- Allowlist: `scripts/ignored_tests_allowlist.txt` — tests expected to remain ignored. Update when adding/removing `#[ignore]`.
+- Audit: `.github/workflows/ignore-audit.yml` runs nightly at 03:30 UTC. Flags any passing ignored test not in the allowlist.
+- When a previously-failing ignored test starts passing, either remove `#[ignore]` or add to allowlist with justification.
+
+## Delegation of Tasks
+Delegate simple tasks to subagent whenever possible.
+
+- Default Model: GPT 5.4-mini high
+- Simple Tasks (GPT 5.4 mini high)
+    - Terminal execution 
+    - Reading files
+    - Searching web
+    - Writing without deep reasoning
+
+### Terminal Execution (Mandatory)
+You should delegate all terminal execution to the default model subagent. 
+- Don't make subagents think command. You give the command and just direct it to launch and return results what you want.
+- Use existing subagents you created for terminal execution. Don't make a new subagent per task. Create new one if no one exists for terminal execution.
+
+## Parity Related Skills Must be followed FAITHFULLY
+- config-e2e-diagnosis
+- mismatch-repair
+- logic-audit-parity
+and more.

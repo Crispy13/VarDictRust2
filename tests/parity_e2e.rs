@@ -1,6 +1,7 @@
 mod common;
 
 use std::sync::{Arc, Mutex};
+use vardict_rs::prelude::HashMap;
 
 use vardict_rs::modes::SimpleMode;
 use vardict_rs::reference::ReferenceResource;
@@ -103,7 +104,7 @@ fn run_simple_mode_region(
     region_str: &str,
     bam_path: &str,
     ref_path: &str,
-    chr_lengths: std::collections::HashMap<String, i32>,
+    chr_lengths: HashMap<String, i32>,
 ) -> String {
     let output = {
         let _guard = common::init_test_scope_with_bam(bam_path, ref_path, chr_lengths.clone());

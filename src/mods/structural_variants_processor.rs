@@ -6,14 +6,15 @@
 //! Cluster C: adjSNV, outputClipping.
 //! Cluster D: process() entry point.
 
-use std::collections::{HashMap, HashSet};
+use crate::prelude::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::config::{DISCPAIRQUAL, MINSVCDIST, SEED_1, SEED_2, SVFLANK};
 use crate::data::{
-    CurrentSegment, InitialData, Match, PositionMap, RealignedVariationData, Region, SVStructures,
-    Sclip, Side, SortPositionSclip, Variation, VariationMap, VariationMapSV,
+    CoverageMap, CurrentSegment, InitialData, Match, PositionMap, RealignedVariationData, Region,
+    SVStructures, Sclip, Side, SortPositionSclip, Variation, VariationMap, VariationMapSV,
 };
+use crate::java_hashmap_order::java_hashmap_i32_order_from_keys;
 use crate::reference::{Reference, ReferenceResource, ReferenceSequenceMap};
 use crate::scope::{GlobalReadOnlyScope, Scope, VariantPrinter};
 use crate::utils::{
@@ -290,6 +291,7 @@ pub fn find_match_rev(
 
     let seq_bytes = seq_owned.as_bytes();
     let reference_sequences = &reference.reference_sequences;
+    let mut extra = String::new();
 
     // Java: StructuralVariantsProcessor.java#L1826-L1886
     let start_i = (seq_bytes.len() as i32) - seed_len;
@@ -321,13 +323,12 @@ pub fn find_match_rev(
                             dir, bp, first_seed, _position, seed, i, seq_owned
                         );
                     }
-                    return Match::new(bp, String::new());
+                    return Match::new(bp, extra);
                 } else {
                     // Java: StructuralVariantsProcessor.java#L1844-L1884
                     // Complex indel fallback
                     let mut sseq = seq_owned.clone();
                     let mut eqcnt = 0i32;
-                    let mut current_extra = String::new();
                     for j in 1..=15 {
                         bp -= dir;
                         sseq = if dir == -1 {
@@ -370,8 +371,7 @@ pub fn find_match_rev(
                             // Java: extra = substr(seq, 0, j)
                             // Note: seq here is the complemented seq_owned
                             let e_end = std::cmp::min(j as usize, seq_bytes.len());
-                            current_extra =
-                                String::from_utf8_lossy(&seq_bytes[..e_end]).to_string();
+                            extra = String::from_utf8_lossy(&seq_bytes[..e_end]).to_string();
                         } else {
                             // dir == 1
                             // Java: StructuralVariantsProcessor.java#L1861-L1869
@@ -397,8 +397,7 @@ pub fn find_match_rev(
                             } else {
                                 seq_bytes.len() - j as usize
                             };
-                            current_extra =
-                                String::from_utf8_lossy(&seq_bytes[start..]).to_string();
+                            extra = String::from_utf8_lossy(&seq_bytes[start..]).to_string();
                         }
                         // Java: StructuralVariantsProcessor.java#L1871
                         if eqcnt >= 3 && (eqcnt as f64) / (j as f64) > 0.5 {
@@ -407,12 +406,12 @@ pub fn find_match_rev(
                         if instance.conf.y {
                             eprintln!(
                                 "      FoundSEED SV BP (reverse): {} BP: {} SEEDpos{} {} {} {} {} EXTRA: {}",
-                                dir, bp, first_seed, _position, seed, i, seq_owned, current_extra
+                                dir, bp, first_seed, _position, seed, i, seq_owned, extra
                             );
                         }
                         // Java: StructuralVariantsProcessor.java#L1878
                         if ismatchref_with_mm(&sseq, reference_sequences, bp, -1 * dir, 1) {
-                            return Match::new(bp, current_extra);
+                            return Match::new(bp, extra);
                         }
                     }
                 }
@@ -664,13 +663,19 @@ pub fn mark_dup_sv(
 /// and break ties by ascending position so equal-support candidates are chosen
 /// deterministically.
 pub fn fill_and_sort_tmp_sv(
-    entries: &HashMap<i32, Sclip>,
+    entries: &PositionMap<Sclip>,
     curseg: &CurrentSegment,
 ) -> Vec<SortPositionSclip> {
     let mut tmp: Vec<SortPositionSclip> = Vec::new();
 
-    // Java: StructuralVariantsProcessor.java#L977-L985
-    for (&position, sclip) in entries.iter() {
+    // Java: StructuralVariantsProcessor.java#L977-L985 — iterate softClips entrySet (HashMap
+    // bucket order) and skip used / out-of-segment entries. We reproduce Java's HashMap bucket
+    // order over the full key set so equal-count ties match Java after the stable sort below.
+    for position in java_hashmap_i32_order_from_keys(entries.keys().copied()) {
+        let sclip = match entries.get(&position) {
+            Some(sclip) => sclip,
+            None => continue,
+        };
         if sclip.used {
             continue;
         }
@@ -684,12 +689,16 @@ pub fn fill_and_sort_tmp_sv(
         ));
     }
 
-    // Java: StructuralVariantsProcessor.java#L986-L987
-    // Keep equal-count candidates in ascending position order so the winning
-    // soft-clip is deterministic across Rust HashMap iteration.
-    tmp.sort_by(|a, b| b.count.cmp(&a.count).then(a.position.cmp(&b.position)));
+    // Java: StructuralVariantsProcessor.java#L986-L987 — stable sort by count descending only.
+    // Vec::sort_by is stable, so equal-count entries keep their HashMap bucket order (matches
+    // Java's stable List.sort over entrySet). Do NOT add a position tie-break.
+    tmp.sort_by(|a, b| b.count.cmp(&a.count));
 
     tmp
+}
+
+fn java_hashmap_i32_keys(map: &PositionMap<Sclip>) -> Vec<i32> {
+    java_hashmap_i32_order_from_keys(map.keys().copied())
 }
 
 // ─── Cluster B–D stubs ──────────────────────────────────────────────
@@ -731,9 +740,9 @@ fn run_partial_pipeline(
     reference: &mut Reference,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
 ) {
     let modified_start = std::cmp::max(1, ms - 200);
     let modified_end = me + 200;
@@ -742,24 +751,17 @@ fn run_partial_pipeline(
     }
 
     let modified_region = Region::new_modified_region(context.region, modified_start, modified_end);
-    if !ReferenceResource::is_loaded(
-        &modified_region.chr,
-        modified_region.start,
-        modified_region.end,
-        reference,
-    ) {
-        let current_reference = std::mem::take(reference);
-        *reference = context
-            .reference_resource
-            .get_reference_with_extension(&modified_region, max_read_length, current_reference)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "Failed to fetch reference for {}: {}",
-                    modified_region.print_region(),
-                    error
-                )
-            });
-    }
+    // Java parity: AbstractMode.partialPipeline runs only SAMFileParser + CigarParser over the
+    // modified region — it does NOT call getReference. The caller's prefetch
+    // (prefetch_dup_breakpoint_reference_if_missing) plus the main-region load supply the bases,
+    // and CigarParser tolerates positions whose reference base is absent (Option-based lookup,
+    // mirroring Java's ref.containsKey guards). Fetching the full [ms-200, me+200] span here
+    // recorded a wide loadedRegion that Java never records; in somatic mode that leaked into the
+    // second (normal) pass's isLoaded(ms, me) check via the shared Reference, suppressing the
+    // normal pass's own partial pipeline and leaving ref_coverage[me] unpopulated (the DUP
+    // refCoverage[bp]=refCoverage[me] bump then could not fire). See StructuralVariantsProcessor
+    // findDUPdisc L1511-1519 (reverse) / L1419-1425 (forward): only the narrow pe/bp prefetch is
+    // loaded; partialPipeline itself loads no reference.
 
     let initial_data = InitialData::new(
         std::mem::take(non_insertion_variants),
@@ -768,10 +770,11 @@ fn run_partial_pipeline(
         std::mem::take(soft_clips_3_end),
         std::mem::take(soft_clips_5_end),
     );
+    let scope_reference = std::mem::take(reference);
     let scope = Scope {
         bam: context.bam.to_string(),
         region: modified_region,
-        region_ref: Arc::new(reference.clone()),
+        region_ref: Arc::new(scope_reference),
         reference_resource: Arc::clone(context.reference_resource),
         max_read_length,
         splice: Arc::new(context.splice.clone()),
@@ -816,6 +819,8 @@ fn run_partial_pipeline(
         duplicate_reads,
     );
     let variation_data = parser.process_preprocessor(&mut data, &header, &chr_name);
+    drop(parser);
+    *reference = Arc::try_unwrap(region_ref).unwrap_or_else(|region_ref| (*region_ref).clone());
     *non_insertion_variants = variation_data.non_insertion_variants;
     *insertion_variants = variation_data.insertion_variants;
     *ref_coverage = variation_data.ref_coverage;
@@ -882,9 +887,9 @@ pub fn find_del(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     reference_resource: &ReferenceResource,
     region: &Region,
@@ -1115,11 +1120,12 @@ pub fn find_del(
                 region,
             );
 
-            // Java: StructuralVariantsProcessor.java#L244 — iterate softClips3End
-            let mut sc3_keys: Vec<i32> = soft_clips_3_end.keys().cloned().collect();
-            sc3_keys.sort();
+            // Java scans the raw HashMap entrySet here and breaks on the first
+            // matching soft clip. Reproduce that bucket traversal order instead
+            // of sorting numerically, otherwise the wrong breakpoint wins.
+            let sc3_keys = java_hashmap_i32_keys(soft_clips_3_end);
             let mut found = false;
-            for &i in &sc3_keys {
+            for i in sc3_keys {
                 if found {
                     break;
                 }
@@ -1389,13 +1395,11 @@ pub fn find_del(
                 region,
             );
 
-            let mut sc5_keys: Vec<i32> = soft_clips_5_end.keys().cloned().collect();
-            sc5_keys.sort();
-            let mut found = false;
-            for &i in &sc5_keys {
-                if found {
-                    break;
-                }
+            // Java scans the raw HashMap entrySet here and breaks on the first
+            // matching soft clip. Reproduce that bucket traversal order instead
+            // of sorting numerically, otherwise the wrong breakpoint wins.
+            let sc5_keys = java_hashmap_i32_keys(soft_clips_5_end);
+            for i in sc5_keys {
                 let scv = match soft_clips_5_end.get_mut(&i) {
                     Some(s) => s,
                     None => continue,
@@ -1412,6 +1416,8 @@ pub fn find_del(
                     continue;
                 }
                 let mut softp = i;
+                let scv_vc = scv.base.vars_count;
+                let scv_clone = scv.base.clone();
 
                 // Java: StructuralVariantsProcessor.java#L443-L453
                 let m = find_match_default(&seq, reference, softp, -1);
@@ -1440,12 +1446,10 @@ pub fn find_del(
                 let sv = get_sv(non_insertion_variants, bp);
                 sv.type_ = Some("DEL".to_string());
                 sv.pairs += del_vars_count;
-                let scv_vc = soft_clips_5_end.get(&i).map_or(0, |s| s.base.vars_count);
                 sv.splits += scv_vc;
                 sv.clusters += 1;
 
                 // Java: StructuralVariantsProcessor.java#L475 — adjCnt (no reference var)
-                let scv_clone = soft_clips_5_end.get(&i).unwrap().base.clone();
                 let variation = get_variation(non_insertion_variants, bp, &vn);
                 adj_cnt(variation, &scv_clone);
 
@@ -1487,7 +1491,7 @@ pub fn find_del(
                     );
                 }
                 // Java: StructuralVariantsProcessor.java#L508 — break after first match
-                found = true;
+                break;
             }
         }
     }
@@ -1503,9 +1507,9 @@ pub fn find_inv(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     reference_resource: &ReferenceResource,
     region: &Region,
@@ -1615,9 +1619,9 @@ fn find_inv_sub(
     side: Side,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     reference_resource: &ReferenceResource,
     region: &Region,
@@ -1697,7 +1701,7 @@ fn find_inv_sub(
 
             if softp != 0 {
                 // Java: StructuralVariantsProcessor.java#L730-L746
-                let sclip: &mut HashMap<i32, Sclip> = if dir == 1 {
+                let sclip: &mut PositionMap<Sclip> = if dir == 1 {
                     soft_clips_3_end
                 } else {
                     soft_clips_5_end
@@ -1729,7 +1733,7 @@ fn find_inv_sub(
                 }
             } else {
                 // Java: StructuralVariantsProcessor.java#L748-L775 — scan within 2*maxReadLength
-                let sclip: &mut HashMap<i32, Sclip> = if dir == 1 {
+                let sclip: &mut PositionMap<Sclip> = if dir == 1 {
                     soft_clips_3_end
                 } else {
                     soft_clips_5_end
@@ -1875,7 +1879,7 @@ fn find_inv_sub(
 
                 // Java: StructuralVariantsProcessor.java#L841-L843 — adjCnt with optional ref var
                 let scv_base_clone = {
-                    let sclip_map: &HashMap<i32, Sclip> = if dir == 1 {
+                    let sclip_map: &PositionMap<Sclip> = if dir == 1 {
                         soft_clips_3_end
                     } else {
                         soft_clips_5_end
@@ -1937,8 +1941,8 @@ fn find_inv_sub(
                 }
 
                 // Java: StructuralVariantsProcessor.java#L844-L847 — dels5 for realigndel
-                let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::new();
-                let mut map_inner: HashMap<String, i32> = HashMap::new();
+                let mut dels5: HashMap<i32, HashMap<String, i32>> = HashMap::default();
+                let mut map_inner: HashMap<String, i32> = HashMap::default();
                 map_inner.insert(gt.clone(), inv_vars_count);
                 dels5.insert(softp, map_inner);
 
@@ -1950,7 +1954,7 @@ fn find_inv_sub(
                 ref_coverage.insert(softp, ref_cov_val);
 
                 // Java: StructuralVariantsProcessor.java#L849 — mark scv.used
-                let sclip_map_mut: &mut HashMap<i32, Sclip> = if dir == 1 {
+                let sclip_map_mut: &mut PositionMap<Sclip> = if dir == 1 {
                     soft_clips_3_end
                 } else {
                     soft_clips_5_end
@@ -2020,9 +2024,9 @@ fn find_inv_sub(
 #[allow(clippy::too_many_arguments)]
 pub fn findsv(
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     sv_structures: &mut SVStructures,
     softp2sv: &HashMap<i32, Vec<Sclip>>,
@@ -2464,9 +2468,9 @@ pub fn findsv(
 pub fn find_del_disc(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     reference_resource: &ReferenceResource,
     region: &Region,
@@ -2744,9 +2748,9 @@ pub fn find_del_disc(
 pub fn find_inv_disc(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &HashMap<i32, Sclip>,
-    soft_clips_5_end: &HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &PositionMap<Sclip>,
+    soft_clips_5_end: &PositionMap<Sclip>,
     reference: &mut Reference,
     reference_resource: &ReferenceResource,
     region: &Region,
@@ -3013,9 +3017,9 @@ pub fn find_dup_disc(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     reference_resource: &ReferenceResource,
     region: &Region,
@@ -3053,7 +3057,7 @@ pub fn find_dup_disc(
             let ms = dup.mstart;
             let me = dup.mend;
             let cnt = dup.base.vars_count;
-            let end = dup.end;
+            let mut end = dup.end;
             let start = dup.start;
             let pmean = dup.base.mean_position;
             let qmean = dup.base.mean_quality;
@@ -3151,7 +3155,7 @@ pub fn find_dup_disc(
                     mlen = pe - tbp_local;
                     bp = tbp_local;
                     pe -= 1;
-                    let _end_local = pe;
+                    end = pe;
 
                     if soft_clips_5_end.contains_key(&bp) {
                         let current_sclip5 = soft_clips_5_end.get(&bp).unwrap();
@@ -3465,9 +3469,9 @@ pub fn find_all_svs(
     sv_structures: &mut SVStructures,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
     reference: &mut Reference,
     reference_resource: &ReferenceResource,
     region: &Region,
@@ -3598,9 +3602,9 @@ pub fn find_all_svs(
 /// counts on matching existing non-insertion variants.
 pub fn adj_snv(
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &mut PositionMap<i32>,
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
+    ref_coverage: &mut CoverageMap,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
     reference: &Reference,
 ) {
     // Java: StructuralVariantsProcessor.java#L1988-L2013 — 5' soft clips
@@ -3700,8 +3704,8 @@ pub fn adj_snv(
 ///
 /// Debug output of remaining unused soft-clipped reads. Only runs when conf.y is true.
 pub fn output_clipping(
-    soft_clips_5_end: &mut HashMap<i32, Sclip>,
-    soft_clips_3_end: &mut HashMap<i32, Sclip>,
+    soft_clips_5_end: &mut PositionMap<Sclip>,
+    soft_clips_3_end: &mut PositionMap<Sclip>,
 ) {
     let instance = GlobalReadOnlyScope::instance();
 
@@ -3765,9 +3769,9 @@ pub fn process(
     bams: &Option<Vec<String>>,
     splice: &Option<std::collections::BTreeSet<String>>,
     _prev_non_insertion_variants: &mut PositionMap<VariationMap>,
-    _prev_ref_coverage: &mut PositionMap<i32>,
-    _prev_soft_clips_3_end: &mut HashMap<i32, Sclip>,
-    _prev_soft_clips_5_end: &mut HashMap<i32, Sclip>,
+    _prev_ref_coverage: &mut CoverageMap,
+    _prev_soft_clips_3_end: &mut PositionMap<Sclip>,
+    _prev_soft_clips_5_end: &mut PositionMap<Sclip>,
     _prev_reference_sequences: &ReferenceSequenceMap,
     _prev_chr: &str,
     _prev_max_read_length: i32,
@@ -3817,19 +3821,19 @@ pub fn process(
 mod tests {
     use super::*;
     use crate::config::Configuration;
-    use std::collections::HashMap;
+    use crate::prelude::HashMap;
 
     fn init_test_scope() {
         GlobalReadOnlyScope::clear();
         let conf = Configuration::default();
         GlobalReadOnlyScope::init(
             conf,
-            HashMap::new(),
+            HashMap::default(),
             "test_sample",
             None,
             None,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
         );
     }
 
@@ -3883,7 +3887,7 @@ mod tests {
     #[test]
     fn test_fill_and_sort_tmp_sv_filters_by_segment() {
         let curseg = CurrentSegment::new("chr1", 100, 200);
-        let mut entries = HashMap::new();
+        let mut entries = PositionMap::default();
 
         let mut sclip1 = Sclip::default();
         sclip1.base.vars_count = 5;
@@ -3910,9 +3914,9 @@ mod tests {
     }
 
     #[test]
-    fn test_fill_and_sort_tmp_sv_tiebreaks_by_position() {
+    fn test_fill_and_sort_tmp_sv_tiebreaks_by_hashmap_bucket_order() {
         let curseg = CurrentSegment::new("chr1", 100, 200);
-        let mut entries = HashMap::new();
+        let mut entries = PositionMap::default();
 
         let mut later = Sclip::default();
         later.base.vars_count = 7;
@@ -3926,8 +3930,8 @@ mod tests {
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].count, 7);
-        assert_eq!(result[0].position, 120);
-        assert_eq!(result[1].position, 180);
+        assert_eq!(result[0].position, 180);
+        assert_eq!(result[1].position, 120);
     }
 
     #[test]

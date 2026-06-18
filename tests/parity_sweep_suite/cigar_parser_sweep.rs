@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use vardict_rs::prelude::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -6,7 +6,7 @@ use crossbeam_channel::bounded;
 use rayon::prelude::*;
 use rust_htslib::bam::{self, Read as BamRead};
 
-use vardict_rs::data::InitialData;
+use vardict_rs::data::{InitialData, PositionMap};
 use vardict_rs::mods::cigar_parser::CigarParser;
 use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::{Scope, VariantPrinter};
@@ -122,11 +122,11 @@ fn parity_cigar_parser_sweep() {
                 let reference = Arc::new(reference);
 
                 let initial_data = InitialData::new(
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                    PositionMap::default(),
+                    PositionMap::default(),
                 );
                 let scope = Scope::new(
                     bam_path,
@@ -134,7 +134,7 @@ fn parity_cigar_parser_sweep() {
                     Arc::clone(&reference),
                     Arc::clone(&reference_resource),
                     0,
-                    HashSet::new(),
+                    HashSet::default(),
                     VariantPrinter::Out,
                     initial_data,
                 );
@@ -148,13 +148,13 @@ fn parity_cigar_parser_sweep() {
                 parser.init_from_scope(
                     &region,
                     &reference,
-                    &HashSet::new(),
+                    &HashSet::default(),
                     0,
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                    PositionMap::default(),
+                    PositionMap::default(),
                     0, // NOTE: total_reads=0 - real value from RecordPreprocessor not available in sweep. Affects duprate only.
                     0, // NOTE: duplicate_reads=0 - same limitation.
                 );

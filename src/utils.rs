@@ -26,11 +26,60 @@ fn decimal_places(pattern: &str) -> usize {
 
 pub(crate) fn format_half_even(pattern: &str, value: f64) -> String {
     let decimals = decimal_places(pattern);
-    let scale = 10_f64.powi(decimals as i32);
-    if decimals >= 3 && value.abs() * scale == 0.5 {
-        return format!("{:.*}", decimals, 0.0_f64.copysign(value));
+    if let Some(value) = half_even_special_zero(decimals, value) {
+        return format!("{:.*}", decimals, value);
     }
     format!("{:.*}", decimals, value)
+}
+
+/// Shared branch of `format_half_even`: when `decimals >= 3` and the magnitude lands exactly
+/// on the `0.5` ulp boundary at this scale, the formatted value is a sign-preserving zero
+/// rather than `value` itself. Returns `Some(signed_zero)` in that case, `None` otherwise, so
+/// both `format_half_even` and `round_half_even` apply identical rounding semantics.
+#[inline]
+fn half_even_special_zero(decimals: usize, value: f64) -> Option<f64> {
+    let scale = 10_f64.powi(decimals as i32);
+    if decimals >= 3 && value.abs() * scale == 0.5 {
+        Some(0.0_f64.copysign(value))
+    } else {
+        None
+    }
+}
+
+/// Fixed-capacity stack buffer implementing `fmt::Write`, used to format a number without the
+/// heap `String` that `format!` allocates. `write_str` only ever appends valid UTF-8, so
+/// `as_str` is sound. Overflow (capacity exceeded) returns `fmt::Error`, letting callers fall
+/// back to a heap `format!` for the rare oversized value.
+struct StackFmtBuf {
+    buf: [u8; 64],
+    len: usize,
+}
+
+impl StackFmtBuf {
+    #[inline]
+    fn new() -> Self {
+        Self { buf: [0; 64], len: 0 }
+    }
+
+    #[inline]
+    fn as_str(&self) -> &str {
+        // Safety: every byte in `buf[..len]` was copied from a `&str` in `write_str`.
+        unsafe { std::str::from_utf8_unchecked(&self.buf[..self.len]) }
+    }
+}
+
+impl std::fmt::Write for StackFmtBuf {
+    #[inline]
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let bytes = s.as_bytes();
+        let end = self.len + bytes.len();
+        if end > self.buf.len() {
+            return Err(std::fmt::Error);
+        }
+        self.buf[self.len..end].copy_from_slice(bytes);
+        self.len = end;
+        Ok(())
+    }
 }
 
 pub(crate) fn zero_gated_format(pattern: &str, value: f64) -> String {
@@ -170,9 +219,24 @@ pub fn char_at(s: &[u8], index: i32) -> Option<u8> {
 
 // Java: Utils.roundHalfEven() L99-L103
 pub fn round_half_even(pattern: &str, value: f64) -> f64 {
-    format_half_even(pattern, value)
-        .parse::<f64>()
-        .expect("formatted half-even value must parse")
+    use std::fmt::Write as _;
+
+    // Equivalent to `format_half_even(pattern, value).parse()`, but formats into a stack
+    // buffer to avoid the transient heap `String` that `format!` allocates on this hot path
+    // (round_half_even is invoked many times per emitted variant). The formatted bytes — and
+    // thus the parsed value — are identical to `format_half_even`'s, since both apply the same
+    // `decimals` precision and the same `half_even_special_zero` branch.
+    let decimals = decimal_places(pattern);
+    let value = half_even_special_zero(decimals, value).unwrap_or(value);
+
+    let mut buf = StackFmtBuf::new();
+    let formatted = if write!(buf, "{:.*}", decimals, value).is_ok() {
+        buf.as_str().parse::<f64>()
+    } else {
+        // Oversized output (huge magnitude/precision) — fall back to a heap format.
+        format!("{:.*}", decimals, value).parse::<f64>()
+    };
+    formatted.expect("formatted half-even value must parse")
 }
 
 // Java: Utils.getRoundedValueToPrint() L105-L109

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use vardict_rs::prelude::{HashMap, HashSet};
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use vardict_rs::config::{BamNames, Configuration};
 use vardict_rs::data::Region;
 use vardict_rs::modes::SimpleMode;
@@ -688,11 +688,13 @@ pub const CONFIG_PRESETS: &[&str] = &[
     "T2-02",
     "T2-03",
     "CM-FISHER",
+    "CM-TH4",
     "T2-05",
     "CM-PILEUP",
     "T2-07",
     "T2-08",
     "CM-NOSV",
+    "CM-ADAPTOR",
     "T2-10",
     "T3-01",
     "T3-02",
@@ -724,7 +726,7 @@ const _: fn(&str) -> String = config_name_to_slug;
 
 #[allow(dead_code)]
 pub fn run_cell(config_name: &str, region_idx: usize) -> Result<(), String> {
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     let regions = load_region_config();
     let (region_str, bam_path, ref_path) = regions
@@ -812,6 +814,7 @@ pub fn run_simple_mode_region_with_config(
     chr_lengths: HashMap<String, i32>,
     config: Configuration,
 ) -> String {
+    let thread_count = configured_thread_count(config.threads);
     let _guard = init_test_scope_with_config(config, bam_path, ref_path, chr_lengths.clone());
     let mut region = parse_region(region_str);
 
@@ -821,7 +824,11 @@ pub fn run_simple_mode_region_with_config(
     let simple_mode = SimpleMode::new(vec![vec![region]], reference_resource);
     let captured = Arc::new(std::sync::Mutex::new(String::new()));
     GlobalReadOnlyScope::set_variant_printer(VariantPrinter::Buffer(captured.clone()));
-    simple_mode.not_parallel();
+    if let Some(thread_count) = thread_count {
+        simple_mode.parallel(thread_count);
+    } else {
+        simple_mode.not_parallel();
+    }
     take_captured_output(&captured)
 }
 
@@ -939,7 +946,7 @@ pub fn load_config_presets_tsv() -> Vec<(String, HashMap<String, String>)> {
 fn parse_java_flags(flags: &str) -> HashMap<String, String> {
     let tokens: Vec<&str> = flags.split_whitespace().collect();
 
-    let mut parsed = HashMap::new();
+    let mut parsed = HashMap::default();
     let mut index = 0;
     while index < tokens.len() {
         let flag = tokens[index];
@@ -1039,6 +1046,9 @@ pub fn config_preset(name: &str) -> Configuration {
         "CM-FISHER" => {
             config.fisher = true;
         }
+        "CM-TH4" => {
+            config.threads = 4;
+        }
         "T2-05" => {
             config.minr = 4;
             config.goodq = 30.0;
@@ -1060,6 +1070,9 @@ pub fn config_preset(name: &str) -> Configuration {
         }
         "CM-NOSV" => {
             config.disable_sv = true;
+        }
+        "CM-ADAPTOR" => {
+            config.adaptor = vec!["AGATCGGAAGAGC".to_string()];
         }
         "T2-10" => {
             config.min_bias_reads = 1;
@@ -1162,6 +1175,112 @@ pub fn config_preset(name: &str) -> Configuration {
 }
 
 #[allow(dead_code)]
+pub fn configured_thread_count(threads: i32) -> Option<usize> {
+    usize::try_from(threads).ok().filter(|&threads| threads > 1)
+}
+
+#[allow(dead_code)]
+pub fn config_thread_cost_from_threads(threads: i32) -> usize {
+    usize::try_from(threads)
+        .ok()
+        .filter(|&threads| threads > 0)
+        .unwrap_or(1)
+}
+
+#[allow(dead_code)]
+pub fn config_budget_cost(config: &Configuration) -> usize {
+    let thread_cost = config_thread_cost_from_threads(config.threads);
+    let memory_cost = if config.do_pileup { 2 } else { 1 };
+    thread_cost.max(memory_cost)
+}
+
+#[allow(dead_code)]
+pub fn effective_test_thread_count(test_threads: Option<usize>) -> usize {
+    test_threads
+        .or_else(|| std::thread::available_parallelism().ok().map(usize::from))
+        .unwrap_or(1)
+}
+
+#[allow(dead_code)]
+struct ThreadBudgetState {
+    available: usize,
+}
+
+#[allow(dead_code)]
+pub struct ThreadBudget {
+    total: usize,
+    state: Mutex<ThreadBudgetState>,
+    ready: Condvar,
+}
+
+impl ThreadBudget {
+    fn new(total: usize) -> Self {
+        let total = total.max(1);
+        Self {
+            total,
+            state: Mutex::new(ThreadBudgetState { available: total }),
+            ready: Condvar::new(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn acquire(self: &Arc<Self>, requested: usize) -> ThreadBudgetGuard {
+        let requested = requested.max(1).min(self.total);
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        while state.available < requested {
+            state = self
+                .ready
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        state.available -= requested;
+        drop(state);
+        ThreadBudgetGuard {
+            budget: Arc::clone(self),
+            acquired: requested,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub struct ThreadBudgetGuard {
+    budget: Arc<ThreadBudget>,
+    acquired: usize,
+}
+
+impl Drop for ThreadBudgetGuard {
+    fn drop(&mut self) {
+        let mut state = self
+            .budget
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.available += self.acquired;
+        drop(state);
+        self.budget.ready.notify_all();
+    }
+}
+
+static THREAD_BUDGET: OnceLock<Arc<ThreadBudget>> = OnceLock::new();
+
+#[allow(dead_code)]
+pub fn init_thread_budget(test_threads: Option<usize>) -> Arc<ThreadBudget> {
+    Arc::clone(
+        THREAD_BUDGET
+            .get_or_init(|| Arc::new(ThreadBudget::new(effective_test_thread_count(test_threads)))),
+    )
+}
+
+#[allow(dead_code)]
+pub fn thread_budget() -> Arc<ThreadBudget> {
+    Arc::clone(
+        THREAD_BUDGET
+            .get()
+            .expect("thread budget must be initialized before use by the harness main"),
+    )
+}
+
+#[allow(dead_code)]
 pub fn config_presets_for_tier(tier: u8) -> Vec<&'static str> {
     CONFIG_PRESETS
         .iter()
@@ -1203,8 +1322,8 @@ pub fn init_test_scope(chr_lengths: HashMap<String, i32>) -> TestScopeGuard {
         "test_sample",
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
     TestScopeGuard
 }
@@ -1227,8 +1346,8 @@ pub fn init_test_scope_with_bam(
         "test_sample",
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
 
     TestScopeGuard
@@ -1252,8 +1371,8 @@ pub fn init_test_scope_with_config(
         "test_sample",
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
 
     TestScopeGuard
@@ -1277,8 +1396,8 @@ pub fn init_test_scope_with_bam_global(
         "test_sample",
         None,
         None,
-        HashMap::new(),
-        HashMap::new(),
+        HashMap::default(),
+        HashMap::default(),
     );
 
     GlobalTestScopeGuard
@@ -1298,7 +1417,7 @@ pub fn build_scope_for_test<D>(
         ref_path,
         0,
         0,
-        HashMap::new(),
+        HashMap::default(),
         false,
     ));
     Scope::new(
@@ -1307,7 +1426,7 @@ pub fn build_scope_for_test<D>(
         reference,
         reference_resource,
         0,
-        HashSet::new(),
+        HashSet::default(),
         VariantPrinter::Out,
         data,
     )
@@ -1342,6 +1461,11 @@ pub const BAM_TAG_MAP: &[(&str, &str, &str)] = &[
     (
         "hg002",
         "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam",
+        "testdata/hs37d5.fa",
+    ),
+    (
+        "hg005_exome",
+        "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG005-EEogPU_v02-KIT-Av5_CGCATACA_L008.posiSrt.markDup.bam",
         "testdata/hs37d5.fa",
     ),
     (

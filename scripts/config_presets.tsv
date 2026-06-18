@@ -17,6 +17,7 @@ T2-01	-f 0.005 -q 10	Sensitive freq with low quality	2	both
 T2-02	-f 0.1 -r 8	High freq with high reads	2	both
 T2-03	-m 20 -X 5 -q 15	Relaxed realignment with low quality	2	both
 CM-FISHER	--fisher	Call-mode: enable Fisher's exact test (61-col output)	2	both
+CM-TH4	-th 4	Four-thread parallel execution	2	both
 T2-05	-r 4 -q 30 -m 4	Strict across multiple params	2	both
 CM-PILEUP	-p	Call-mode: pileup mode (emit every reference position)	2	both
 T2-07	-f 0.05 -r 1 -B 4	Medium freq with min reads 1 and high bias	2	both
@@ -43,3 +44,4 @@ PW-006	-q 15 -X 1	Pairwise: goodq x vext	4	both
 PW-007	-m 4 -B 4	Pairwise: mismatch x bias	4	both
 PW-008	-X 5 -B 1	Pairwise: vext x bias	4	both
 PW-009	-m 12 -X 3	Pairwise: mismatch x vext	4	both
+CM-ADAPTOR	--adaptor AGATCGGAAGAGC	Call-mode: filter Illumina read-through adaptor in realignment	2	both

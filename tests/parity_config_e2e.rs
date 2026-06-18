@@ -1,6 +1,6 @@
 mod common;
 
-use std::collections::{HashMap, HashSet};
+use vardict_rs::prelude::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::atomic::Ordering;
 
@@ -39,11 +39,13 @@ declarative_test!(
     (parity_config_e2e_push_t2_02, "T2-02"),
     (parity_config_e2e_push_t2_03, "T2-03"),
     (parity_config_e2e_push_cm_fisher, "CM-FISHER"),
+    (parity_config_e2e_push_cm_th4, "CM-TH4"),
     (parity_config_e2e_push_t2_05, "T2-05"),
     (parity_config_e2e_push_cm_pileup, "CM-PILEUP"),
     (parity_config_e2e_push_t2_07, "T2-07"),
     (parity_config_e2e_push_t2_08, "T2-08"),
     (parity_config_e2e_push_cm_nosv, "CM-NOSV"),
+    (parity_config_e2e_push_cm_adaptor, "CM-ADAPTOR"),
     (parity_config_e2e_push_t2_10, "T2-10"),
     (parity_config_e2e_push_t3_01, "T3-01"),
     (parity_config_e2e_push_t3_02, "T3-02"),
@@ -221,10 +223,12 @@ fn binary_b_list_terse_format_regression() {
         .iter()
         .map(|name| common::config_name_to_slug(name))
         .collect();
-    let expected_indices: HashSet<usize> = (0..100).collect();
-    let mut seen_names = HashSet::new();
-    let mut slug_counts: HashMap<String, usize> = HashMap::new();
-    let mut slug_indices: HashMap<String, HashSet<usize>> = HashMap::new();
+    let expected_region_count = common::load_region_config().len();
+    let expected_indices: HashSet<usize> = (0..expected_region_count).collect();
+    let expected_trial_count = expected_slugs.len() * expected_region_count;
+    let mut seen_names = HashSet::default();
+    let mut slug_counts: HashMap<String, usize> = HashMap::default();
+    let mut slug_indices: HashMap<String, HashSet<usize>> = HashMap::default();
     let mut trial_count = 0usize;
 
     for line in stdout.lines() {
@@ -252,14 +256,14 @@ fn binary_b_list_terse_format_regression() {
     }
 
     assert_eq!(
-        trial_count, 4400,
-        "Phase 4 expects exactly 4400 trials; got {trial_count}"
+        trial_count, expected_trial_count,
+        "Phase 4 expects exactly {expected_trial_count} trials; got {trial_count}"
     );
 
     assert_eq!(
         seen_names.len(),
-        4400,
-        "Phase 4 expects 4400 unique trial names; got {}",
+        expected_trial_count,
+        "Phase 4 expects {expected_trial_count} unique trial names; got {}",
         seen_names.len()
     );
     assert_eq!(
@@ -276,8 +280,8 @@ fn binary_b_list_terse_format_regression() {
     for slug in &expected_slugs {
         assert_eq!(
             slug_counts.get(slug).copied(),
-            Some(100),
-            "slug {slug} must appear exactly 100 times"
+            Some(expected_region_count),
+            "slug {slug} must appear exactly {expected_region_count} times"
         );
         assert_eq!(
             slug_indices.get(slug),
@@ -535,9 +539,13 @@ fn assert_config_matches_java_flags(
         config.unique_mode_second_in_pair_enabled, defaults.unique_mode_second_in_pair_enabled,
         "Preset {preset_name} unexpectedly changed unique_mode_second_in_pair_enabled"
     );
-    assert_eq!(
-        config.threads, defaults.threads,
-        "Preset {preset_name} unexpectedly changed threads"
+    assert_int_flag(
+        preset_name,
+        java_flags,
+        "-th",
+        config.threads,
+        defaults.threads,
+        "threads",
     );
     assert_present_bool_flag(
         java_flags,
@@ -596,10 +604,19 @@ fn assert_config_matches_java_flags(
         defaults.exception_counter.load(Ordering::Relaxed),
         "Preset {preset_name} unexpectedly changed exception_counter"
     );
-    assert_eq!(
-        config.adaptor, defaults.adaptor,
-        "Preset {preset_name} unexpectedly changed adaptor"
-    );
+    match java_flags.get("--adaptor") {
+        Some(value) => {
+            let expected: Vec<String> = value.split(',').map(str::to_string).collect();
+            assert_eq!(
+                config.adaptor, expected,
+                "Preset {preset_name} adaptor must match --adaptor flag"
+            );
+        }
+        None => assert_eq!(
+            config.adaptor, defaults.adaptor,
+            "Preset {preset_name} unexpectedly changed adaptor"
+        ),
+    }
     assert_eq!(
         config.crispr_filtering_bp, defaults.crispr_filtering_bp,
         "Preset {preset_name} unexpectedly changed crispr_filtering_bp"

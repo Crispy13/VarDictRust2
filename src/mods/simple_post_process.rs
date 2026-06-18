@@ -1,5 +1,7 @@
-use crate::data::{AlignedVarsData, Variant};
+use crate::config::Configuration;
+use crate::data::{AlignedVarsData, Region, Variant, Vars};
 use crate::mods::output::SimpleOutputVariant;
+use crate::prelude::HashSet;
 use crate::scope::{GlobalReadOnlyScope, Scope};
 use std::panic;
 
@@ -25,84 +27,95 @@ pub fn simple_post_process(scope: Scope<AlignedVarsData>) {
                 return;
             };
 
-            if variants_on_position.sv.is_empty()
-                && (position < region.start || position > region.end)
-            {
-                return;
-            }
-
-            let mut vrefs: Vec<Variant> = Vec::new();
-            if variants_on_position.variants.is_empty() {
-                if !conf.do_pileup {
-                    return;
-                }
-                if let Some(mut vref) = variants_on_position.reference_variant.clone() {
-                    vref.vartype.clear();
-                    vrefs.push(vref);
-                } else {
-                    let output_variant =
-                        SimpleOutputVariant::new(None, &region, &variants_on_position.sv, position);
-                    out.print_line(&output_variant.to_tsv_line(&conf));
-                    return;
-                }
-            } else {
-                let only_variant = variants_on_position.variants.len() == 1;
-                for vref in &variants_on_position.variants {
-                    if vref.refallele.contains('N') {
-                        continue;
-                    }
-                    if vref.refallele == vref.varallele && !conf.do_pileup {
-                        continue;
-                    }
-                    if vref.start_position != position && conf.do_pileup && only_variant {
-                        if let Some(mut ref_var) = variants_on_position.reference_variant.clone() {
-                            ref_var.vartype.clear();
-                            vrefs.push(ref_var);
-                        } else {
-                            let output_variant = SimpleOutputVariant::new(
-                                None,
-                                &region,
-                                &variants_on_position.sv,
-                                position,
-                            );
-                            out.print_line(&output_variant.to_tsv_line(&conf));
-                            let mut ref_var = Variant::default();
-                            ref_var.vartype.clear();
-                            vrefs.push(ref_var);
-                        }
-                    }
-                    let vartype = vref.var_type();
-                    let is_good = vref.is_good_var(
-                        variants_on_position.reference_variant.as_ref(),
-                        Some(&vartype),
-                        &splice,
-                        &conf,
-                    );
-                    if !is_good && !conf.do_pileup {
-                        continue;
-                    }
-
-                    let mut owned_vref = vref.clone();
-                    owned_vref.vartype = vartype;
-                    vrefs.push(owned_vref);
-                }
-            }
-
-            for mut vref in vrefs {
-                if vref.vartype == "Complex" {
-                    vref.adj_complex();
-                }
-                if conf.crispr_cutting_site == 0 {
-                    vref.crispr = 0;
-                }
-                let output_variant = SimpleOutputVariant::new(
-                    Some(&vref),
-                    &region,
-                    &variants_on_position.sv,
-                    position,
-                );
-                out.print_line(&output_variant.to_tsv_line(&conf));
+            for line in simple_post_process_position_lines(
+                position,
+                variants_on_position,
+                &region,
+                &splice,
+                conf,
+            ) {
+                out.print_owned_line(line);
             }
         }));
     }
+}
+
+/// Render one aligned position using SimplePostProcessModule.accept() rules.
+/// Java source: SimplePostProcessModule.java:L43-L103
+pub fn simple_post_process_position_lines(
+    position: i32,
+    variants_on_position: &Vars,
+    region: &Region,
+    splice: &HashSet<String>,
+    conf: &Configuration,
+) -> Vec<String> {
+    if variants_on_position.sv.is_empty() && (position < region.start || position > region.end) {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    let mut vrefs: Vec<Variant> = Vec::new();
+    if variants_on_position.variants.is_empty() {
+        if !conf.do_pileup {
+            return lines;
+        }
+        if let Some(ref rv) = variants_on_position.reference_variant {
+            let mut vref = rv.clone();
+            vref.vartype.clear();
+            vrefs.push(vref);
+        } else {
+            let output_variant =
+                SimpleOutputVariant::new(None, region, &variants_on_position.sv, position);
+            lines.push(output_variant.to_tsv_line(conf));
+            return lines;
+        }
+    } else {
+        let only_variant = variants_on_position.variants.len() == 1;
+        let ref_var_owned = variants_on_position.reference_variant.clone();
+        for &idx in &variants_on_position.variants {
+            let vref = variants_on_position.arena[idx].clone();
+            if vref.refallele.contains('N') {
+                continue;
+            }
+            if vref.refallele == vref.varallele && !conf.do_pileup {
+                continue;
+            }
+            if vref.start_position != position && conf.do_pileup && only_variant {
+                if let Some(ref_var) = ref_var_owned.clone() {
+                    let mut rv = ref_var;
+                    rv.vartype.clear();
+                    vrefs.push(rv);
+                } else {
+                    let output_variant =
+                        SimpleOutputVariant::new(None, region, &variants_on_position.sv, position);
+                    lines.push(output_variant.to_tsv_line(conf));
+                    let mut rv = Variant::default();
+                    rv.vartype.clear();
+                    vrefs.push(rv);
+                }
+            }
+            let vartype = vref.var_type();
+            let is_good = vref.is_good_var(ref_var_owned.as_ref(), Some(&vartype), splice, conf);
+            if !is_good && !conf.do_pileup {
+                continue;
+            }
+
+            let mut owned_vref = vref;
+            owned_vref.vartype = vartype;
+            vrefs.push(owned_vref);
+        }
+    }
+
+    for mut vref in vrefs {
+        if vref.vartype == "Complex" {
+            vref.adj_complex();
+        }
+        if conf.crispr_cutting_site == 0 {
+            vref.crispr = 0;
+        }
+        let output_variant =
+            SimpleOutputVariant::new(Some(&vref), region, &variants_on_position.sv, position);
+        lines.push(output_variant.to_tsv_line(conf));
+    }
+    lines
 }

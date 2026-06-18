@@ -31,10 +31,11 @@ except ModuleNotFoundError:
     )
 
 
-ALL_BAM_TAGS = ["na12878_exome", "hg002", "na12878_lowcov"]
+ALL_BAM_TAGS = ["na12878_exome", "hg002", "hg005_exome", "na12878_lowcov"]
 BAM_MAP = {
     "na12878_exome": "testdata/NA12878.chrom20.ILLUMINA.bwa.CEU.exome.20121211.bam",
     "hg002": "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam",
+    "hg005_exome": "testdata/151002_7001448_0359_AC7F6GANXX_Sample_HG005-EEogPU_v02-KIT-Av5_CGCATACA_L008.posiSrt.markDup.bam",
     "na12878_lowcov": "testdata/NA12878.mapped.ILLUMINA.bwa.CEU.low_coverage.20121211.bam",
 }
 SOMATIC_PAIR_MAP = {
@@ -61,6 +62,9 @@ REF_REL = Path("testdata/hs37d5.fa")
 VARDICT_BIN_REL = Path("VarDictJava/build/install/VarDict/bin/VarDict")
 DEFAULT_SHM_ROOT = Path("/dev/shm/sweep_fixtures")
 FALLBACK_SHM_ROOT = Path("/tmp/sweep_fixtures_shm")
+DEFAULT_SORT_BUFFER_SIZE = "128M"
+SORT_ENV = "C"
+SORT_KEY = "Region<TAB>row"
 
 
 @dataclass(frozen=True)
@@ -160,6 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Write only output TSVs and skip module JSONL fixture generation. "
+            "CM-PILEUP TSVs are sorted by Region and row before finalization. "
             "Expected non-empty selections fail if no complete TSV/sidecar output is produced."
         ),
     )
@@ -387,6 +392,138 @@ def compute_file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def fixture_sort_buffer_size() -> str:
+    return (
+        os.environ.get("VARDICT_SWEEP_FIXTURE_SORT_BUFFER_SIZE")
+        or os.environ.get("VARDICT_E2E_SWEEP_SORT_BUFFER_SIZE")
+        or DEFAULT_SORT_BUFFER_SIZE
+    )
+
+
+def should_sort_final_output(config_name: str | None) -> bool:
+    return True
+
+
+def looks_like_tile_key(value: bytes) -> bool:
+    chrom_and_range = value.split(b":", 1)
+    if len(chrom_and_range) != 2:
+        return False
+    start_and_end = chrom_and_range[1].split(b"-", 1)
+    if len(start_and_end) != 2:
+        return False
+    return start_and_end[0].isdigit() and start_and_end[1].isdigit()
+
+
+def detect_region_column(fields: list[bytes]) -> int | None:
+    for idx, field in enumerate(fields):
+        if field.lower() == b"region":
+            return idx
+    for idx, field in enumerate(fields):
+        if looks_like_tile_key(field):
+            return idx
+    return None
+
+
+def spool_tsv_for_region_sort(tsv_path: Path, spool_path: Path) -> tuple[bytes | None, int]:
+    header: bytes | None = None
+    region_index: int | None = None
+    row_count = 0
+    with tsv_path.open("rb") as input_handle, spool_path.open("wb") as spool_handle:
+        for raw_line in input_handle:
+            row = raw_line.rstrip(b"\r\n")
+            if not row.strip():
+                continue
+            fields = row.split(b"\t")
+            if region_index is None:
+                detected_index = detect_region_column(fields)
+                if detected_index is None:
+                    raise ValueError(f"Could not locate Region column in {tsv_path}: {row!r}")
+                region_index = detected_index
+                if fields[region_index].lower() == b"region":
+                    header = row
+                    continue
+            if region_index >= len(fields):
+                raise ValueError(f"Missing Region column {region_index} in {tsv_path}: {row!r}")
+            spool_handle.write(fields[region_index])
+            spool_handle.write(b"\t")
+            spool_handle.write(row)
+            spool_handle.write(b"\n")
+            row_count += 1
+    return header, row_count
+
+
+def strip_region_sort_prefix(sorted_spool_path: Path, output_path: Path, header: bytes | None) -> None:
+    with sorted_spool_path.open("rb") as sorted_handle, output_path.open("wb") as output_handle:
+        if header is not None:
+            output_handle.write(header)
+            output_handle.write(b"\n")
+        for raw_line in sorted_handle:
+            _region, separator, row = raw_line.partition(b"\t")
+            if not separator:
+                raise ValueError(f"Invalid sorted spool record without tab: {raw_line!r}")
+            output_handle.write(row)
+
+
+def sort_final_output_if_required(stdout_path: Path, config_name: str | None) -> dict[str, object] | None:
+    if not should_sort_final_output(config_name):
+        return None
+
+    sort_buffer = fixture_sort_buffer_size()
+    spool_path = stdout_path.with_name(f"{stdout_path.name}.region-sort-input")
+    sorted_spool_path = stdout_path.with_name(f"{stdout_path.name}.region-sort-output")
+    sorted_stdout_path = stdout_path.with_name(f"{stdout_path.name}.sorted")
+    try:
+        header, row_count = spool_tsv_for_region_sort(stdout_path, spool_path)
+        sort_env = os.environ.copy()
+        sort_env["LC_ALL"] = SORT_ENV
+        sort_env["TMPDIR"] = str(stdout_path.parent)
+        subprocess.run(
+            [
+                "sort",
+                f"--buffer-size={sort_buffer}",
+                "--parallel=1",
+                f"--temporary-directory={stdout_path.parent}",
+                str(spool_path),
+                "-o",
+                str(sorted_spool_path),
+            ],
+            env=sort_env,
+            check=True,
+        )
+        strip_region_sort_prefix(sorted_spool_path, sorted_stdout_path, header)
+        os.replace(sorted_stdout_path, stdout_path)
+        return {
+            "mode": "sorted",
+            "key": SORT_KEY,
+            "lc_all": SORT_ENV,
+            "sort_buffer_size": sort_buffer,
+            "sort_parallel": 1,
+            "rows": row_count,
+        }
+    finally:
+        spool_path.unlink(missing_ok=True)
+        sorted_spool_path.unlink(missing_ok=True)
+        sorted_stdout_path.unlink(missing_ok=True)
+
+
+def final_output_chunk_records(
+    stdout_path: Path,
+    *,
+    wall_s: float,
+    num_tiles: int,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "idx": 0,
+            "md5_raw": compute_file_md5(stdout_path),
+            "wall_s": wall_s,
+            "num_tiles": num_tiles,
+            "byte_range": [0, stdout_path.stat().st_size],
+            "derived_from": "final_sorted_output",
+        }
+    ]
+
+
 def write_chunks_json(
     path: Path,
     *,
@@ -399,6 +536,9 @@ def write_chunks_json(
     generator_flags: list[str],
     preset: str,
     bed_sha256: str,
+    output_order: dict[str, object] | None = None,
+    source_num_chunks: int | None = None,
+    source_chunks: list[dict[str, object]] | None = None,
 ) -> None:
     payload = {
         "monolithic_md5": monolithic_md5,
@@ -413,6 +553,12 @@ def write_chunks_json(
         "preset": preset,
         "bed_sha256": bed_sha256,
     }
+    if output_order is not None:
+        payload["output_order"] = output_order
+    if source_num_chunks is not None:
+        payload["source_num_chunks"] = source_num_chunks
+    if source_chunks is not None:
+        payload["source_chunks"] = source_chunks
     tmp_path = path.with_name(f"{path.name}.tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
     with tmp_path.open("w", encoding="utf-8") as handle:
@@ -927,6 +1073,12 @@ def append_timing_rows(timings_path: Path, results: list[ShardResult]) -> None:
             )
 
 
+def default_thread_flags(config_flags: tuple[str, ...]) -> list[str]:
+    """Return the generator's default thread flag unless the preset owns it."""
+
+    return [] if "-th" in config_flags else ["-th", "1"]
+
+
 def execute_shard_run(
     shard: Shard,
     force: bool,
@@ -1009,8 +1161,7 @@ def execute_shard_run(
                 str(reference),
                 "-b",
                 bam_arg,
-                "-th",
-                "1",
+                *default_thread_flags(config_flags),
                 "-c",
                 "1",
                 "-S",
@@ -1096,19 +1247,36 @@ def execute_shard_run(
                     "*.jsonl.zst",
                 )
 
+        output_order = sort_final_output_if_required(stdout_path, config_name)
+        source_num_chunks = num_chunks if output_order is not None else None
+        source_chunks = chunk_records if output_order is not None else None
+        final_chunk_records = (
+            final_output_chunk_records(
+                stdout_path,
+                wall_s=sum(chunk_wall_s),
+                num_tiles=total_bed_lines,
+            )
+            if output_order is not None
+            else chunk_records
+        )
+        final_num_chunks = 1 if output_order is not None else num_chunks
+
         monolithic_md5 = compute_file_md5(stdout_path)
         monolithic_bytes = stdout_path.stat().st_size
         write_chunks_json(
             chunks_path,
             monolithic_md5=monolithic_md5,
             monolithic_bytes=monolithic_bytes,
-            num_chunks=num_chunks,
+            num_chunks=final_num_chunks,
             chunk_size=chunk_size,
-            chunks=chunk_records,
+            chunks=final_chunk_records,
             vardict_commit=get_vardict_commit(root),
             generator_flags=list(config_flags),
             preset=config_name if config_name else "default",
             bed_sha256=compute_file_sha256(shard.bed_path),
+            output_order=output_order,
+            source_num_chunks=source_num_chunks,
+            source_chunks=source_chunks,
         )
 
         if zstd_executor is None:

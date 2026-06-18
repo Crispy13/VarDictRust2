@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use vardict_rs::prelude::HashSet;
 use std::sync::Arc;
 
-use vardict_rs::data::{InitialData, Region};
+use vardict_rs::data::{CoverageMap, InitialData, PositionMap, Region, VariationMap};
 use vardict_rs::mods::sam_file_parser::sam_file_parser_process;
 use vardict_rs::reference::{Reference, ReferenceResource};
 use vardict_rs::scope::{Scope, VariantPrinter};
@@ -29,11 +29,11 @@ fn collect_sam_file_parser_result(
     reference_resource: Arc<ReferenceResource>,
 ) -> SamFileParserResult {
     let initial_data = InitialData::new(
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        PositionMap::<VariationMap>::default(),
+        PositionMap::<VariationMap>::default(),
+        CoverageMap::default(),
+        PositionMap::default(),
+        PositionMap::default(),
     );
     let scope = Scope::new(
         bam_path,
@@ -41,7 +41,7 @@ fn collect_sam_file_parser_result(
         Arc::new(Reference::new()),
         reference_resource,
         0,
-        HashSet::new(),
+        HashSet::default(),
         VariantPrinter::Out,
         initial_data,
     );

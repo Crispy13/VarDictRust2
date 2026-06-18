@@ -8,7 +8,7 @@ tools: [vscode, read, agent, browser, edit, search, web, 'gitkraken/*', todo]
 model: GPT-5.5 (copilot)
 user-invocable: true
 disable-model-invocation: true
-agents: [Port Engineer, Parity Verifier, Review Gate, Module Analyst, Gerneral-Purpose Agent, Planner, Explore]
+agents: [Port Engineer, Parity Verifier, Review Gate, Module Analyst, Gerneral-Purpose Agent]
 ---
 
 ## Persona
@@ -49,10 +49,10 @@ After ALL modules complete Steps 0-7 and are committed, run the cross-module E2E
 
 1. **Evidence Collection** — Dispatch **Parity Verifier** with `config-e2e-diagnosis` Phase 1 and the routed red artifact path. Phase 1 must inspect the existing `parity-failure-report.json` first and use it as the default evidence source when it is schema-compatible, diagnosis-ready, and full-scope complete (`planned_*`, `tested_*`, `halted_early`, `original_matrix_scope`, and `warning_summary`). Only when the artifact is missing, incompatible, or not ready may the verifier rerun the sweep, and that rerun must preserve the same full declared scope unless the user explicitly approves a diagnostic narrowing. The verifier writes the E2E evidence report to session memory.
 2. If PASS → E2E gate passes. Update active plan.
-3. **Diagnosis Dispatch** — If FAIL, run the global `plan-duck` skill on the artifact-backed Phase 1 evidence report and write the reviewed diagnosis plan file to `/memories/session/e2e-config-diagnosis-plan.md`. Dispatch **Parity Verifier** with that plan file to execute `config-e2e-diagnosis` Phases 2 and 3 as one diagnosis/handoff pass. Phase 2/3 must confirm the exact live freshness replay tuple before any repair handoff; if replay is stale, impossible, or scope-shifted, return to Step 1 for a fresh full-scope evidence refresh.
-4. **Repair Dispatch** — Only if the completed Phase 2/3 pass isolates a root-cause module, defines the failing-test handoff, and confirms the exact live replay still reproduces may Orchestrator run the global `plan-duck` skill on the combined Phase 2/3 outputs and write the reviewed repair plan file to `/memories/session/e2e-config-repair-plan.md`. Dispatch **Port Engineer** with that plan file to execute `mismatch-repair`. If the Phase 2/3 report an infrastructure defect instead, stop the E2E fix loop and route that infrastructure work explicitly.
+3. **Diagnosis Dispatch** — If FAIL, use Copilot CLI plan mode on the artifact-backed Phase 1 evidence report and write the reviewed diagnosis plan file to `/memories/session/e2e-config-diagnosis-plan.md`. Dispatch **Parity Verifier** with that plan file to execute `config-e2e-diagnosis` Phases 2 and 3 as one diagnosis/handoff pass. Phase 2/3 must confirm the exact live freshness replay tuple before any repair handoff; if replay is stale, impossible, or scope-shifted, return to Step 1 for a fresh full-scope evidence refresh.
+4. **Repair Dispatch** — Only if the completed Phase 2/3 pass isolates a root-cause module, defines the failing-test handoff, and confirms the exact live replay still reproduces may Orchestrator use Copilot CLI plan mode on the combined Phase 2/3 outputs and write the reviewed repair plan file to `/memories/session/e2e-config-repair-plan.md`. Dispatch **Port Engineer** with that plan file to execute `mismatch-repair`. If the Phase 2/3 report an infrastructure defect instead, stop the E2E fix loop and route that infrastructure work explicitly.
 5. **Logic Audit** — After a proven Rust `mismatch-repair` passes focused/module verification, read the repair diff and dispatch **Parity Verifier** with `logic-parity-audit` for the touched Rust module or logic surface before Review Gate and before accepting the full-scope rerun as the next canonical step. If the diff is broad or ambiguous, audit the full touched module. If the audit returns NEEDS_REVIEW, route findings back to Port Engineer. Infrastructure-only repairs, cache refreshes, provenance fixes, and harness repairs are exempt and stay on the infrastructure/workflow review path.
-6. **Verify** — Re-dispatch **Parity Verifier** with `config-e2e-diagnosis` Phase 5 using the existing reports and the reviewed repair plan file for the mechanical rerun of the same full declared scope. Do not insert another `plan-duck` checkpoint before this rerun.
+6. **Verify** — Re-dispatch **Parity Verifier** with `config-e2e-diagnosis` Phase 5 using the existing reports and the reviewed repair plan file for the mechanical rerun of the same full declared scope. Do not insert another plan-mode checkpoint before this rerun.
 7. Loop Steps 3-6 until all config E2E tests pass or escalate after 3 fix cycles.
 
 This gate uses all 44 config presets from `scripts/config_presets.tsv` (T1, T2, T3, PW tiers). Tier promotion to nightly/sweep coverage flows through `tiered-config-test`.
@@ -111,7 +111,7 @@ After each decision, append to copilot-desk/ decision log:
   - Port Engineer: `faithful-port`, `mismatch-repair`
   - Parity Verifier: `module-parity-test`, `logic-parity-audit`, `shard-diagnosis`, `tiered-config-test`, `config-e2e-diagnosis`
   - Review Gate: `change-impact-review`, `codebase-doc-manage`
-  - Orchestrator: `git-commit`, `workflow-router`, `plan-duck`
+  - Orchestrator: `git-commit`, `workflow-router`
 
 
 ## Do not complain "tool usage"

@@ -30,3 +30,10 @@ applyTo: '**'
 
 ## Terminal Usage
 - never emit exit at the end of a sync terminal command. It causes agents to wait forever even after the command completes.
+
+## Prohibited Skills
+- **rubberduck-review**  
+    Use CLI's `rubber-duck` mode instead.
+- **plan-duck**  
+    Use CLI's `plan` mode instead.
+

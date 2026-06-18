@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use vardict_rs::prelude::{HashMap, HashSet};
 use std::sync::Arc;
 
 use vardict_rs::data::VariationData;
@@ -59,7 +59,7 @@ fn parity_realigner_all_regions() {
             reference,
             reference_resource,
             variation_data.max_read_length.unwrap_or(0),
-            HashSet::new(),
+            HashSet::default(),
             VariantPrinter::Out,
             variation_data,
         );
@@ -112,7 +112,7 @@ fn parity_realigner_region_1_2324084_2324612() {
         reference,
         reference_resource,
         variation_data.max_read_length.unwrap_or(0),
-        HashSet::new(),
+        HashSet::default(),
         VariantPrinter::Out,
         variation_data,
     );
@@ -163,7 +163,7 @@ fn parity_realigner_region_1_9967324_9968024() {
         reference,
         reference_resource,
         variation_data.max_read_length.unwrap_or(0),
-        HashSet::new(),
+        HashSet::default(),
         VariantPrinter::Out,
         variation_data,
     );
@@ -214,7 +214,7 @@ fn parity_realigner_region_1_8926126_8926826() {
         reference,
         reference_resource,
         variation_data.max_read_length.unwrap_or(0),
-        HashSet::new(),
+        HashSet::default(),
         VariantPrinter::Out,
         variation_data,
     );
@@ -271,7 +271,7 @@ fn parity_realigner_config_t1_01_1_155006164_155006864() {
         reference,
         reference_resource,
         variation_data.max_read_length.unwrap_or(0),
-        HashSet::new(),
+        HashSet::default(),
         VariantPrinter::Out,
         variation_data,
     );

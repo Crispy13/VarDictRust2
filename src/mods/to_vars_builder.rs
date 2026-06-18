@@ -3,12 +3,13 @@
 //! Ported from: ToVarsBuilder.java (1,194 LOC)
 //! Pipeline stage: `Scope<RealignedVariationData>` → `Scope<AlignedVarsData>`
 
-use std::collections::HashMap;
+use crate::prelude::HashMap;
 
 use regex::Regex;
 
 use crate::config::{Configuration, SVFLANK};
-use crate::data::{AlignedVarsData, PositionMap, Region, Variant, VariationMap, Vars};
+use crate::data::{AlignedVarsData, CoverageMap, PositionMap, Region, Variant, VariationMap, Vars};
+use crate::java_hashmap_order::java_hashmap_i32_order_from_keys;
 use crate::patterns::{
     AMP_ATGC, ANY_SV, BEGIN_DIGITS, BEGIN_MINUS_NUMBER, BEGIN_MINUS_NUMBER_CARET, CARET_ATGNC,
     DUP_NUM, HASH_GROUP_CARET_GROUP, INV_NUM, SOME_SV_NUMBERS,
@@ -28,7 +29,7 @@ const REF_70_BASES: i32 = 70;
 
 fn chromosome_limit(region: &Region, ref_map: &ReferenceSequenceMap) -> i32 {
     GlobalReadOnlyScope::with_instance(|scope| scope.chr_lengths.get(&region.chr).copied())
-        .or_else(|| ref_map.keys().copied().max())
+        .or_else(|| ref_map.max_position())
         .unwrap_or(0)
 }
 
@@ -363,11 +364,11 @@ pub fn create_variant(
     total_pos_coverage: i32,
     var: &mut Vec<Variant>,
     debug_lines: &mut Vec<String>,
-    keys: &[String],
+    keys: &[&str],
     hicov: i32,
     conf: &Configuration,
 ) {
-    for description_string in keys {
+    for &description_string in keys {
         if description_string == "SV" {
             // Trap T13: SV string format
             if let Some(sv) = &non_insertion_variations.sv {
@@ -408,7 +409,7 @@ pub fn create_variant(
         let lo_divisor = if locnt != 0 { locnt as f64 } else { 0.5_f64 };
 
         let mut tvref = Variant::default();
-        tvref.description_string = description_string.clone();
+        tvref.description_string = description_string.to_owned();
         tvref.position_coverage = cnt.vars_count;
         tvref.vars_count_on_forward = fwd;
         tvref.vars_count_on_reverse = rev;
@@ -464,7 +465,7 @@ pub fn create_insertion(
     mut hicov: i32,
     insertion_variants: &PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
-    ref_coverage: &PositionMap<i32>,
+    ref_coverage: &CoverageMap,
     ref_map: &ReferenceSequenceMap,
     conf: &Configuration,
 ) -> i32 {
@@ -473,11 +474,14 @@ pub fn create_insertion(
         None => return total_pos_coverage,
     };
 
-    let mut insertion_desc_strings: Vec<String> =
-        insertion_variations.entries.keys().cloned().collect();
-    insertion_desc_strings.sort(); // Trap T5: lexicographic sort
+    let mut insertion_desc_strings: Vec<&str> = insertion_variations
+        .entries
+        .keys()
+        .map(String::as_str)
+        .collect();
+    insertion_desc_strings.sort_unstable(); // Trap T5: lexicographic sort
 
-    for description_string in &insertion_desc_strings {
+    for description_string in insertion_desc_strings {
         // Trap T25: totalPosCoverage updated for '&' descriptions
         if description_string.contains('&') && ref_coverage.contains_key(&(position + 1)) {
             total_pos_coverage = *ref_coverage.get(&(position + 1)).unwrap();
@@ -532,7 +536,7 @@ pub fn create_insertion(
         let lo_divisor = if locnt != 0 { locnt as f64 } else { 0.5_f64 };
 
         let mut tvref = Variant::default();
-        tvref.description_string = description_string.clone();
+        tvref.description_string = description_string.to_owned();
         tvref.position_coverage = cnt.vars_count;
         tvref.vars_count_on_forward = fwd;
         tvref.vars_count_on_reverse = rev;
@@ -597,10 +601,12 @@ pub fn collect_vars_at_position(
         if tvar.description_string == ref_desc {
             get_or_put_vars(aligned_variants, position).reference_variant = Some(tvar.clone());
         } else {
+            let desc = tvar.description_string.clone();
             let vars = get_or_put_vars(aligned_variants, position);
-            vars.variants.push(tvar.clone());
-            vars.var_description_string_to_variants
-                .insert(tvar.description_string.clone(), tvar.clone());
+            let idx = vars.arena.len();
+            vars.arena.push(tvar.clone());
+            vars.variants.push(idx);
+            vars.var_description_string_to_variants.insert(desc, idx);
             if tvar.frequency > maxfreq {
                 maxfreq = tvar.frequency;
             }
@@ -660,6 +666,53 @@ pub fn is_the_same_variation_on_ref(
 // ---------------------------------------------------------------------------
 // Cluster C: collectReferenceVariants + process
 // ---------------------------------------------------------------------------
+
+pub enum IncrementalProcessEvent {
+    Position { position: i32, vars: Vars },
+    ReadyBefore(i32),
+}
+
+fn sorted_position_keys<V>(map: &PositionMap<V>) -> Vec<i32> {
+    let mut keys: Vec<i32> = map.keys().copied().collect();
+    keys.sort_unstable();
+    keys
+}
+
+fn sorted_coverage_keys(map: &CoverageMap) -> Vec<i32> {
+    let mut keys: Vec<i32> = map.keys().collect();
+    keys.sort_unstable();
+    keys
+}
+
+fn prune_position_map_before<V>(
+    map: &mut PositionMap<V>,
+    sorted_keys: &[i32],
+    cursor: &mut usize,
+    limit: i32,
+) {
+    while sorted_keys
+        .get(*cursor)
+        .is_some_and(|&position| position < limit)
+    {
+        map.remove(&sorted_keys[*cursor]);
+        *cursor += 1;
+    }
+}
+
+fn prune_coverage_map_before(
+    map: &mut CoverageMap,
+    sorted_keys: &[i32],
+    cursor: &mut usize,
+    limit: i32,
+) {
+    while sorted_keys
+        .get(*cursor)
+        .is_some_and(|&position| position < limit)
+    {
+        map.remove(&sorted_keys[*cursor]);
+        *cursor += 1;
+    }
+}
 
 /// Ported from: ToVarsBuilder.java:L1018-L1030
 /// Build DEBUG field from accumulated debug lines.
@@ -737,7 +790,7 @@ pub fn collect_reference_variants(
     debug_lines: &[String],
     ref_map: &ReferenceSequenceMap,
     region: &Region,
-    ref_coverage: &PositionMap<i32>,
+    ref_coverage: &CoverageMap,
     non_insertion_variants: &PositionMap<VariationMap>,
     duprate: f64,
     conf: &Configuration,
@@ -753,12 +806,16 @@ pub fn collect_reference_variants(
         if rv.frequency >= conf.freq {
             genotype1 = rv.description_string.clone();
         } else if !variations_at_pos.variants.is_empty() {
-            genotype1 = variations_at_pos.variants[0].description_string.clone();
+            genotype1 = variations_at_pos.arena[variations_at_pos.variants[0]]
+                .description_string
+                .clone();
         } else {
             genotype1 = rv.description_string.clone();
         }
     } else if !variations_at_pos.variants.is_empty() {
-        genotype1 = variations_at_pos.variants[0].description_string.clone();
+        genotype1 = variations_at_pos.arena[variations_at_pos.variants[0]]
+            .description_string
+            .clone();
     } else {
         // Trap T9: NPE in Java if referenceVariant is None and variants empty
         // Graceful handling: use empty string
@@ -811,7 +868,9 @@ pub fn collect_reference_variants(
         let variant_count = variations_at_pos.variants.len();
         for vi in 0..variant_count {
             let mut genotype1current = genotype1.clone();
-            let description_string = variations_at_pos.variants[vi].description_string.clone();
+            let description_string = variations_at_pos.arena[variations_at_pos.variants[vi]]
+                .description_string
+                .clone();
             let mut genotype2 = description_string.clone();
             if genotype2.starts_with('+') {
                 genotype2 = format!("+{}", genotype2.len() - 1);
@@ -1033,10 +1092,12 @@ pub fn collect_reference_variants(
         }
 
         // Trap T29: disableSV removal after full variant construction
+        // Drop indices from the list; arena + varn keep them (faithful to Java :958).
         if conf.disable_sv {
+            let arena = &variations_at_pos.arena;
             variations_at_pos
                 .variants
-                .retain(|vref| !ANY_SV.is_match(&vref.varallele));
+                .retain(|&idx| !ANY_SV.is_match(&arena[idx].varallele));
         }
     } else if variations_at_pos.reference_variant.is_some() {
         // No non-reference variants; fill reference variant fields
@@ -1101,7 +1162,7 @@ fn process_variant_finalization(
     variations_at_pos: &mut Vars,
     ref_map: &ReferenceSequenceMap,
     region: &Region,
-    ref_coverage: &PositionMap<i32>,
+    ref_coverage: &CoverageMap,
     _duprate: f64,
     conf: &Configuration,
     debug_lines: &[String],
@@ -1151,12 +1212,12 @@ fn process_variant_finalization(
             if ref_coverage.contains_key(&(start_position - 1)) {
                 *total_pos_coverage = *ref_coverage.get(&(start_position - 1)).unwrap();
             }
-            if variations_at_pos.variants[vi].position_coverage > *total_pos_coverage {
-                *total_pos_coverage = variations_at_pos.variants[vi].position_coverage;
+            let ai = variations_at_pos.variants[vi];
+            if variations_at_pos.arena[ai].position_coverage > *total_pos_coverage {
+                *total_pos_coverage = variations_at_pos.arena[ai].position_coverage;
             }
-            variations_at_pos.variants[vi].frequency = variations_at_pos.variants[vi]
-                .position_coverage as f64
-                / *total_pos_coverage as f64;
+            let pos_cov = variations_at_pos.arena[ai].position_coverage;
+            variations_at_pos.arena[ai].frequency = pos_cov as f64 / *total_pos_coverage as f64;
         }
     }
 
@@ -1283,17 +1344,18 @@ fn process_variant_finalization(
                     tva
                 );
             }
-            variations_at_pos.variants[vi].crispr = n;
+            variations_at_pos.arena[variations_at_pos.variants[vi]].crispr = n;
         }
     }
 
     // Set flanking sequences
-    variations_at_pos.variants[vi].leftseq = join_ref(
+    let ai = variations_at_pos.variants[vi];
+    variations_at_pos.arena[ai].leftseq = join_ref(
         ref_map,
         (start_position - REF_20_BASES).max(1),
         start_position - 1,
     );
-    variations_at_pos.variants[vi].rightseq = join_ref(
+    variations_at_pos.arena[ai].rightseq = join_ref(
         ref_map,
         end_position + 1,
         (end_position + REF_20_BASES).min(chr0),
@@ -1307,37 +1369,45 @@ fn process_variant_finalization(
 
     // Round and set final fields
     // Trap T14: msint field = length of MSI unit string
-    let vref = &mut variations_at_pos.variants[vi];
-    vref.extra_frequency = round_half_even("0.0000", vref.extra_frequency);
-    vref.frequency = round_half_even("0.0000", vref.frequency);
-    vref.high_quality_reads_frequency =
-        round_half_even("0.0000", vref.high_quality_reads_frequency);
-    vref.msi = round_half_even("0.000", msi);
-    vref.msint = msint.len() as i32;
-    vref.shift3 = shift3;
-    vref.start_position = start_position;
-    vref.end_position = end_position;
-    vref.refallele = validate_refallele(refallele);
-    vref.varallele = varallele;
-    vref.genotype = Some(genotype);
-    vref.total_pos_coverage = *total_pos_coverage;
-    vref.ref_forward_coverage = reference_forward_coverage;
-    vref.ref_reverse_coverage = reference_reverse_coverage;
+    {
+        let ai = variations_at_pos.variants[vi];
+        let vref = &mut variations_at_pos.arena[ai];
+        vref.extra_frequency = round_half_even("0.0000", vref.extra_frequency);
+        vref.frequency = round_half_even("0.0000", vref.frequency);
+        vref.high_quality_reads_frequency =
+            round_half_even("0.0000", vref.high_quality_reads_frequency);
+        vref.msi = round_half_even("0.000", msi);
+        vref.msint = msint.len() as i32;
+        vref.shift3 = shift3;
+        vref.start_position = start_position;
+        vref.end_position = end_position;
+        vref.refallele = validate_refallele(refallele);
+        vref.varallele = varallele;
+        vref.genotype = Some(genotype);
+        vref.total_pos_coverage = *total_pos_coverage;
+        vref.ref_forward_coverage = reference_forward_coverage;
+        vref.ref_reverse_coverage = reference_reverse_coverage;
 
-    // Trap T33: strandBiasFlag format "refBias;varBias"
-    if let Some(ref rv) = variations_at_pos.reference_variant {
-        vref.strand_bias_flag = format!("{};{}", rv.strand_bias_flag, vref.strand_bias_flag);
-    } else {
-        vref.strand_bias_flag = format!("0;{}", vref.strand_bias_flag);
+        // Trap T33: strandBiasFlag format "refBias;varBias"
+        let ref_sbf = variations_at_pos
+            .reference_variant
+            .as_ref()
+            .map(|rv| rv.strand_bias_flag.clone());
+        if let Some(rv_sbf) = ref_sbf {
+            vref.strand_bias_flag = format!("{};{}", rv_sbf, vref.strand_bias_flag);
+        } else {
+            vref.strand_bias_flag = format!("0;{}", vref.strand_bias_flag);
+        }
+
+        adjust_variant_counts(position, vref);
     }
-
-    adjust_variant_counts(position, vref);
 
     if start_position != position && conf.do_pileup {
         positions_for_changed_ref_variant.push(position);
     }
 
-    construct_debug_lines(debug_lines, vref, conf);
+    let ai = variations_at_pos.variants[vi];
+    construct_debug_lines(debug_lines, &mut variations_at_pos.arena[ai], conf);
 }
 
 /// Ported from: ToVarsBuilder.java:L88-L190
@@ -1348,7 +1418,7 @@ pub fn process(
     max_read_length: i32,
     region: &Region,
     ref_map: &ReferenceSequenceMap,
-    ref_coverage: &PositionMap<i32>,
+    ref_coverage: &CoverageMap,
     insertion_variants: &PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     duprate: f64,
@@ -1364,13 +1434,11 @@ pub fn process(
         );
     }
 
-    let mut aligned_variants: HashMap<i32, Vars> = HashMap::new();
+    let mut aligned_variants: HashMap<i32, Vars> = HashMap::default();
 
-    // Collect and sort positions for deterministic iteration.
-    // Java uses HashMap for outer map — iteration order is JVM-dependent.
-    // Sort ascending so position+1 mutation from createInsertion is processed correctly.
-    let mut positions: Vec<i32> = non_insertion_variants.keys().copied().collect();
-    positions.sort();
+    // Java iterates the outer HashMap directly. Use current-key bucket order so
+    // position+1 mutations from createInsertion see the same visit order surface.
+    let positions = java_hashmap_i32_order_from_keys(non_insertion_variants.keys().copied());
 
     for &position in &positions {
         // Trap T28: error-and-continue — wrap in closure that can handle errors
@@ -1407,13 +1475,144 @@ pub fn process(
     }
 }
 
+/// Incremental simple-mode entry point.
+///
+/// This preserves the Java HashMap-position walk from ToVarsBuilder.process(),
+/// but hands completed Vars containers to the caller immediately so simple mode
+/// does not retain the full region's AlignedVarsData before post-processing.
+#[allow(clippy::too_many_arguments)]
+pub fn process_incremental<F>(
+    max_read_length: i32,
+    region: &Region,
+    ref_map: &ReferenceSequenceMap,
+    ref_coverage: &mut CoverageMap,
+    insertion_variants: &mut PositionMap<VariationMap>,
+    non_insertion_variants: &mut PositionMap<VariationMap>,
+    duprate: f64,
+    mut on_event: F,
+) -> i32
+where
+    F: FnMut(IncrementalProcessEvent),
+{
+    let (conf, has_amplicon_based_calling) = GlobalReadOnlyScope::with_instance(|scope| {
+        (scope.conf.clone(), scope.amplicon_based_calling.is_some())
+    });
+
+    if conf.y {
+        eprintln!(
+            "Current segment: {}:{}-{} ",
+            region.chr, region.start, region.end
+        );
+    }
+
+    let mut aligned_variants: HashMap<i32, Vars> = HashMap::default();
+
+    // Java iterates the outer HashMap directly. Use current-key bucket order so
+    // position+1 mutations from createInsertion see the same visit order surface.
+    let positions = java_hashmap_i32_order_from_keys(non_insertion_variants.keys().copied());
+    let mut suffix_min_positions = vec![i32::MAX; positions.len() + 1];
+    for index in (0..positions.len()).rev() {
+        suffix_min_positions[index] = suffix_min_positions[index + 1].min(positions[index]);
+    }
+    let first_prunable_position = positions.iter().copied().min().unwrap_or(i32::MAX);
+    let non_insertion_prune_keys = sorted_position_keys(non_insertion_variants);
+    let insertion_prune_keys = sorted_position_keys(insertion_variants);
+    let ref_coverage_prune_keys = sorted_coverage_keys(ref_coverage);
+    let mut non_insertion_prune_cursor =
+        non_insertion_prune_keys.partition_point(|&position| position < first_prunable_position);
+    let mut insertion_prune_cursor =
+        insertion_prune_keys.partition_point(|&position| position < first_prunable_position);
+    let mut ref_coverage_prune_cursor =
+        ref_coverage_prune_keys.partition_point(|&position| position < first_prunable_position);
+
+    for (index, &position) in positions.iter().enumerate() {
+        // Trap T28: error-and-continue — wrap in closure that can handle errors.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            process_position(
+                position,
+                &mut aligned_variants,
+                ref_map,
+                ref_coverage,
+                insertion_variants,
+                non_insertion_variants,
+                region,
+                duprate,
+                &conf,
+                has_amplicon_based_calling,
+            )
+        }));
+
+        if let Err(e) = result {
+            eprintln!(
+                "Error processing position {} in {}:{}-{}: {:?}",
+                position, region.chr, region.start, region.end, e
+            );
+        }
+
+        if let Some(vars) = aligned_variants.remove(&position) {
+            on_event(IncrementalProcessEvent::Position { position, vars });
+        }
+        if aligned_variants.is_empty() {
+            let watermark = suffix_min_positions[index + 1];
+            if watermark != i32::MAX {
+                prune_position_map_before(
+                    non_insertion_variants,
+                    &non_insertion_prune_keys,
+                    &mut non_insertion_prune_cursor,
+                    watermark,
+                );
+                prune_position_map_before(
+                    insertion_variants,
+                    &insertion_prune_keys,
+                    &mut insertion_prune_cursor,
+                    watermark,
+                );
+                prune_coverage_map_before(
+                    ref_coverage,
+                    &ref_coverage_prune_keys,
+                    &mut ref_coverage_prune_cursor,
+                    // Future long-DEL finalization can still read coverage just before
+                    // the next remaining variant position; match non-incremental ToVars.
+                    watermark.saturating_sub(2),
+                );
+            }
+            on_event(IncrementalProcessEvent::ReadyBefore(watermark));
+        }
+    }
+
+    if !aligned_variants.is_empty() {
+        let mut remaining_positions: Vec<i32> = aligned_variants.keys().copied().collect();
+        remaining_positions.sort();
+        for (index, position) in remaining_positions.iter().copied().enumerate() {
+            if let Some(vars) = aligned_variants.remove(&position) {
+                on_event(IncrementalProcessEvent::Position { position, vars });
+            }
+            let next_remaining_position = remaining_positions
+                .get(index + 1)
+                .copied()
+                .unwrap_or(i32::MAX);
+            on_event(IncrementalProcessEvent::ReadyBefore(
+                next_remaining_position,
+            ));
+        }
+    }
+
+    on_event(IncrementalProcessEvent::ReadyBefore(i32::MAX));
+
+    if conf.y {
+        eprintln!("TIME: Finish preparing vars");
+    }
+
+    max_read_length
+}
+
 /// Process a single position in the main loop.
 #[allow(clippy::too_many_arguments)]
 fn process_position(
     position: i32,
     aligned_variants: &mut HashMap<i32, Vars>,
     ref_map: &ReferenceSequenceMap,
-    ref_coverage: &PositionMap<i32>,
+    ref_coverage: &CoverageMap,
     insertion_variants: &PositionMap<VariationMap>,
     non_insertion_variants: &mut PositionMap<VariationMap>,
     region: &Region,
@@ -1443,8 +1642,11 @@ fn process_position(
         }
     }
 
+    // Cache ref_coverage lookup once — avoids 2-3 separate probes below.
+    let ref_cov_opt = ref_coverage.get(&position).copied();
+
     // Skip if no SV and no coverage
-    if vars_at_cur_position.sv.is_none() && !ref_coverage.contains_key(&position) {
+    if vars_at_cur_position.sv.is_none() && ref_cov_opt.is_none() {
         return;
     }
 
@@ -1460,26 +1662,31 @@ fn process_position(
         return;
     }
 
-    // Check coverage
-    if !ref_coverage.contains_key(&position) || *ref_coverage.get(&position).unwrap() == 0 {
-        let sv_type = vars_at_cur_position
-            .sv
-            .as_ref()
-            .and_then(|sv| sv.type_.as_deref())
-            .unwrap_or("null");
-        eprintln!(
-            "Error tcov: {} {} {} {} {}",
-            region.chr, position, region.start, region.end, sv_type
-        );
-        return;
-    }
-
-    let mut total_pos_coverage = *ref_coverage.get(&position).unwrap();
+    // Check coverage (collapses the previous contains_key + get + unwrap triple-probe)
+    let mut total_pos_coverage = match ref_cov_opt {
+        Some(cov) if cov != 0 => cov,
+        _ => {
+            let sv_type = vars_at_cur_position
+                .sv
+                .as_ref()
+                .and_then(|sv| sv.type_.as_deref())
+                .unwrap_or("null");
+            eprintln!(
+                "Error tcov: {} {} {} {} {}",
+                region.chr, position, region.start, region.end, sv_type
+            );
+            return;
+        }
+    };
     let hicov = calc_hicov(insertion_variants.get(&position), vars_at_cur_position);
 
     let mut var: Vec<Variant> = Vec::new();
-    let mut keys: Vec<String> = vars_at_cur_position.entries.keys().cloned().collect();
-    keys.sort(); // Trap T4,T5: lexicographic sort
+    let mut keys: Vec<&str> = vars_at_cur_position
+        .entries
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable(); // Trap T4,T5: lexicographic sort
 
     let mut debug_lines: Vec<String> = Vec::new();
 
@@ -1539,12 +1746,8 @@ fn process_position(
         has_amplicon_based_calling,
     );
 
-    variations_at_pos.var_description_string_to_variants = variations_at_pos
-        .variants
-        .iter()
-        .cloned()
-        .map(|variant| (variant.description_string.clone(), variant))
-        .collect();
+    // Arena + index views are already consistent after collect_vars_at_position;
+    // the former `:1730` rebuild is not needed.
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workflow Management"
+  short_description: "Change VarDict workflow infrastructure"
+  default_prompt: "Use $workflow-management to safely modify VarDict workflow skills, agents, instructions, CI, scripts, or test harness files."

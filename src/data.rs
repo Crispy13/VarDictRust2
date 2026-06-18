@@ -1,19 +1,474 @@
 use std::collections::BTreeMap;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use indexmap::IndexMap;
-use rustc_hash::FxBuildHasher;
 use serde::de::Deserializer;
 use serde::ser::{SerializeSeq, Serializer};
 
 use crate::config::Configuration;
 use crate::patterns::ANY_SV;
+use crate::prelude::{HashMap, HashSet};
 use crate::utils::{substr, substr_with_len};
 
-pub type PositionMap<V> = HashMap<i32, V, FxBuildHasher>;
-pub type VariationEntries = IndexMap<String, Variation, FxBuildHasher>;
+pub type PositionMap<V> = HashMap<i32, V>;
+
+// ─── CoverageMap: dense Vec-backed map for ref_coverage (i32 → i32) ──────────
+//
+// Replaces `PositionMap<i32>` for `ref_coverage` only. Positions in a read
+// region are nearly contiguous, so a dense Vec indexed by (pos - base) beats
+// hashbrown probing. Positions below `base` (rare) fall back to a HashMap.
+//
+// Sentinel: ABSENT = i32::MIN means "not inserted". Presence is tracked via
+// `present` count so `is_empty` and `contains_key` are O(1).
+//
+// The `front` field is a logical offset into `dense`: `dense[front]`
+// corresponds to position `base`. This allows O(1) "removal" of the
+// front without draining the Vec. The physical Vec is only compacted
+// (re-based) when the wasted front exceeds COMPACT_THRESHOLD, which bounds
+// the amortized cost of compaction.
+
+const COVERAGE_ABSENT: i32 = i32::MIN;
+/// Compact the dense Vec when `front` exceeds this many ABSENT prefix slots.
+const COMPACT_THRESHOLD: usize = 4096;
+/// Cap on the dense span. Positions `>= base + DENSE_SPAN_CAP` spill to the
+/// `fallback` HashMap instead of growing the dense Vec, bounding it to ~4 MiB.
+/// Byte-neutral: all accessors already check dense-then-fallback. Mirrors the
+/// existing `pos < base` spill (see struct doc: "also used as fallback for
+/// far-future positions").
+const DENSE_SPAN_CAP: i32 = 1 << 20;
+
+/// Dense Vec-backed coverage map. Fast for genomic regions (contiguous positions).
+/// Fallback HashMap handles rare below-base positions.
+#[derive(Clone, Debug)]
+pub struct CoverageMap {
+    /// Logical position of dense[front]; updated on compaction.
+    base: i32,
+    /// Values; dense[front] corresponds to `base`, dense[front+1] to `base+1`, etc.
+    dense: Vec<i32>,
+    /// Logical start index in `dense`; dense[..front] is wasted prefix.
+    front: usize,
+    /// Count of present slots in dense (for is_empty).
+    present: u32,
+    /// Positions < base (rare); also used as fallback for far-future positions.
+    fallback: HashMap<i32, i32>,
+}
+
+impl Default for CoverageMap {
+    fn default() -> Self {
+        Self {
+            base: 0,
+            dense: Vec::new(),
+            front: 0,
+            present: 0,
+            fallback: HashMap::default(),
+        }
+    }
+}
+
+impl CoverageMap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Compact the dense Vec: drop the wasted ABSENT prefix.
+    /// Invariant: `base` = position of `dense[front]`. After compaction,
+    /// `dense[0]` = old `dense[front]`, `front = 0`, `base` unchanged.
+    #[cold]
+    fn compact(&mut self) {
+        if self.front == 0 {
+            return;
+        }
+        self.dense.drain(..self.front);
+        // base stays as-is (it already = position of dense[front] = new dense[0]).
+        self.front = 0;
+    }
+
+    /// Physical index of `pos` in `dense`, or `None` if out of range.
+    /// Invariant: dense[front + i] stores value for position `base + i`.
+    /// So phys = front + (pos - base).
+    #[inline]
+    fn phys_idx(&self, pos: i32) -> Option<usize> {
+        if self.dense.is_empty() || pos < self.base {
+            return None;
+        }
+        let logical = (pos - self.base) as usize;
+        let phys = self.front + logical;
+        if phys < self.dense.len() {
+            Some(phys)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.present == 0 && self.fallback.is_empty()
+    }
+
+    #[inline]
+    pub fn contains_key(&self, pos: &i32) -> bool {
+        match self.phys_idx(*pos) {
+            Some(i) => self.dense[i] != COVERAGE_ABSENT,
+            None => self.fallback.contains_key(pos),
+        }
+    }
+
+    #[inline]
+    pub fn get(&self, pos: &i32) -> Option<&i32> {
+        match self.phys_idx(*pos) {
+            Some(i) => {
+                let v = &self.dense[i];
+                if *v != COVERAGE_ABSENT { Some(v) } else { None }
+            }
+            None => self.fallback.get(pos),
+        }
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, pos: &i32) -> Option<&mut i32> {
+        let pos = *pos;
+        match self.phys_idx(pos) {
+            Some(i) => {
+                let v = &mut self.dense[i];
+                if *v != COVERAGE_ABSENT { Some(v) } else { None }
+            }
+            None => self.fallback.get_mut(&pos),
+        }
+    }
+
+    /// Insert a key-value pair. Returns prior value (None if was absent).
+    /// Maintains `present` count.
+    pub fn insert(&mut self, pos: i32, value: i32) -> Option<i32> {
+        debug_assert!(
+            value != COVERAGE_ABSENT,
+            "value must not equal COVERAGE_ABSENT sentinel"
+        );
+        if self.dense.is_empty() {
+            // First insert (or after full compaction): set base.
+            self.base = pos;
+            self.front = 0;
+            self.dense.push(value);
+            self.present += 1;
+            return None;
+        }
+        if pos >= self.base && pos - self.base < DENSE_SPAN_CAP {
+            let logical = (pos - self.base) as usize;
+            let phys = self.front + logical;
+            if phys >= self.dense.len() {
+                self.dense.resize(phys + 1, COVERAGE_ABSENT);
+            }
+            let old = std::mem::replace(&mut self.dense[phys], value);
+            if old == COVERAGE_ABSENT {
+                self.present += 1;
+                None
+            } else {
+                Some(old)
+            }
+        } else {
+            // pos < base: use fallback
+            self.fallback.insert(pos, value)
+        }
+    }
+
+    /// Remove a position. Returns prior value or None.
+    pub fn remove(&mut self, pos: &i32) -> Option<i32> {
+        let pos = *pos;
+        match self.phys_idx(pos) {
+            Some(i) => {
+                let old = std::mem::replace(&mut self.dense[i], COVERAGE_ABSENT);
+                if old != COVERAGE_ABSENT {
+                    self.present -= 1;
+                    // If we removed the current base slot, advance front+base.
+                    if i == self.front {
+                        // Advance front+base past any ABSENT slots.
+                        let old_front = self.front;
+                        while self.front < self.dense.len()
+                            && self.dense[self.front] == COVERAGE_ABSENT
+                        {
+                            self.front += 1;
+                        }
+                        let advanced = self.front - old_front;
+                        // base must track the position of dense[front].
+                        self.base = self.base.wrapping_add(advanced as i32);
+
+                        if self.front >= self.dense.len() {
+                            // All slots ABSENT; fully reset.
+                            self.dense.clear();
+                            self.front = 0;
+                            // base is now stale (beyond any position); will be reset on next insert.
+                        } else if self.front >= COMPACT_THRESHOLD {
+                            self.compact();
+                        }
+                    }
+                    return Some(old);
+                }
+                None
+            }
+            None => self.fallback.remove(&pos),
+        }
+    }
+
+    /// Iterator over all present positions. Returns owned i32 values.
+    /// dense[phys] corresponds to position base + (phys - front)... wait.
+    /// Invariant: dense[phys] for phys in [front, dense.len()) stores value for
+    /// position base + (phys - front). So dense[front + i] → position base + i... NO.
+    /// See phys_idx: phys = front + (pos - base), so pos = base + (phys - front).
+    /// dense[front + i]: pos = base + ((front + i) - front) = base + i. Correct.
+    pub fn keys(&self) -> impl Iterator<Item = i32> + '_ {
+        let base = self.base;
+        let front = self.front;
+        // dense[front + i] → position base + (front + i - front) = base + i
+        // But wait: phys_idx says phys = front + (pos - base), so pos = base + (phys - front)
+        // For phys = front + i: pos = base + ((front + i) - front) = base + i.
+        // And dense[self.front..][i] = dense[self.front + i], so pos = base + i. Correct.
+        let _ = front; // used above for documentation only; base + i is correct
+        let dense_iter = self.dense[self.front..]
+            .iter()
+            .enumerate()
+            .filter_map(move |(i, &v)| {
+                if v != COVERAGE_ABSENT {
+                    Some(base + i as i32)
+                } else {
+                    None
+                }
+            });
+        let fallback_iter = self.fallback.keys().copied();
+        dense_iter.chain(fallback_iter)
+    }
+}
+
+impl crate::variations::CountMap<i32> for CoverageMap {
+    #[inline]
+    fn increment_value(&mut self, key: i32, add: i32) {
+        // Semantics: absent → 0+add; present → existing+add
+        if self.dense.is_empty() {
+            self.base = key;
+            self.front = 0;
+            self.dense.push(add);
+            self.present += 1;
+            return;
+        }
+        if key >= self.base && key - self.base < DENSE_SPAN_CAP {
+            let logical = (key - self.base) as usize;
+            let phys = self.front + logical;
+            if phys >= self.dense.len() {
+                self.dense.resize(phys + 1, COVERAGE_ABSENT);
+            }
+            let slot = &mut self.dense[phys];
+            if *slot == COVERAGE_ABSENT {
+                *slot = add;
+                self.present += 1;
+            } else {
+                *slot += add;
+            }
+        } else {
+            *self.fallback.entry(key).or_insert(0) += add;
+        }
+    }
+}
+
+/// Custom serde: serialize CoverageMap as sorted [[pos, val], ...] array,
+/// identical representation to what serialize_sorted_int_map produced for HashMap<i32, i32>.
+pub fn serialize_coverage_map<S: serde::Serializer>(
+    map: &CoverageMap,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut entries: Vec<(i32, i32)> = map.keys().map(|k| (k, *map.get(&k).unwrap())).collect();
+    entries.sort_by_key(|(k, _)| *k);
+    let mut seq = serializer.serialize_seq(Some(entries.len()))?;
+    for pair in &entries {
+        seq.serialize_element(pair)?;
+    }
+    seq.end()
+}
+
+/// Custom serde: deserialize [[pos, val], ...] → CoverageMap.
+pub fn deserialize_coverage_map<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<CoverageMap, D::Error> {
+    use serde::Deserialize;
+    let entries = Vec::<(i32, i32)>::deserialize(deserializer)?;
+    let mut map = CoverageMap::new();
+    for (k, v) in entries {
+        map.insert(k, v);
+    }
+    Ok(map)
+}
+
+// ─── VecMap: insertion-ordered Vec-backed map for small per-position maps ────
+//
+// Replaces `IndexMap<String, Variation, FxBuildHasher>` as `VariationEntries`.
+// Per-position variation maps hold ~1-5 entries; linear scan on a contiguous
+// Vec beats hashbrown probing (movemask cost) at these sizes.
+//
+// API contract: identical to IndexMap — insert overwrites & returns old value,
+// shift_remove / shift_remove_entry preserve the order of remaining entries.
+
+/// Insertion-ordered Vec-backed map. Fast for N≤~16; do not use for large maps.
+#[derive(Clone, Debug, Default)]
+pub struct VecMap<V> {
+    entries: Vec<(String, V)>,
+}
+
+impl<V> VecMap<V> {
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    #[inline]
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.entries.iter().any(|(k, _)| k == key)
+    }
+
+    #[inline]
+    pub fn get(&self, key: &str) -> Option<&V> {
+        self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut V> {
+        self.entries
+            .iter_mut()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+    }
+
+    /// Insert a key-value pair. If the key already exists, overwrites the value
+    /// and returns the old value. Otherwise inserts at the end and returns None.
+    #[inline]
+    pub fn insert(&mut self, key: String, value: V) -> Option<V> {
+        if let Some(pos) = self.entries.iter().position(|(k, _)| k == &key) {
+            let old = std::mem::replace(&mut self.entries[pos].1, value);
+            Some(old)
+        } else {
+            self.entries.push((key, value));
+            None
+        }
+    }
+
+    /// Remove a key, preserving insertion order of remaining entries.
+    /// Returns the value if found, else None.
+    #[inline]
+    pub fn shift_remove(&mut self, key: &str) -> Option<V> {
+        if let Some(pos) = self.entries.iter().position(|(k, _)| k == key) {
+            Some(self.entries.remove(pos).1)
+        } else {
+            None
+        }
+    }
+
+    /// Remove a key, preserving insertion order. Returns (key, value) if found.
+    #[inline]
+    pub fn shift_remove_entry(&mut self, key: &str) -> Option<(String, V)> {
+        if let Some(pos) = self.entries.iter().position(|(k, _)| k == key) {
+            Some(self.entries.remove(pos))
+        } else {
+            None
+        }
+    }
+
+    /// Alias for `shift_remove` — preserves order, same semantics as IndexMap::remove
+    /// when called from structural_variants_processor (re-inserts after mutation).
+    #[inline]
+    pub fn remove(&mut self, key: &str) -> Option<V> {
+        self.shift_remove(key)
+    }
+
+    /// Single-pass hot path: lookup-or-insert-default.
+    /// Avoids double scan (one for check, one for insert).
+    #[inline]
+    pub fn get_or_insert_with_default(&mut self, key: &str) -> &mut V
+    where
+        V: Default,
+    {
+        let pos = self.entries.iter().position(|(k, _)| k == key);
+        match pos {
+            Some(i) => &mut self.entries[i].1,
+            None => {
+                self.entries.push((key.to_string(), V::default()));
+                let last = self.entries.len() - 1;
+                &mut self.entries[last].1
+            }
+        }
+    }
+
+    /// Iterator over (&String, &V) pairs in insertion order.
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &V)> {
+        self.entries.iter().map(|(k, v)| (k, v))
+    }
+
+    /// Iterator over (&String, &mut V) pairs in insertion order.
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&String, &mut V)> {
+        self.entries.iter_mut().map(|(k, v)| (k as &String, v))
+    }
+
+    /// Iterator over keys in insertion order.
+    #[inline]
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.entries.iter().map(|(k, _)| k)
+    }
+
+    /// Iterator over values in insertion order.
+    #[inline]
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.entries.iter().map(|(_, v)| v)
+    }
+}
+
+/// By-key indexing mirroring `IndexMap`'s `Index<&Q>`: panics if the key is absent.
+impl<V> std::ops::Index<&str> for VecMap<V> {
+    type Output = V;
+    #[inline]
+    fn index(&self, key: &str) -> &V {
+        self.get(key).expect("VecMap: no entry found for key")
+    }
+}
+
+impl<V> IntoIterator for VecMap<V> {
+    type Item = (String, V);
+    type IntoIter = std::vec::IntoIter<(String, V)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.into_iter()
+    }
+}
+
+impl<'a, V> IntoIterator for &'a VecMap<V> {
+    type Item = &'a (String, V);
+    type IntoIter = std::slice::Iter<'a, (String, V)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+impl<V: PartialEq> PartialEq for VecMap<V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+
+impl<V: Eq> Eq for VecMap<V> {}
+
+pub type VariationEntries = VecMap<Variation>;
 
 // ─── SortedStringMap: BTreeMap<String, V> with array-of-pairs serde ─────────
 
@@ -450,8 +905,8 @@ pub struct VariationMapSV {
 // Always serializes as {"entries": [[k,v], ...], "sv": null|{...}}
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VariationMap {
-    #[serde(serialize_with = "crate::parity::format::serialize_indexmap_as_pairs")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_indexmap_as_pairs")]
+    #[serde(serialize_with = "crate::parity::format::serialize_vecmap_as_pairs")]
+    #[serde(deserialize_with = "crate::parity::format::deserialize_vecmap_as_pairs")]
     pub entries: VariationEntries,
 
     pub sv: Option<VariationMapSV>,
@@ -511,28 +966,28 @@ pub struct InitialData {
     pub insertion_variants: PositionMap<VariationMap>,
 
     #[serde(rename = "refCoverage")]
-    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub ref_coverage: PositionMap<i32>,
+    #[serde(serialize_with = "crate::data::serialize_coverage_map")]
+    #[serde(deserialize_with = "crate::data::deserialize_coverage_map")]
+    pub ref_coverage: CoverageMap,
 
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_5_end: HashMap<i32, Sclip>,
+    pub soft_clips_5_end: PositionMap<Sclip>,
 
     #[serde(rename = "softClips3End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_3_end: HashMap<i32, Sclip>,
+    pub soft_clips_3_end: PositionMap<Sclip>,
 }
 
 impl InitialData {
     pub fn new(
         non_insertion_variants: PositionMap<VariationMap>,
         insertion_variants: PositionMap<VariationMap>,
-        ref_coverage: PositionMap<i32>,
-        soft_clips_3_end: HashMap<i32, Sclip>,
-        soft_clips_5_end: HashMap<i32, Sclip>,
+        ref_coverage: CoverageMap,
+        soft_clips_3_end: PositionMap<Sclip>,
+        soft_clips_5_end: PositionMap<Sclip>,
     ) -> Self {
         Self {
             non_insertion_variants,
@@ -568,19 +1023,19 @@ pub struct VariationData {
     pub position_to_deletions_count: PositionMap<SortedStringMap<i32>>,
 
     #[serde(rename = "refCoverage")]
-    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub ref_coverage: PositionMap<i32>,
+    #[serde(serialize_with = "crate::data::serialize_coverage_map")]
+    #[serde(deserialize_with = "crate::data::deserialize_coverage_map")]
+    pub ref_coverage: CoverageMap,
 
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_5_end: HashMap<i32, Sclip>,
+    pub soft_clips_5_end: PositionMap<Sclip>,
 
     #[serde(rename = "softClips3End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_3_end: HashMap<i32, Sclip>,
+    pub soft_clips_3_end: PositionMap<Sclip>,
 
     #[serde(rename = "svStructures")]
     pub sv_structures: SVStructures,
@@ -1081,21 +1536,117 @@ impl Variant {
 }
 
 // Java: Vars L11-L27
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+// NOTE: Serialize/Deserialize are hand-written below (no derive) to keep wire format identical
+// while using an arena+indices representation internally.
+#[derive(Clone, Debug, Default)]
 pub struct Vars {
-    #[serde(rename = "referenceVariant")]
+    /// Reference variant — owned directly, NEVER placed in the arena.
     pub reference_variant: Option<Variant>,
 
-    #[serde(rename = "variants")]
-    pub variants: Vec<Variant>,
+    /// Arena: owns all non-reference variants. Never reordered or removed.
+    pub arena: Vec<Variant>,
 
-    #[serde(rename = "varDescriptionStringToVariants")]
-    #[serde(serialize_with = "crate::parity::format::serialize_btreemap_as_pairs")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_btreemap_as_pairs")]
-    pub var_description_string_to_variants: BTreeMap<String, Variant>,
+    /// Ordered/filtered list of indices into `arena`.
+    pub variants: Vec<usize>,
 
-    #[serde(rename = "sv")]
+    /// description_string → arena index, covering ALL non-reference variants.
+    pub var_description_string_to_variants: BTreeMap<String, usize>,
+
     pub sv: String,
+}
+
+impl serde::Serialize for Vars {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("Vars", 4)?;
+        // referenceVariant: Option<Variant>
+        s.serialize_field("referenceVariant", &self.reference_variant)?;
+        // variants: array of Variant values in list order
+        let variant_values: Vec<&Variant> = self.variants.iter().map(|&i| &self.arena[i]).collect();
+        s.serialize_field("variants", &variant_values)?;
+        // varDescriptionStringToVariants: array of [key, Variant] pairs in BTreeMap (sorted-key) order
+        let varn_pairs: Vec<(&str, &Variant)> = self
+            .var_description_string_to_variants
+            .iter()
+            .map(|(k, &i)| (k.as_str(), &self.arena[i]))
+            .collect();
+        s.serialize_field("varDescriptionStringToVariants", &varn_pairs)?;
+        s.serialize_field("sv", &self.sv)?;
+        s.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Vars {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{MapAccess, Visitor};
+        use std::fmt;
+
+        struct VarsVisitor;
+
+        impl<'de> Visitor<'de> for VarsVisitor {
+            type Value = Vars;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "struct Vars")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Vars, A::Error> {
+                let mut reference_variant: Option<Option<Variant>> = None;
+                let mut variants_raw: Option<Vec<Variant>> = None;
+                let mut varn_raw: Option<Vec<(String, Variant)>> = None;
+                let mut sv: Option<String> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "referenceVariant" => {
+                            reference_variant = Some(map.next_value()?);
+                        }
+                        "variants" => {
+                            variants_raw = Some(map.next_value()?);
+                        }
+                        "varDescriptionStringToVariants" => {
+                            varn_raw = Some(map.next_value()?);
+                        }
+                        "sv" => {
+                            sv = Some(map.next_value()?);
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                let reference_variant = reference_variant.unwrap_or(None);
+                let variants_list = variants_raw.unwrap_or_default();
+                let varn_pairs = varn_raw.unwrap_or_default();
+                let sv = sv.unwrap_or_default();
+
+                // arena = the deserialized variants list values
+                let mut arena: Vec<Variant> = variants_list;
+                let variants_idx: Vec<usize> = (0..arena.len()).collect();
+                // Reconstruct varn map: for each (k, v), find existing arena slot or push new
+                let mut varn: BTreeMap<String, usize> = BTreeMap::new();
+                for (k, v) in varn_pairs {
+                    let idx = if let Some(i) = arena.iter().position(|a| a.description_string == k)
+                    {
+                        i
+                    } else {
+                        let i = arena.len();
+                        arena.push(v);
+                        i
+                    };
+                    varn.insert(k, idx);
+                }
+                Ok(Vars {
+                    reference_variant,
+                    arena,
+                    variants: variants_idx,
+                    var_description_string_to_variants: varn,
+                    sv,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(VarsVisitor)
+    }
 }
 
 // Java: RealignedVariationData (VariationRealigner output boundary type)
@@ -1114,17 +1665,17 @@ pub struct RealignedVariationData {
     #[serde(rename = "softClips5End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_5_end: HashMap<i32, Sclip>,
+    pub soft_clips_5_end: PositionMap<Sclip>,
 
     #[serde(rename = "softClips3End")]
     #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
     #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub soft_clips_3_end: HashMap<i32, Sclip>,
+    pub soft_clips_3_end: PositionMap<Sclip>,
 
     #[serde(rename = "refCoverage")]
-    #[serde(serialize_with = "crate::parity::format::serialize_sorted_int_map")]
-    #[serde(deserialize_with = "crate::parity::format::deserialize_sorted_int_map")]
-    pub ref_coverage: PositionMap<i32>,
+    #[serde(serialize_with = "crate::data::serialize_coverage_map")]
+    #[serde(deserialize_with = "crate::data::deserialize_coverage_map")]
+    pub ref_coverage: CoverageMap,
 
     #[serde(rename = "maxReadLength")]
     pub max_read_length: Option<i32>,
@@ -1420,7 +1971,7 @@ mod tests {
             end_position: 101,
             ..baseline_variant()
         };
-        let mut splice = HashSet::new();
+        let mut splice = HashSet::default();
         splice.insert(String::from("100-101"));
 
         assert!(!variant.is_good_var(None, Some("Deletion"), &splice, &base_config()));
@@ -1436,7 +1987,7 @@ mod tests {
             ..baseline_variant()
         };
 
-        assert!(!variant.is_good_var(None, Some("SNV"), &HashSet::new(), &config));
+        assert!(!variant.is_good_var(None, Some("SNV"), &HashSet::default(), &config));
     }
 
     #[test]
@@ -1457,7 +2008,7 @@ mod tests {
         assert!(!variant.is_good_var(
             Some(&reference_variant),
             Some("Insertion"),
-            &HashSet::new(),
+            &HashSet::default(),
             &base_config()
         ));
     }
@@ -1468,7 +2019,7 @@ mod tests {
         config.mapq = 60.0;
         let variant = baseline_variant();
 
-        assert!(variant.is_good_var(None, None, &HashSet::new(), &config));
+        assert!(variant.is_good_var(None, None, &HashSet::default(), &config));
     }
 
     #[test]

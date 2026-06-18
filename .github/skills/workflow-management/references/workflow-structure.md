@@ -11,6 +11,8 @@ The current workflow agent set lives under `.github/agents/`. Each agent file ca
 | File | Notes |
 |------|-------|
 | `orchestrator.agent.md` | Main routing agent for the parity workflow. |
+| `cli-orchestrator.agent.md` | Copilot CLI-oriented orchestration baseline. |
+| `opt-orchestrator.agent.md` | Optimization-oriented orchestration agent. |
 | `module-analyst.agent.md` | Analysis agent for module-level diagnosis and planning. |
 | `port-engineer.agent.md` | Implementation agent for focused code changes. |
 | `parity-verifier.agent.md` | Verification agent for parity and validation steps. |
@@ -19,7 +21,7 @@ The current workflow agent set lives under `.github/agents/`. Each agent file ca
 
 ## 2. Skills
 
-The Phase 1 workflow inventory tracks 16 current skills under `.github/skills/*/`. Each skill file is read for its name, description, trigger contexts, which agents reference it, any agent names mentioned in the body, any file paths referenced, and its workflow phases.
+The Phase 1 workflow inventory tracks 15 current skills under `.github/skills/*/`. Each skill file is read for its name, description, trigger contexts, which agents reference it, any agent names mentioned in the body, any file paths referenced, and its workflow phases.
 
 ### Current skill set
 
@@ -29,16 +31,26 @@ The Phase 1 workflow inventory tracks 16 current skills under `.github/skills/*/
 4. `faithful-port`
 5. `git-commit`
 6. `logic-parity-audit`
-7. `mem-optimization`
-8. `mismatch-repair`
-9. `module-parity-test`
-10. `perf-optimization`
-11. `rust-freshness-verification`
-12. `shard-diagnosis`
-13. `tiered-config-test`
-14. `workflow-inspector`
-15. `workflow-management`
-16. `workflow-router`
+7. `mismatch-repair`
+8. `module-parity-test`
+9. `perf-optimization`
+10. `rust-freshness-verification`
+11. `shard-diagnosis`
+12. `tiered-config-test`
+13. `workflow-inspector`
+14. `workflow-management`
+15. `workflow-router`
+
+### Skill-only config E2E diagnosis path
+
+`config-e2e-diagnosis` is the Copilot CLI entry point for active config E2E
+parity diagnosis. It is intended to run as a skill-only workflow in the current
+CLI session: the session follows the config E2E skill directly, writes diagnosis
+and repair plan files under the current CLI session-state artifact path, asks the
+user to accept those checkpoints, and invokes related skills (`mismatch-repair`,
+`logic-parity-audit`, `module-parity-test`, `shard-diagnosis`, and
+`change-impact-review`) directly. The `.github/agents/` files remain present for
+other workflows, but this path does not require custom-agent dispatch.
 
 ## 3. Instructions
 
@@ -176,9 +188,10 @@ Workflow-management Phase 1 tracks parity-related shell scripts, Python scripts,
 4. `io_backend_bench.py`
 5. `pilot_generate.py`
 6. `sample_regions.py`
-7. `sweep_fixtures_chunk_parallel.py`
-8. `sweep_fixtures_parallel.py`
-9. `sweep_generate_v2.py`
+7. `sort_sweep_fixtures.py`
+8. `sweep_fixtures_chunk_parallel.py`
+9. `sweep_fixtures_parallel.py`
+10. `sweep_generate_v2.py`
 
 ### Library helpers and policy files
 

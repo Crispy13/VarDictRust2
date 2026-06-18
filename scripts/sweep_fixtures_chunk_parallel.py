@@ -108,8 +108,7 @@ def build_chunk_work_items(
             str(reference),
             "-b",
             bam_arg,
-            "-th",
-            "1",
+            *base.default_thread_flags(config_flags),
             "-c",
             "1",
             "-S",
@@ -435,19 +434,36 @@ def execute_shard_run(
             ordered_results=ordered_results,
         )
 
+        output_order = base.sort_final_output_if_required(stdout_path, config_name)
+        source_num_chunks = num_chunks if output_order is not None else None
+        source_chunks = chunk_records if output_order is not None else None
+        final_chunk_records = (
+            base.final_output_chunk_records(
+                stdout_path,
+                wall_s=sum(chunk_wall_s),
+                num_tiles=total_bed_lines,
+            )
+            if output_order is not None
+            else chunk_records
+        )
+        final_num_chunks = 1 if output_order is not None else num_chunks
+
         monolithic_md5 = base.compute_file_md5(stdout_path)
         monolithic_bytes = stdout_path.stat().st_size
         base.write_chunks_json(
             chunks_path,
             monolithic_md5=monolithic_md5,
             monolithic_bytes=monolithic_bytes,
-            num_chunks=num_chunks,
+            num_chunks=final_num_chunks,
             chunk_size=chunk_size,
-            chunks=chunk_records,
+            chunks=final_chunk_records,
             vardict_commit=base.get_vardict_commit(root),
             generator_flags=list(config_flags),
             preset=config_name if config_name else "default",
             bed_sha256=base.compute_file_sha256(shard.bed_path),
+            output_order=output_order,
+            source_num_chunks=source_num_chunks,
+            source_chunks=source_chunks,
         )
 
         if zstd_executor is None:

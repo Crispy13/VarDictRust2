@@ -2,15 +2,15 @@
 /// Core variant detection engine: iterates BAM records, parses CIGAR strings
 /// operation-by-operation, populates variant maps, coverage, soft-clip structures,
 /// and structural variant accumulators.
-use std::collections::{HashMap, HashSet};
+use crate::prelude::HashSet;
 use std::sync::Arc;
 
 use rust_htslib::bam::{self, HeaderView, record::Aux};
 
 use crate::config::{Configuration, MINMAPBASE, MINSVCDIST, MINSVPOS, SEED_1};
 use crate::data::{
-    BaseInsertion, Mate, ModifiedCigar, PositionMap, Region, SVStructures, Sclip, SortedStringMap,
-    Variation, VariationData, VariationMap,
+    BaseInsertion, CoverageMap, Mate, ModifiedCigar, PositionMap, Region, SVStructures, Sclip,
+    SortedStringMap, Variation, VariationData, VariationMap,
 };
 use crate::mods::cigar_modifier::modify_cigar;
 use crate::mods::sam_file_parser::{RecordPreprocessor, get_mate_reference_name};
@@ -216,9 +216,9 @@ pub struct CigarParser {
     // ── Output maps (populated across all records) ──
     pub non_insertion_variants: PositionMap<VariationMap>,
     pub insertion_variants: PositionMap<VariationMap>,
-    pub ref_coverage: PositionMap<i32>,
-    pub soft_clips_3_end: HashMap<i32, Sclip>,
-    pub soft_clips_5_end: HashMap<i32, Sclip>,
+    pub ref_coverage: CoverageMap,
+    pub soft_clips_3_end: PositionMap<Sclip>,
+    pub soft_clips_5_end: PositionMap<Sclip>,
     pub position_to_insertion_count: PositionMap<SortedStringMap<i32>>,
     pub mnp: PositionMap<SortedStringMap<i32>>,
     pub position_to_deletion_count: PositionMap<SortedStringMap<i32>>,
@@ -260,9 +260,9 @@ impl CigarParser {
             // Output maps — initialized empty
             non_insertion_variants: PositionMap::default(),
             insertion_variants: PositionMap::default(),
-            ref_coverage: PositionMap::default(),
-            soft_clips_3_end: HashMap::new(),
-            soft_clips_5_end: HashMap::new(),
+            ref_coverage: CoverageMap::default(),
+            soft_clips_3_end: PositionMap::default(),
+            soft_clips_5_end: PositionMap::default(),
             position_to_insertion_count: PositionMap::default(),
             mnp: PositionMap::default(),
             position_to_deletion_count: PositionMap::default(),
@@ -271,7 +271,7 @@ impl CigarParser {
 
             // Scope copies — placeholder defaults, set by init_from_scope
             region: Region::new("", 0, 0, ""),
-            splice: HashSet::new(),
+            splice: HashSet::default(),
             reference: Arc::new(Reference::default()),
             max_read_length: 0,
 
@@ -307,9 +307,9 @@ impl CigarParser {
         // Fields from RecordPreprocessor / InitialData:
         non_insertion_variants: PositionMap<VariationMap>,
         insertion_variants: PositionMap<VariationMap>,
-        ref_coverage: PositionMap<i32>,
-        soft_clips_3_end: HashMap<i32, Sclip>,
-        soft_clips_5_end: HashMap<i32, Sclip>,
+        ref_coverage: CoverageMap,
+        soft_clips_3_end: PositionMap<Sclip>,
+        soft_clips_5_end: PositionMap<Sclip>,
         total_reads: i32,
         duplicate_reads: i32,
     ) {
@@ -846,6 +846,9 @@ impl CigarParser {
             goodq,
             vext,
             has_amplicon_based_calling,
+            trim_bases_after,
+            unique_mode_alignment_enabled,
+            unique_mode_second_in_pair_enabled,
         ) = GlobalReadOnlyScope::with_instance(|instance| {
             let conf = &instance.conf;
             (
@@ -858,6 +861,9 @@ impl CigarParser {
                 conf.goodq,
                 conf.vext,
                 instance.amplicon_based_calling.is_some(),
+                conf.trim_bases_after,
+                conf.unique_mode_alignment_enabled,
+                conf.unique_mode_second_in_pair_enabled,
             )
         });
 
@@ -951,9 +957,24 @@ impl CigarParser {
         }
 
         // Java: CigarParser.java#L305-L306 — double soft-clip filter
-        let cigar_string = self.cigar.to_string();
-        if BEGIN_dig_dig_S_ANY_dig_dig_S_END.is_match(&cigar_string) {
-            return;
+        // Equivalent to regex ^\d\dS.*\d\dS$: both endpoints are S with exactly 2-digit length
+        // (10..=99) AND the CIGAR has at least 2 elements. The `len >= 2` guard is required
+        // because for a single-element CIGAR (e.g. "76S"), `first()` and `last()` return the
+        // same element, which would incorrectly fire. The regex `^\d\dS.*\d\dS$` requires two
+        // distinct `\d\dS` tokens separated by `.*`, so it cannot match a single-element CIGAR.
+        // Checking directly on ParsedCigar avoids a String allocation + regex evaluation per read.
+        {
+            let elems = &self.cigar.elements;
+            let double_soft_clip = elems.len() >= 2
+                && elems
+                    .first()
+                    .is_some_and(|e| e.operator == CigarOp::S && (10..=99).contains(&e.length))
+                && elems
+                    .last()
+                    .is_some_and(|e| e.operator == CigarOp::S && (10..=99).contains(&e.length));
+            if double_soft_clip {
+                return;
+            }
         }
 
         // Java: CigarParser.java#L309-L312
@@ -1000,6 +1021,8 @@ impl CigarParser {
 
         // Java: CigarParser.java#L336
         let mate_alignment_start = record.mpos() as i32 + 1; // 0-based to 1-based
+        let should_check_overlapping_reads =
+            unique_mode_alignment_enabled || unique_mode_second_in_pair_enabled;
 
         // Take a clone of reference sequences to avoid borrow conflicts
         let reference = Arc::clone(&self.reference);
@@ -1010,13 +1033,17 @@ impl CigarParser {
         let mut ci: usize = 0;
         'process_cigar: while ci < num_cigar_elements {
             // Java: CigarParser.java#L340
-            if self.skip_overlapping_reads(
-                record,
-                header,
-                position,
-                direction,
-                mate_alignment_start,
-            ) {
+            if should_check_overlapping_reads
+                && self.skip_overlapping_reads(
+                    record,
+                    header,
+                    position,
+                    direction,
+                    mate_alignment_start,
+                    unique_mode_alignment_enabled,
+                    unique_mode_second_in_pair_enabled,
+                )
+            {
                 break;
             }
 
@@ -1105,8 +1132,17 @@ impl CigarParser {
             let mut i = self.offset;
             while i < self.cigar_element_length {
                 // Java: CigarParser.java#L373
-                let trim =
-                    self.is_trim_at_opt_t_bases(direction, total_length_including_soft_clipped);
+                let trim = if trim_bases_after != 0 {
+                    if !direction {
+                        self.read_position_including_soft_clipped > trim_bases_after
+                    } else {
+                        total_length_including_soft_clipped
+                            - self.read_position_including_soft_clipped
+                            > trim_bases_after
+                    }
+                } else {
+                    false
+                };
 
                 // Java: CigarParser.java#L376
                 let n = self.read_position_including_soft_clipped as usize;
@@ -1406,9 +1442,10 @@ impl CigarParser {
                 // Java: CigarParser.java#L571-L577 — add variation if not trimmed
                 if !trim {
                     let pos = self.start - qbases + 1;
-                    let s_ref = s.as_deref().unwrap_or(base_description.expect(
-                        "non-owned matching descriptions should be known ASCII bases",
-                    ));
+                    let s_ref = s.as_deref().unwrap_or(
+                        base_description
+                            .expect("non-owned matching descriptions should be known ASCII bases"),
+                    );
                     let description_has_n = s.as_deref().is_some_and(|owned| owned.contains('N'));
                     if pos >= self.region.start && pos <= self.region.end && !description_has_n {
                         self.add_variation_for_matching_part(
@@ -1444,13 +1481,17 @@ impl CigarParser {
                     self.read_position_excluding_soft_clipped += 1;
                 }
                 // Java: CigarParser.java#L591 — skip overlap at end of inner loop
-                if self.skip_overlapping_reads(
-                    record,
-                    header,
-                    position,
-                    direction,
-                    mate_alignment_start,
-                ) {
+                if should_check_overlapping_reads
+                    && self.skip_overlapping_reads(
+                        record,
+                        header,
+                        position,
+                        direction,
+                        mate_alignment_start,
+                        unique_mode_alignment_enabled,
+                        unique_mode_second_in_pair_enabled,
+                    )
+                {
                     break 'process_cigar;
                 }
                 i += 1;
@@ -2866,25 +2907,18 @@ impl CigarParser {
             // Java: CigarParser.java#L2215-L2260
             let mchr = get_mate_reference_name(record, header);
 
-            // Filter MC soft-clipped
+            // Java filters only fusion-SV creation here; nearby SV discordant counts below still run.
             let mc_tag: Option<String> = record.aux(b"MC").ok().and_then(|a| match a {
                 Aux::String(s) => Some(s.to_string()),
                 _ => None,
             });
-            if let Some(ref mc) = mc_tag {
-                if MC_Z_NUM_S_ANY_NUM_S.is_match(mc) {
-                    return;
-                }
-            }
-            // Filter low MQ mates
             let mq_tag: Option<i32> = record.aux(b"MQ").ok().and_then(|a| Self::aux_to_i32(&a));
-            if let Some(mq) = mq_tag {
-                if mq < 15 {
-                    return;
-                }
-            }
+            let skip_fusion_sv = matches!(mc_tag.as_deref(), Some(mc) if MC_Z_NUM_S_ANY_NUM_S.is_match(mc))
+                || matches!(mq_tag, Some(mq) if mq < 15);
 
-            if read_dir_num == 1 {
+            if skip_fusion_sv {
+                // Java's empty MC/MQ filter branches skip only the fusion addSV block.
+            } else if read_dir_num == 1 {
                 // Java: CigarParser.java#L2221-L2234
                 let need_new = self.sv_structures.svffus.get(&mchr).is_none()
                     || (position - *self.sv_structures.svfusfend.get(&mchr).unwrap_or(&0)) as f64
@@ -3198,7 +3232,7 @@ impl CigarParser {
         query_sequence: &str,
         query_quality: &str,
         reference: &ReferenceSequenceMap,
-        ref_coverage: &mut PositionMap<i32>,
+        ref_coverage: &mut CoverageMap,
     ) -> Offset {
         let (vext, goodq) = Self::with_conf(|conf| (conf.vext, conf.goodq));
         let mut offset = 0i32;
@@ -3431,14 +3465,9 @@ impl CigarParser {
         position: i32,
         direction: bool,
         mate_alignment_start: i32,
+        unique_mode_alignment_enabled: bool,
+        unique_mode_second_in_pair_enabled: bool,
     ) -> bool {
-        let (unique_mode_alignment_enabled, unique_mode_second_in_pair_enabled) =
-            GlobalReadOnlyScope::with_instance(|scope| {
-                (
-                    scope.conf.unique_mode_alignment_enabled,
-                    scope.conf.unique_mode_second_in_pair_enabled,
-                )
-            });
         // Java: CigarParser.java#L1896-L1898
         if unique_mode_alignment_enabled
             && self.is_paired_and_same_chromosome(record, header)

@@ -115,6 +115,7 @@ WARNING_SEVERITY_BY_KEY = {
     "missing_vardict_commit": "not-ready",
     "missing_generator_flags": "not-ready",
     "mismatch_generator_flags": "not-ready",
+    "generator_flags_unrecorded_somatic": "diagnostic-only",
     "missing_preset": "not-ready",
     "mismatch_preset": "not-ready",
     "missing_bed_sha256": "not-ready",
@@ -125,7 +126,11 @@ WARNING_SEVERITY_ORDER = ("blocking", "not-ready", "diagnostic-only", "unknown")
 
 sys.path.insert(0, str(PROJECT_ROOT))
 try:
-    from scripts.lib.merge_manifest import merge_cache_entries
+    from scripts.lib.merge_manifest import (
+        merge_cache_entries,
+        merge_cache_entries_somatic,
+        PAIR_PATHS,
+    )
 except ImportError as exc:  # pragma: no cover - import guard
     raise SystemExit(
         f"ERROR: cannot import scripts.lib.merge_manifest: {exc}\n"
@@ -319,6 +324,7 @@ def sweep_test_reproducer(
     exact: bool = True,
 ) -> str:
     return (
+        f"VARDICT_E2E_SWEEP_FIXTURE_ROOT={CANONICAL_FIXTURE_ROOT.resolve()} "
         f"VARDICT_E2E_SWEEP_CONFIG={preset} "
         f"VARDICT_E2E_SWEEP_BED_ROOT={sweep_bed_root} "
         f"CI=true {' '.join(sweep_test_command(args, selector, exact=exact))}"
@@ -1523,6 +1529,10 @@ def bed_sha256(sweep_bed_root: Path, tag: str) -> str:
     return sha256_concat(bed_paths)
 
 
+def single_bed_sha256(sweep_bed_root: Path, tag: str, chrom: str) -> str:
+    return sha256_concat([sweep_bed_root / tag / f"{chrom}.bed"])
+
+
 def decompressed_tsv_md5_and_bytes(path: Path) -> tuple[str, int]:
     _original_path, resolved_path = validation_path_pair(path)
     digest = hashlib.md5()
@@ -1603,7 +1613,7 @@ def provenance_metadata_warning(
         actual_bed_sha256 = normalize_bed_sha256(actual_value)
         if expected_bed_sha256 is not None and actual_bed_sha256 == expected_bed_sha256:
             return None
-        detail = f"{chunks_label} expected_aggregate={expected_value} actual={actual_value}"
+        detail = f"{chunks_label} expected_bed={expected_value} actual={actual_value}"
         if actual_bed_sha256 is not None:
             detail += f" normalized_actual={actual_bed_sha256}"
         else:
@@ -1615,7 +1625,7 @@ def provenance_metadata_warning(
     return f"mismatch_{key}", f"{chunks_label} expected={expected_value} actual={actual_value}"
 
 
-def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
+def cache_fingerprint_structural_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
     staged_tsv_path, resolved_tsv_path = validation_path_pair(tsv_path)
     staged_chunks_path, resolved_chunks_path = validation_path_pair(chunks_path)
     tsv_label = format_validation_path(staged_tsv_path, resolved_tsv_path)
@@ -1648,6 +1658,19 @@ def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object
                 f"{chunks_label} missing gate provenance: {','.join(missing_provenance)}",
             )
 
+    return None
+
+
+def cache_fingerprint_content_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
+    staged_tsv_path, resolved_tsv_path = validation_path_pair(tsv_path)
+    staged_chunks_path, resolved_chunks_path = validation_path_pair(chunks_path)
+    tsv_label = format_validation_path(staged_tsv_path, resolved_tsv_path)
+    chunks_label = format_validation_path(staged_chunks_path, resolved_chunks_path)
+
+    assert isinstance(payload, dict)
+    monolithic_md5 = payload.get("monolithic_md5")
+    monolithic_bytes = payload.get("monolithic_bytes")
+
     try:
         actual_md5, actual_bytes = decompressed_tsv_md5_and_bytes(staged_tsv_path)
     except subprocess.CalledProcessError as exc:
@@ -1671,6 +1694,10 @@ def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object
         )
 
     return None
+
+
+def cache_fingerprint_warning(tsv_path: Path, chunks_path: Path, payload: object) -> tuple[str, str] | None:
+    return cache_fingerprint_structural_warning(tsv_path, chunks_path, payload) or cache_fingerprint_content_warning(tsv_path, chunks_path, payload)
 
 
 def manifest_cache_entries_payload() -> dict:
@@ -1882,21 +1909,37 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> d
             [chrom for matrix_preset, _tag, chrom in matrix if matrix_preset == preset]
         )
         preserve_path = prepare_merge_preserve_file()
-        logical_flags = (
-            f"--output-only --config {preset} --tags {','.join(tags)} "
-            f"--sweep-bed-root {active_sweep_bed_root}"
-        )
-        merge_cache_entries(
-            config_name=preset,
-            tags_csv=",".join(tags),
-            logical_flags=logical_flags,
-            project_root=PROJECT_ROOT,
-            sweep_bed_root=active_sweep_bed_root,
-            preserve_path=preserve_path,
-            manifest_only=True,
-            fixture_output_root=CANONICAL_OUTPUT_ROOT,
-            fixture_chroms=fixture_chroms,
-        )
+        somatic_tags = [t for t in tags if t in PAIR_PATHS]
+        germline_tags = [t for t in tags if t not in PAIR_PATHS]
+        if germline_tags:
+            logical_flags = (
+                f"--output-only --config {preset} --tags {','.join(germline_tags)} "
+                f"--sweep-bed-root {active_sweep_bed_root}"
+            )
+            merge_cache_entries(
+                config_name=preset,
+                tags_csv=",".join(germline_tags),
+                logical_flags=logical_flags,
+                project_root=PROJECT_ROOT,
+                sweep_bed_root=active_sweep_bed_root,
+                preserve_path=preserve_path,
+                manifest_only=True,
+                fixture_output_root=CANONICAL_OUTPUT_ROOT,
+                fixture_chroms=fixture_chroms,
+            )
+        for tag in somatic_tags:
+            somatic_logical_flags = (
+                f"--output-only --config {preset} --pair-tags {tag} --tags "
+                f"--sweep-bed-root {active_sweep_bed_root}"
+            )
+            merge_cache_entries_somatic(
+                config_name=preset,
+                tags_csv=tag,
+                logical_flags=somatic_logical_flags,
+                project_root=PROJECT_ROOT,
+                sweep_bed_root=active_sweep_bed_root,
+                preserve_path=preserve_path,
+            )
         emit_status(
             "stage",
             started_at=stage_started_at,
@@ -1960,18 +2003,23 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                 completed_cells += 1
                 continue
 
-            fingerprint_warning = cache_fingerprint_warning(tsv_path, chunks_path, payload)
-            if fingerprint_warning is not None:
-                warning_key, warning_message = fingerprint_warning
+            cell_not_ready = False
+
+            structural_warning = cache_fingerprint_structural_warning(tsv_path, chunks_path, payload)
+            if structural_warning is not None:
+                warning_key, warning_message = structural_warning
                 track_warning(
                     warning_counts,
                     warning_key,
                     warning_message,
                     warning_samples,
                 )
+                cell_not_ready = True
+
             if not isinstance(payload, dict):
                 completed_cells += 1
                 continue
+
             vardict_commit = payload.get("vardict_commit")
             if vardict_commit is None:
                 track_warning(
@@ -1980,20 +2028,28 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                     str(chunks_path),
                     warning_samples,
                 )
+                cell_not_ready = True
             elif vardict_commit != live_commit:
                 raise SystemExit(
                     f"ERROR: provenance mismatch for {preset}/{tag}/chr{chrom}: "
                     f"vardict_commit={vardict_commit} live={live_commit}"
                 )
 
-            expected_flags = (
-                f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} "
-                f"--sweep-bed-root {active_sweep_bed_root}"
-            )
+            is_somatic_tag = tag in PAIR_PATHS
+            if is_somatic_tag:
+                expected_flags = (
+                    f"--output-only --config {preset} --pair-tags {tag} --tags "
+                    f"--sweep-bed-root {active_sweep_bed_root}"
+                )
+            else:
+                expected_flags = (
+                    f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} "
+                    f"--sweep-bed-root {active_sweep_bed_root}"
+                )
             optional_checks = {
                 "generator_flags": expected_flags,
                 "preset": preset,
-                "bed_sha256": bed_sha256(active_sweep_bed_root, tag),
+                "bed_sha256": single_bed_sha256(active_sweep_bed_root, tag, chrom),
             }
             backfilled_missing = set(missing_backfilled_provenance_keys(payload))
             for key, expected_value in optional_checks.items():
@@ -2004,6 +2060,22 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                     track_warning(
                         warning_counts,
                         f"missing_{key}",
+                        format_validation_path(staged_chunks_path, resolved_chunks_path),
+                        warning_samples,
+                    )
+                    cell_not_ready = True
+                    continue
+
+                if is_somatic_tag and key == "generator_flags":
+                    # Somatic golden-gen records the preset flags (e.g. ['-th','4'], ['--fisher'],
+                    # or [] for the flagless default), not the gate's logical --output-only/
+                    # --pair-tags/--sweep-bed-root form, so this check can never match for any
+                    # somatic config. The manifest-level Rust check (check_e2e_sweep_manifest_somatic)
+                    # validates generator_flags_hash byte-exactly, so treat the chunks.json
+                    # generator_flags as a diagnostic-only signal regardless of its value.
+                    track_warning(
+                        warning_counts,
+                        "generator_flags_unrecorded_somatic",
                         format_validation_path(staged_chunks_path, resolved_chunks_path),
                         warning_samples,
                     )
@@ -2024,6 +2096,19 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                         warning_message,
                         warning_samples,
                     )
+                    cell_not_ready = True
+
+            if not cell_not_ready:
+                content_warning = cache_fingerprint_content_warning(tsv_path, chunks_path, payload)
+                if content_warning is not None:
+                    warning_key, warning_message = content_warning
+                    track_warning(
+                        warning_counts,
+                        warning_key,
+                        warning_message,
+                        warning_samples,
+                    )
+
             completed_cells += 1
 
         emit_status(
@@ -2271,6 +2356,7 @@ def run_tests_and_report(
         test_name, exact_selector = sweep_test_selection(tag, pair_chroms)
         reproducer = sweep_test_reproducer(args, preset, sweep_bed_root, test_name, exact=exact_selector)
         env = dict(os.environ)
+        env["VARDICT_E2E_SWEEP_FIXTURE_ROOT"] = str(CANONICAL_FIXTURE_ROOT.resolve())
         env["VARDICT_E2E_SWEEP_CONFIG"] = preset
         env["VARDICT_E2E_SWEEP_BED_ROOT"] = str(sweep_bed_root)
         env["CI"] = "true"
