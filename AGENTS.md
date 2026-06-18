@@ -37,3 +37,9 @@ Delegate simple tasks to subagent whenever possible.
 You should delegate all terminal execution to the default model subagent. 
 - Don't make subagents think command. You give the command and just direct it to launch and return results what you want.
 - Use existing subagents you created for terminal execution. Don't make a new subagent per task. Create new one if no one exists for terminal execution.
+
+## Parity Related Skills Must be followed FAITHFULLY
+- config-e2e-diagnosis
+- mismatch-repair
+- logic-audit-parity
+and more.

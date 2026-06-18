@@ -22,178 +22,409 @@ use vardict_rs::variations::{clear_variation_utils_scope, configure_variation_ut
 // flags and bridged from the single-dash form in `normalize_java_flags`. Help is reconfigured so
 // `-h`/`--header` sets the header row (as in Java) and `-H`/`-?`/`--help` prints help.
 #[derive(Debug, Default, Parser)]
-#[command(name = "vardict_rs", disable_help_flag = true)]
+#[command(
+    name = "vardict_rs",
+    disable_help_flag = true,
+    about = "VarDict-compatible variant calling for BAM/FASTA/BED inputs",
+    long_about = "vardict_rs is a Rust implementation of VarDictJava-compatible \
+variant calling. Implemented workflows target byte-for-byte parity with \
+VarDictJava for simple and somatic calling. Amplicon and splicing options are \
+accepted only as parser-compatibility surfaces and are not implemented.",
+    after_help = "Help flags: -H, -?, and --help print this help. The -h/--header \
+option is reserved for VarDictJava-compatible header output."
+)]
 struct Cli {
-    #[arg(short = 'H', long = "help", visible_short_alias = '?', action = clap::ArgAction::Help)]
+    #[arg(
+        short = 'H',
+        long = "help",
+        visible_short_alias = '?',
+        action = clap::ArgAction::Help,
+        help = "Print this help page"
+    )]
     help: Option<bool>,
 
-    #[arg(short = 'R')]
+    #[arg(
+        short = 'R',
+        value_name = "REGION",
+        help = "Region of interest in chr:start-end[:gene] format; no BED is required"
+    )]
     region: Option<String>,
 
-    #[arg(short = 'b')]
+    #[arg(
+        short = 'b',
+        value_name = "BAM",
+        help = "Indexed BAM file; use tumor.bam|normal.bam for somatic calling"
+    )]
     bam: String,
 
-    #[arg(short = 'G')]
+    #[arg(
+        short = 'G',
+        value_name = "FASTA",
+        help = "Reference FASTA path; should be indexed with a .fai file"
+    )]
     reference: String,
 
-    #[arg(short = 'N')]
+    #[arg(
+        short = 'N',
+        value_name = "NAME",
+        help = "Sample name to use directly; overrides -n"
+    )]
     sample_name: String,
 
-    /// -n: sample-name regexp (leading/trailing `/` stripped)
-    #[arg(short = 'n')]
+    #[arg(
+        short = 'n',
+        value_name = "REGEX",
+        help = "Regular expression used to extract the sample name from BAM filenames; leading/trailing '/' are stripped"
+    )]
     sample_name_regexp: Option<String>,
 
-    #[arg(short = 'p')]
+    #[arg(short = 'p', help = "Do pileup regardless of allele frequency")]
     pileup: bool,
 
-    #[arg(short = 'f')]
+    #[arg(
+        short = 'f',
+        value_name = "FREQ",
+        help = "Allele frequency threshold; VarDictJava default is 0.01"
+    )]
     freq: Option<f64>,
 
-    #[arg(short = 'r')]
+    #[arg(
+        short = 'r',
+        value_name = "READS",
+        help = "Minimum number of variant-supporting reads; VarDictJava default is 2"
+    )]
     minr: Option<i32>,
 
-    #[arg(short = 'q')]
+    #[arg(
+        short = 'q',
+        value_name = "QUAL",
+        help = "Base quality threshold for a good call; VarDictJava default is 22.5"
+    )]
     goodq: Option<f64>,
 
-    #[arg(short = 'm')]
+    #[arg(
+        short = 'm',
+        value_name = "MISMATCHES",
+        help = "Filter reads with more than this many mismatches; gaps are not counted"
+    )]
     mismatch: Option<i32>,
 
-    #[arg(short = 'X')]
+    #[arg(
+        short = 'X',
+        value_name = "BP",
+        help = "Bases to look for mismatches after an insertion or deletion; default is 2"
+    )]
     vext: Option<i32>,
 
-    #[arg(short = 'B')]
+    #[arg(
+        short = 'B',
+        value_name = "READS",
+        help = "Minimum reads required to evaluate strand bias; default is 2"
+    )]
     min_bias_reads: Option<i32>,
 
-    /// -k: local realignment (optional value, default 1 when present)
-    #[arg(short = 'k', num_args = 0..=1, default_missing_value = "1")]
+    #[arg(
+        short = 'k',
+        value_name = "0|1",
+        num_args = 0..=1,
+        default_missing_value = "1",
+        help = "Enable local realignment when present; use -k 0 to disable it"
+    )]
     realign: Option<i32>,
 
-    #[arg(long = "fisher")]
+    #[arg(
+        long = "fisher",
+        help = "Calculate Fisher exact test values in-process where supported"
+    )]
     fisher: bool,
 
-    #[arg(long = "th")]
+    #[arg(
+        long = "th",
+        value_name = "THREADS",
+        help = "Thread count; Java-style -th is normalized to --th before parsing"
+    )]
     threads: Option<i32>,
 
     // --- BED column selection ---
-    #[arg(short = 'c', default_value_t = 1)]
+    #[arg(
+        short = 'c',
+        value_name = "INT",
+        default_value_t = 1,
+        help = "BED column for chromosome"
+    )]
     chromosome_column: usize,
-    #[arg(short = 'S', default_value_t = 2)]
+    #[arg(
+        short = 'S',
+        value_name = "INT",
+        default_value_t = 2,
+        help = "BED column for region start, such as gene start"
+    )]
     start_column: usize,
-    #[arg(short = 'E', default_value_t = 3)]
+    #[arg(
+        short = 'E',
+        value_name = "INT",
+        default_value_t = 3,
+        help = "BED column for region end, such as gene end"
+    )]
     end_column: usize,
-    #[arg(short = 'g')]
+    #[arg(
+        short = 'g',
+        value_name = "INT",
+        help = "BED column for gene name or segment annotation"
+    )]
     gene_column: Option<usize>,
-    #[arg(short = 's')]
+    #[arg(
+        short = 's',
+        value_name = "INT",
+        help = "BED column for segment starts, such as exon starts"
+    )]
     insert_start_column: Option<usize>,
-    #[arg(short = 'e')]
+    #[arg(
+        short = 'e',
+        value_name = "INT",
+        help = "BED column for segment ends, such as exon ends"
+    )]
     insert_end_column: Option<usize>,
 
     // --- coordinates / regions ---
-    /// -z: zero-based BED coordinates (optional value, default 1 when present)
-    #[arg(short = 'z', num_args = 0..=1, default_missing_value = "1")]
+    #[arg(
+        short = 'z',
+        value_name = "0|1",
+        num_args = 0..=1,
+        default_missing_value = "1",
+        help = "BED coordinates are zero-based when present; use 0 to disable"
+    )]
     zero_based: Option<i32>,
-    /// -x: bp to extend each region by
-    #[arg(short = 'x')]
+    #[arg(
+        short = 'x',
+        value_name = "BP",
+        help = "Number of nucleotides to extend each segment; default is 0"
+    )]
     number_nucleotide_to_extend: Option<i32>,
-    /// -a/--amplicon: amplicon-based calling, "int:float" (default 10:0.95)
-    #[arg(short = 'a', long = "amplicon", num_args = 0..=1, default_missing_value = "10:0.95")]
+    #[arg(
+        short = 'a',
+        long = "amplicon",
+        value_name = "INT:FLOAT",
+        num_args = 0..=1,
+        default_missing_value = "10:0.95",
+        help = "Parser compatibility only: amplicon mode is not implemented"
+    )]
     amplicon: Option<String>,
 
     // --- thresholds / filters ---
-    #[arg(short = 'Q')]
+    #[arg(
+        short = 'Q',
+        value_name = "MAPQ",
+        help = "Ignore reads with mapping quality below this value"
+    )]
     mapping_quality: Option<i32>,
-    #[arg(short = 'F')]
+    #[arg(
+        short = 'F',
+        value_name = "BIT",
+        help = "SAM flag filter in samtools-style hexadecimal or decimal form; use 0 to turn off"
+    )]
     samfilter: Option<String>,
-    #[arg(short = 'Z', long = "downsample")]
+    #[arg(
+        short = 'Z',
+        long = "downsample",
+        value_name = "FRACTION",
+        help = "Random downsampling fraction, for example 0.7; non-reproducible"
+    )]
     downsampling: Option<f64>,
-    #[arg(short = 'T', long = "trim")]
+    #[arg(
+        short = 'T',
+        long = "trim",
+        value_name = "BASES",
+        help = "Trim bases after this read position"
+    )]
     trim_bases_after: Option<i32>,
-    #[arg(short = 'P')]
+    #[arg(
+        short = 'P',
+        value_name = "POSITION",
+        help = "Mean read-position filter for variants; default is 5"
+    )]
     read_pos_filter: Option<i32>,
-    #[arg(short = 'o')]
+    #[arg(
+        short = 'o',
+        value_name = "QRATIO",
+        help = "Minimum good-quality to low-quality read ratio; default is 1.5"
+    )]
     qratio: Option<f64>,
-    #[arg(short = 'O')]
+    #[arg(
+        short = 'O',
+        value_name = "MAPQ",
+        help = "Minimum mean mapping quality for a valid variant; default is no filtering"
+    )]
     mapq: Option<f64>,
-    #[arg(short = 'V', long = "verbose")]
+    #[arg(
+        short = 'V',
+        long = "verbose",
+        value_name = "FREQ",
+        help = "Lowest normal-sample frequency allowed for a putative somatic mutation; default is 0.05"
+    )]
     lofreq: Option<f64>,
-    #[arg(short = 'I')]
+    #[arg(
+        short = 'I',
+        value_name = "BP",
+        help = "Indel size threshold; default is 50 bp"
+    )]
     indelsize: Option<i32>,
-    #[arg(short = 'M')]
+    #[arg(
+        short = 'M',
+        value_name = "BASES",
+        help = "Minimum matched bases for a read to be considered; default is no filtering"
+    )]
     minmatch: Option<i32>,
 
     // --- boolean modes ---
-    /// -3: move indels to 3-prime
-    #[arg(short = '3')]
+    #[arg(
+        short = '3',
+        help = "Move indels to 3-prime when alternative alignment can be achieved"
+    )]
     move_indels_to_3: bool,
-    #[arg(short = 'D', long = "debug")]
+    #[arg(
+        short = 'D',
+        long = "debug",
+        help = "Debug mode; prints additional diagnostic output"
+    )]
     debug: bool,
-    #[arg(short = 'y')]
+    #[arg(short = 'y', help = "Verbose mode")]
     y: bool,
-    /// -C: chromosome names are plain numbers (deprecated)
-    #[arg(short = 'C')]
+    #[arg(
+        short = 'C',
+        help = "Chromosome names are plain numbers, such as 1 and 2 instead of chr1 and chr2; deprecated"
+    )]
     chromosome_name_is_number: bool,
-    #[arg(short = 't', long = "dedup")]
+    #[arg(
+        short = 't',
+        long = "dedup",
+        help = "Remove duplicated reads; keep only one pair with the same start positions"
+    )]
     remove_duplicated_reads: bool,
-    #[arg(short = 'u')]
+    #[arg(
+        short = 'u',
+        help = "Unique mode: count overlapping mate-pair bases once using the forward read"
+    )]
     unique_mode_alignment: bool,
-    /// -UN: unique mode, second-in-pair (bridged from -UN)
-    #[arg(long = "UN")]
+    #[arg(
+        long = "UN",
+        help = "Unique mode: count overlapping mate-pair bases once using the first read; Java-style -UN is normalized"
+    )]
     unique_mode_second_in_pair: bool,
-    #[arg(short = 'K')]
+    #[arg(short = 'K', help = "Include N bases in total depth calculation")]
     include_n_in_total_depth: bool,
-    #[arg(short = 'i', long = "splice")]
+    #[arg(
+        short = 'i',
+        long = "splice",
+        help = "Parser compatibility only: splicing mode is not implemented"
+    )]
     output_splicing: bool,
-    /// -h/--header: print a header row
-    #[arg(short = 'h', long = "header")]
+    #[arg(short = 'h', long = "header", help = "Print a header row describing columns")]
     print_header: bool,
-    #[arg(long = "chimeric")]
+    #[arg(long = "chimeric", help = "Turn off chimeric read filtering")]
     chimeric: bool,
-    /// -U/--nosv: turn off structural-variant calling
-    #[arg(short = 'U', long = "nosv")]
+    #[arg(short = 'U', long = "nosv", help = "Turn off structural variant calling")]
     disable_sv: bool,
-    #[arg(long = "deldupvar")]
+    #[arg(
+        long = "deldupvar",
+        help = "Delete duplicate variants; only output variants whose start is inside the region of interest"
+    )]
     delete_duplicate_variants: bool,
-    /// -v: accepted for VarDictJava compatibility; ignored (output is always var-TSV)
-    #[arg(short = 'v')]
+    #[arg(
+        short = 'v',
+        help = "Accepted for VarDictJava compatibility but ignored; output remains VarDict-style TSV"
+    )]
     vcf: bool,
 
     // --- structural-variant / insert params ---
-    #[arg(short = 'w', long = "insert-size")]
+    #[arg(
+        short = 'w',
+        long = "insert-size",
+        value_name = "INT",
+        help = "Insert size used for structural variant calling; default is 300"
+    )]
     inssize: Option<i32>,
-    #[arg(short = 'W', long = "insert-std")]
+    #[arg(
+        short = 'W',
+        long = "insert-std",
+        value_name = "INT",
+        help = "Insert size standard deviation used for structural variant calling; default is 100"
+    )]
     insstd: Option<i32>,
-    #[arg(short = 'A')]
+    #[arg(
+        short = 'A',
+        value_name = "INT",
+        help = "Number of insert-size standard deviations used for deletion evidence; default is 4"
+    )]
     insstdamt: Option<i32>,
-    #[arg(short = 'L')]
+    #[arg(
+        short = 'L',
+        value_name = "BP",
+        help = "Minimum structural variant length to represent as symbolic alleles; default is 1000"
+    )]
     svminlen: Option<i32>,
-    #[arg(short = 'Y', long = "ref-extension")]
+    #[arg(
+        short = 'Y',
+        long = "ref-extension",
+        value_name = "BP",
+        help = "Reference extension used to build lookup tables for large indels; default is 1200"
+    )]
     reference_extension: Option<i32>,
 
     // --- CRISPR / MSI ---
-    #[arg(short = 'J', long = "crispr")]
+    #[arg(
+        short = 'J',
+        long = "crispr",
+        value_name = "SITE",
+        help = "CRISPR/Cas9 cutting site position used to adjust indel starts and ends"
+    )]
     crispr_cutting_site: Option<i32>,
-    #[arg(short = 'j')]
+    #[arg(
+        short = 'j',
+        value_name = "BP",
+        help = "Minimum read overlap with the CRISPR cutting site; default is no filtering"
+    )]
     crispr_filtering_bp: Option<i32>,
-    #[arg(long = "mfreq")]
+    #[arg(
+        long = "mfreq",
+        value_name = "FREQ",
+        help = "Variant frequency threshold for good monomer MSI variants; default is 0.25"
+    )]
     mfreq: Option<f64>,
-    #[arg(long = "nmfreq")]
+    #[arg(
+        long = "nmfreq",
+        value_name = "FREQ",
+        help = "Variant frequency threshold for good non-monomer MSI variants; default is 0.1"
+    )]
     nmfreq: Option<f64>,
 
     // --- output / misc ---
-    /// -d: column delimiter (default tab)
-    #[arg(short = 'd')]
+    #[arg(
+        short = 'd',
+        value_name = "DELIMITER",
+        help = "Delimiter for splitting region information; default is tab"
+    )]
     delimiter: Option<String>,
-    /// -DP: default printer, OUT or ERR (bridged from -DP)
-    #[arg(long = "DP")]
+    #[arg(
+        long = "DP",
+        value_name = "OUT|ERR",
+        help = "Default printer used for output; Java-style -DP is normalized"
+    )]
     default_printer: Option<String>,
-    /// -VS: validation stringency: STRICT, LENIENT or SILENT (bridged from -VS)
-    #[arg(long = "VS")]
+    #[arg(
+        long = "VS",
+        value_name = "STRICT|LENIENT|SILENT",
+        help = "SAM/BAM validation stringency; Java-style -VS is normalized"
+    )]
     validation_stringency: Option<String>,
-    /// --adaptor: comma-separated adaptor sequences to trim
-    #[arg(long = "adaptor")]
+    #[arg(
+        long = "adaptor",
+        value_name = "SEQ[,SEQ...]",
+        help = "Comma-separated adaptor sequences to exclude from realignment"
+    )]
     adaptor: Option<String>,
 
-    #[arg(value_name = "BED")]
+    #[arg(value_name = "BED", help = "BED file containing target regions")]
     bed_path: Option<String>,
 }
 
