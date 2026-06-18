@@ -26,9 +26,15 @@ caller for next-generation sequencing in cancer research. Nucleic Acids Res.
 Article link:
 https://academic.oup.com/nar/article/44/11/e108/2468301
 
-## Purpose of porting
 This port is for providing more performant VarDict Software. 
 See [THIS](./docs/performance.md) for performance benchmark of VarDictRust vs VarDictJava.
+
+## Disclaimer
+This repository has been written largely by coding agents(Copilot, Claude, Codex) with human monitoring.
+Changes are expected to preserve VarDictJava behavior and to be validated
+against the parity harness before being treated as accepted.
+
+
 
 ## Current Status
 
@@ -44,7 +50,7 @@ Not implemented and not currently planned:
 
 Current BAM-backed validation coverage:
 
-- Simple mode: 2 BAM inputs
+- Simple mode: 3 BAM inputs
 - Somatic mode: 1 BAM input
 
 This means the implemented paths have real BAM-based parity coverage, but the
@@ -376,11 +382,4 @@ set the FASTA path.
 Input reads should be provided in indexed BAM format. Use a single BAM for
 simple mode and a `tumor.bam|normal.bam` pair for somatic mode.
 
-## Development Model
 
-This repository has been written largely by coding agents with human monitoring.
-Changes are expected to preserve VarDictJava behavior and to be validated
-against the parity harness before being treated as accepted.
-
-The near-term direction is to expand validated parity coverage, then publish
-reproducible performance results for the implemented workflows.
