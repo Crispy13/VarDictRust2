@@ -47,7 +47,7 @@ Non-goals are listed below. Behavior outside this scope is explicitly unclaimed.
 - **GRCh38** via `testdata/GRCh38.d1.vd1.fa` (somatic lane only).
 
 ### Flag surface
-The 45 presets in [scripts/config_presets.tsv](scripts/config_presets.tsv) cover the
+The 46 presets in [scripts/config_presets.tsv](scripts/config_presets.tsv) cover the
 following flags. Any flag not in this list is unclaimed:
 
 | Flag | Axis | Coverage |
@@ -62,7 +62,13 @@ following flags. Any flag not in this list is unclaimed:
 
 Additional dedicated presets exercise execution-model and call-mode flags:
 `--fisher` (CM-FISHER), `-th 4` (CM-TH4), `-p` (CM-PILEUP), `-U` (CM-NOSV),
-`-k 0` (CM-NOREAL), `--chimeric` (CM-CHIMERIC), `-Q 30` (CM-MAPQ30).
+`-k 0` (CM-NOREAL), `--chimeric` (CM-CHIMERIC), `-Q 30` (CM-MAPQ30),
+`--adaptor` (CM-ADAPTOR).
+
+CM-ADAPTOR uses the Illumina universal read-through stem `AGATCGGAAGAGC`, valid because every current
+fixture BAM is verified `@RG PL:ILLUMINA` with no adaptor-trim step in `@PG`. When adding a fixture BAM,
+check `samtools view -H` `@RG PL` (platform → adaptor family) and `@PG` (already adaptor-trimmed?) before
+assuming `--adaptor` applies; a non-Illumina or pre-trimmed BAM needs its own value or none.
 Somatic-only flags `-M`, `-V`, `-I` are exercised by the somatic default config on
 the `wes_il_pair` tag.
 
@@ -80,12 +86,12 @@ the `wes_il_pair` tag.
   (7 rows each after the CM-* swap; tier-column totals are listed below).
 - **PW-000..PW-009** (10 rows) — pairwise interaction coverage across 6 threshold
   flags.
-- **CM-\*** (7 rows, named `CM-FISHER`, `CM-TH4`, `CM-PILEUP`, `CM-NOSV`,
-  `CM-NOREAL`, `CM-CHIMERIC`, `CM-MAPQ30`) — call-mode and bounded multi-thread
-  presets exercising distinct execution branches. The current tier-column
-  distribution is T1=14 / T2=11 / T3=10 / PW=10.
+- **CM-\*** (8 rows, named `CM-FISHER`, `CM-TH4`, `CM-PILEUP`, `CM-NOSV`,
+  `CM-NOREAL`, `CM-CHIMERIC`, `CM-MAPQ30`, `CM-ADAPTOR`) — call-mode and bounded
+  multi-thread presets exercising distinct execution branches. The current
+  tier-column distribution is T1=14 / T2=12 / T3=10 / PW=10.
 
-**Total: 45 rows.**
+**Total: 46 rows.**
 
 Drift between the TSV, the `CONFIG_PRESETS` constant in
 [tests/common/mod.rs](tests/common/mod.rs), and the
@@ -143,7 +149,7 @@ A claim of "100% parity" is substantiated by the following CI gates, **all green
 | E2E full sweep (somatic) | `sweep.yml` nightly | `parity_e2e_sweep_somatic` with `--include-ignored` on `wes_il_pair` |
 | Preset drift gate | `parity.yml` pre-test | `scripts/check_preset_drift.sh` |
 
-Full parity claim requires all rows × all covered chromosomes × all 45 presets to be
+Full parity claim requires all rows × all covered chromosomes × all 46 presets to be
 green in at least one `sweep.yml` nightly run. Partial coverage (e.g., smoke tier
 only) does **not** support the full claim.
 

@@ -45,6 +45,7 @@ declarative_test!(
     (parity_config_e2e_push_t2_07, "T2-07"),
     (parity_config_e2e_push_t2_08, "T2-08"),
     (parity_config_e2e_push_cm_nosv, "CM-NOSV"),
+    (parity_config_e2e_push_cm_adaptor, "CM-ADAPTOR"),
     (parity_config_e2e_push_t2_10, "T2-10"),
     (parity_config_e2e_push_t3_01, "T3-01"),
     (parity_config_e2e_push_t3_02, "T3-02"),
@@ -603,10 +604,19 @@ fn assert_config_matches_java_flags(
         defaults.exception_counter.load(Ordering::Relaxed),
         "Preset {preset_name} unexpectedly changed exception_counter"
     );
-    assert_eq!(
-        config.adaptor, defaults.adaptor,
-        "Preset {preset_name} unexpectedly changed adaptor"
-    );
+    match java_flags.get("--adaptor") {
+        Some(value) => {
+            let expected: Vec<String> = value.split(',').map(str::to_string).collect();
+            assert_eq!(
+                config.adaptor, expected,
+                "Preset {preset_name} adaptor must match --adaptor flag"
+            );
+        }
+        None => assert_eq!(
+            config.adaptor, defaults.adaptor,
+            "Preset {preset_name} unexpectedly changed adaptor"
+        ),
+    }
     assert_eq!(
         config.crispr_filtering_bp, defaults.crispr_filtering_bp,
         "Preset {preset_name} unexpectedly changed crispr_filtering_bp"
