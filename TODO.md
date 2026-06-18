@@ -4,6 +4,16 @@ Deferred work items in the VarDict-rs port that must be resolved before full pro
 
 ---
 # Planned
+## Replace per-region channel-of-channels with a single-channel index-reorder buffer (O(N) → O(1) channels)
+
+- **Status:** deferred cleanup / robustness (not a correctness or production-perf issue).
+- **Location:** `ParallelMode::parallel` in `src/modes.rs` (the `outer_tx`/`outer_rx` + per-region `bounded::<Vec<u8>>(1)` one-shot channels).
+- **Current Rust behavior:** since the dispatch-all change (`8bc9ec8`), the in-flight window is `regions.len().max(threads*64)`, so the dispatch loop creates **one `bounded(1)` channel per region** plus an outer `bounded(N)` ring buffer, all live at once. The consumer drains the outer channel in submission order to emit BED-ordered output. (Crossbeam channels are in-memory, so there is **no file-descriptor** concern.)
+- **Why this exists:** the original design used a small window (`threads.max(10)`) whose `outer_tx.send` backpressure throttled channel creation, so only ~window channels were ever live (O(window), bounded). The dispatch-all fix removed that throttle to kill the makespan dispatch-stall — which is what turned channel scaffolding into O(N)-live. In approach A, "bounded channels" and "no starvation" are the same knob, so you can't have both.
+- **Impact (measured/estimated):** at production scale **negligible** — channel scaffolding ≈ N × ~330 B ≈ **~6 MB at 20k regions / ~19 MB at 60k** (≈13% of the measured +45 MB RSS delta; the rest is buffered outputs + concurrency). **Time impact ~nil**: ~2–6 ms of channel creation in the dispatch loop, overlapped with worker compute (~0.1% of a 5 s run; invisible in the ~785% `-th 8` result). Only becomes a real problem under **adversarial BEDs with millions of tiny regions** (~hundreds of MB–GB of channels + a large upfront outer-ring allocation).
+- **Unblock path:** replace the channel-of-channels with a single MPSC worker→consumer channel carrying `(bed_index, Vec<u8>)`; consumer keeps a `next` pointer + `HashMap<usize, Vec<u8>>` of out-of-order results and flushes contiguously from `next` (same reorder idea `SimpleLineBuffer` uses at line granularity). This gives O(1) channels, memory that tracks the reorder *lead* instead of N, and a clean place to bound in-flight work independently. Byte-identical (still BED-ordered). Gate: byte-identical worst+typical + `--lib` + `tovars` + idle `-th 8` util unchanged (~785%).
+- **Detection:** RSS scaling linearly with region count on huge BEDs; channel-allocation frames in a heap profile proportional to N.
+
 ## Insepct and optimize high memory usage in testing:
 - T1-02 somatic bam running with 12 threads takes about 18G.
 

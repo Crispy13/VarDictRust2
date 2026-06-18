@@ -694,6 +694,7 @@ pub const CONFIG_PRESETS: &[&str] = &[
     "T2-07",
     "T2-08",
     "CM-NOSV",
+    "CM-ADAPTOR",
     "T2-10",
     "T3-01",
     "T3-02",
@@ -1069,6 +1070,9 @@ pub fn config_preset(name: &str) -> Configuration {
         }
         "CM-NOSV" => {
             config.disable_sv = true;
+        }
+        "CM-ADAPTOR" => {
+            config.adaptor = vec!["AGATCGGAAGAGC".to_string()];
         }
         "T2-10" => {
             config.min_bias_reads = 1;

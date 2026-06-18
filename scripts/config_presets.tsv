@@ -44,3 +44,4 @@ PW-006	-q 15 -X 1	Pairwise: goodq x vext	4	both
 PW-007	-m 4 -B 4	Pairwise: mismatch x bias	4	both
 PW-008	-X 5 -B 1	Pairwise: vext x bias	4	both
 PW-009	-m 12 -X 3	Pairwise: mismatch x vext	4	both
+CM-ADAPTOR	--adaptor AGATCGGAAGAGC	Call-mode: filter Illumina read-through adaptor in realignment	2	both
