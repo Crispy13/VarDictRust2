@@ -13,7 +13,7 @@ argument-hint: "Specify tier like 'tier1', 'config-spread', or 'promote to core-
 
 ## Purpose
 
-Use a graduated testing pyramid to expand config coverage without defaulting to the full 45 x 25 release matrix on every change. Start with fast smoke validation, promote only after each gate passes, and reserve pairwise and full-release sweeps for broader interaction and ship-readiness checks.
+Use a graduated testing pyramid to expand config coverage without defaulting to the full 58 x 25 release matrix on every change. Start with fast smoke validation, promote only after each gate passes, and reserve pairwise and full-release sweeps for broader interaction and ship-readiness checks.
 Verify the `logic-parity-audit` report is all-VERIFIED or explicitly user-approved before starting Tier 2 or broader presets.
 
 ## Testing Pyramid
@@ -22,10 +22,10 @@ Verify the `logic-parity-audit` report is all-VERIFIED or explicitly user-approv
 |------|-------------|---------|-------------|-------------|----------------|-------------|
 | 0 | `smoke` | 3 (`T1-01`, `T1-03`, `T1-13`) | 3 (`20`, `22`, `MT`) | 9 | ~1 min | Every build, every code change |
 | 1 | `tier1` | 14 (all `T1-*`) | 3 (`20`, `22`, `MT`) | 42 | ~5 min | After any parity fix |
-| 2 | `config-spread` | 45 (all configs) | 3 (`20`, `22`, `MT`) | 135 | ~15 min | After CLI wiring changes, weekly |
+| 2 | `config-spread` | 58 (all configs) | 3 (`20`, `22`, `MT`) | 174 | ~15 min | After CLI wiring changes, weekly |
 | 3 | `core-wide` | 14 (all `T1-*`) | 25 (all real) | 350 | ~45 min | Pre-merge of major SV or pipeline changes |
 | 4 | `pairwise` | 10 (`PW-000`..`PW-009`) | 10 (representative) | 100 | ~30-60 min | Pre-release interaction testing |
-| 5 | `release` | 45 (all configs) | 25 (all real) | 1125 | ~8-12 hr | Release candidate validation |
+| 5 | `release` | 58 (all configs) | 25 (all real) | 1450 | ~8-12 hr | Release candidate validation |
 
 Note: the existing `dev` preset is 10 configs x 10 chromosomes = 100 cells, which places it between Testing Pyramid Tier `1` and Tier `2` in coverage and runtime.
 
@@ -104,7 +104,7 @@ The presets above are the standard entry points. For targeted debugging or custo
 # Tier 1 interim: all Tier 1 configs on 20, 22, MT
 bash <harness> --tier 1 --chr 20 --chr 22 --chr MT --rust-only
 
-# Config-spread interim: all 45 configs on 20, 22, MT
+# Config-spread interim: all 58 configs on 20, 22, MT
 bash <harness> --chr 20 --chr 22 --chr MT --rust-only
 
 # Core-wide interim: all Tier 1 configs on all chromosomes
@@ -126,7 +126,7 @@ bash <harness> --tier 1 --all-chr --rust-only --parallel 5
 ## Blocked Config Management
 
 - `BLOCKED_CONFIGS` and `--include-blocked` are implemented in the harness.
-- `BLOCKED_CONFIGS` currently starts empty, so all 45 configs are runnable by default.
+- `BLOCKED_CONFIGS` currently starts empty, so all 58 configs are runnable by default.
 - Add configs to `BLOCKED_CONFIGS` only when a failure is intentionally quarantined, and leave them visible in status output so the skipped scope stays explicit.
 
 ## Resource Constraints

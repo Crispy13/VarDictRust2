@@ -35,13 +35,14 @@ log() { if [[ "$VERBOSE" -eq 1 ]]; then echo "[check_preset_applicability] $*"; 
 
 [[ -f "$TSV" ]] || { echo "[check_preset_applicability] MISSING: $TSV" >&2; exit 1; }
 
-# Somatic-only flags (call-mode): -M min-tumor-mapq, -V tumor-vaf, -I tumor-indel-dist, -A ambiguous-ref
+# Somatic-only flags (call-mode): -V tumor-vaf, -I tumor-indel-dist, -A ambiguous-ref
+# Note: -M is minmatch (minimum matched bp per read) and applies to both germline and somatic lanes.
 # These are meaningless in SimpleMode (germline) and must only appear in somatic or applies_to=somatic rows.
-SOMATIC_ONLY_FLAGS="-M -V -I -A"
+SOMATIC_ONLY_FLAGS="-V -I -A"
 
 # Covered flag set (from docs/parity-scope.md). Unknown flags are flagged as warnings
 # to encourage keeping the scope doc in sync.
-COVERED_FLAGS="-f -r -q -m -X -B --fisher -p -U -k --chimeric -Q -th -M -V -I --adaptor"
+COVERED_FLAGS="-f -r -q -m -X -B --fisher -p -U -k --chimeric -Q -th -M -V -I --adaptor -F -u --UN -o -O -T -x -3 -D -P --deldupvar"
 
 fail_count=0
 warn_count=0
@@ -66,7 +67,7 @@ while IFS='|' read -r name flags applies_to; do
       flag_tokens+=("$tok")
       # Flag takes a value unless it's one of the boolean flags
       case "$tok" in
-        --fisher|-p|-U|--chimeric) next_is_value=0 ;;
+        --fisher|-p|-U|--chimeric|-u|--UN|-3|-D|--deldupvar) next_is_value=0 ;;
         *) next_is_value=1 ;;
       esac
     fi

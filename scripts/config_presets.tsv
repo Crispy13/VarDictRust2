@@ -45,3 +45,15 @@ PW-007	-m 4 -B 4	Pairwise: mismatch x bias	4	both
 PW-008	-X 5 -B 1	Pairwise: vext x bias	4	both
 PW-009	-m 12 -X 3	Pairwise: mismatch x vext	4	both
 CM-ADAPTOR	--adaptor AGATCGGAAGAGC	Call-mode: filter Illumina read-through adaptor in realignment	2	both
+CM-SAMFILT	-F 0	Call-mode: keep all reads (SAM filter bitflag 0)	2	both
+CM-UNIQ	-u	Call-mode: unique mode, overlapping mate pairs once (forward)	2	both
+CM-UNIQUN	--UN	Call-mode: unique mode, overlapping mate pairs once (first-in-pair)	2	both
+CM-QRATIO	-o 10	Call-mode: high qratio threshold	2	both
+CM-MEANMAPQ	-O 30	Call-mode: minimum mean MapQ floor	2	both
+CM-TRIM	-T 30	Call-mode: trim read bases after position 30	2	both
+CM-EXTEND	-x 50	Call-mode: extend each segment by 50 bp	3	both
+CM-3PRIME	-3	Call-mode: move indels to 3-prime	3	both
+CM-DEBUG	-D	Call-mode: debug, append genotype column	3	both
+CM-READPOS	-P 0	Call-mode: read-position filter 0	3	both
+CM-MINMATCH	-M 30	Call-mode: minimum matched bp per read	3	both
+CM-DELDUP	--deldupvar	Call-mode: delete duplicate variants	3	both
