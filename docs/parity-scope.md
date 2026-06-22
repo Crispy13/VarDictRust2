@@ -61,21 +61,20 @@ following flags. Any flag not in this list is unclaimed:
 | `-th` | SimpleMode worker count | `CM-TH4` only (`-th 4`) |
 | `-F` | SAM filter bitflag | `CM-SAMFILT` (`-F 0`) |
 | `-u` | Unique mode (forward) | `CM-UNIQ` |
-| `--UN` | Unique mode (first-in-pair) | `CM-UNIQUN` — ⚠️ **KNOWN PARITY GAP (deferred, not byte-identical)** |
+| `--UN` | Unique mode (first-in-pair) | `CM-UNIQUN` |
 | `-o` | Qratio threshold | `CM-QRATIO` (`-o 10`) |
 | `-O` | Mean MapQ floor | `CM-MEANMAPQ` (`-O 30`) |
 | `-T` | Trim read bases after position | `CM-TRIM` (`-T 30`) |
-| `-x` | Extend segment by N bp | `CM-EXTEND` (`-x 50`) — ⚠️ **KNOWN PARITY GAP (deferred, not byte-identical)** |
+| `-x` | Extend segment by N bp | `CM-EXTEND` (`-x 50`) |
 | `-3` | Move indels to 3-prime | `CM-3PRIME` |
-| `-D` | Debug mode (append genotype column) | `CM-DEBUG` — ⚠️ **KNOWN PARITY GAP (deferred, not byte-identical)** |
+| `-D` | Debug mode (append genotype column) | `CM-DEBUG` |
 | `-P` | Read-position filter | `CM-READPOS` (`-P 0`) |
 | `--deldupvar` | Delete duplicate variants | `CM-DELDUP` |
 
-> **⚠️ Known parity gaps:** `-D` (CM-DEBUG), `--UN` (CM-UNIQUN), and `-x` (CM-EXTEND) are wired as presets
-> for coverage but are **NOT byte-identical** to VarDictJava yet; their parity assertion is **skipped**
-> (`KNOWN_PARITY_GAP_PRESETS` in `tests/common/mod.rs`). Do not use these flags in production. Details and
-> fix-later tracking: [docs/known-parity-gaps.md](known-parity-gaps.md). The byte-parity claim below covers
-> the other **55** presets.
+> **All preset flags are byte-identical to VarDictJava.** The former parity gaps `-D` (CM-DEBUG),
+> `--UN` (CM-UNIQUN), and `-x` (CM-EXTEND) were repaired (config-e2e byte-identical) and un-skipped;
+> `KNOWN_PARITY_GAP_PRESETS` in `tests/common/mod.rs` is now empty. The byte-parity claim below covers
+> all **58** presets.
 
 Additional dedicated presets exercise execution-model and call-mode flags:
 `--fisher` (CM-FISHER), `-th 4` (CM-TH4), `-p` (CM-PILEUP), `-U` (CM-NOSV),

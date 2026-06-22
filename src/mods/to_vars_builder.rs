@@ -442,9 +442,9 @@ pub fn create_variant(
         var.push(tvref);
 
         if conf.debug {
-            debug_lines.push(format!(
-                "Variant: {} Cnt={} Fwd={} Rev={}",
-                description_string, cnt.vars_count, fwd, rev
+            debug_lines.push(debug_variants_content(
+                var.last().expect("variant just pushed"),
+                &description_string,
             ));
         }
     }
@@ -569,10 +569,11 @@ pub fn create_insertion(
         var.push(tvref);
 
         if conf.debug {
-            debug_lines.push(format!(
-                "InsVariant: {} Cnt={} Fwd={} Rev={}",
-                description_string, cnt.vars_count, fwd, rev
-            ));
+            let content = debug_variants_content(
+                var.last().expect("insertion variant just pushed"),
+                &description_string,
+            );
+            debug_lines.push(format!("I{content}"));
         }
     }
 
@@ -712,6 +713,27 @@ fn prune_coverage_map_before(
         map.remove(&sorted_keys[*cursor]);
         *cursor += 1;
     }
+}
+
+/// Java: Variant.debugVariantsContent (variations/Variant.java:268). Field order and formatting
+/// mirror Java exactly: DecimalFormat fields via `format_half_even`; `mean_mapping_quality` is
+/// appended raw (Java `"" + double` == Double.toString) via `java_double_string`.
+fn debug_variants_content(v: &Variant, n: &str) -> String {
+    format!(
+        "{n}:{}:F-{}:R-{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+        v.vars_count_on_forward + v.vars_count_on_reverse,
+        v.vars_count_on_forward,
+        v.vars_count_on_reverse,
+        crate::utils::format_half_even("0.0000", v.frequency),
+        v.strand_bias_flag,
+        crate::utils::format_half_even("0.0", v.mean_position),
+        if v.is_at_least_at_2_positions { "1" } else { "0" },
+        crate::utils::format_half_even("0.0", v.mean_quality),
+        if v.has_at_least_2_diff_qualities { "1" } else { "0" },
+        crate::utils::format_half_even("0.0000", v.high_quality_reads_frequency),
+        crate::fisher::java_double_string(v.mean_mapping_quality),
+        crate::utils::format_half_even("0.000", v.high_quality_to_low_quality_ratio),
+    )
 }
 
 /// Ported from: ToVarsBuilder.java:L1018-L1030

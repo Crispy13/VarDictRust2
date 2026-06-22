@@ -676,7 +676,7 @@ pub fn load_chr_lengths(fai_path: &str) -> HashMap<String, i32> {
 ///   CM-UNIQUN (--UN) : unpaired-read skip under unique-second-in-pair mode not replicated
 ///   CM-EXTEND (-x)   : region extension not applied on the config-e2e region path
 #[allow(dead_code)]
-pub const KNOWN_PARITY_GAP_PRESETS: &[&str] = &["CM-DEBUG", "CM-UNIQUN", "CM-EXTEND"];
+pub const KNOWN_PARITY_GAP_PRESETS: &[&str] = &[];
 
 #[allow(dead_code)]
 pub const CONFIG_PRESETS: &[&str] = &[
@@ -848,8 +848,18 @@ pub fn run_simple_mode_region_with_config(
     config: Configuration,
 ) -> String {
     let thread_count = configured_thread_count(config.threads);
+    let extend = config.number_nucleotide_to_extend;
     let _guard = init_test_scope_with_config(config, bam_path, ref_path, chr_lengths.clone());
     let mut region = parse_region(region_str);
+
+    // Apply -x region extension to match VarDictJava's -R path (mirrors src/bin/vardict_rs.rs `parse_region`).
+    if extend != 0 {
+        region.start -= extend;
+        region.end += extend;
+        if region.start > region.end {
+            region.start = region.end;
+        }
+    }
 
     region.gene = region.chr.clone();
 

@@ -1,20 +1,17 @@
-# Known Parity Gaps (DO NOT USE these flags)
+# Known Parity Gaps
 
-**Status:** These VarDictJava flags are **wired into VarDict-rs but NOT byte-identical** to VarDictJava.
-Their config-e2e presets exist for coverage/declaration, but the parity assertion is **skipped** (see
-`KNOWN_PARITY_GAP_PRESETS` in [tests/common/mod.rs](../tests/common/mod.rs) and the skip in `run_cell`). Do not
-rely on these flags in production — VarDict-rs output diverges from VarDictJava. Each is a tracked fix-later task.
+**Status: none.** All VarDictJava flags wired into VarDict-rs are byte-identical to VarDictJava at
+config-e2e scale, and `KNOWN_PARITY_GAP_PRESETS` in [tests/common/mod.rs](../tests/common/mod.rs) is empty.
 
-When a gap is fixed: remove the preset from `KNOWN_PARITY_GAP_PRESETS`, regenerate its golden, and confirm the
-cells + push tests pass byte-identical; then delete its row here.
+## Resolved
 
-| Flag | Preset | Divergence (observed on the config-e2e regions) | Likely fix site |
-|------|--------|--------------------------------------------------|-----------------|
-| `-D` (debug) | `CM-DEBUG` | Debug genotype column format differs. Java: `G:3:F-1:R-2:1.0000:2:22.7:1:31.7:1:1.0000:60.0:6.000`. vdr: `Variant: G Cnt=3 Fwd=1 Rev=2`. | `src/mods/output.rs` (the `debug` field formatter) |
-| `--UN` (unique, first-in-pair) | `CM-UNIQUN` | 2/100 regions diverge. VarDictJava throws `IllegalStateException: Inappropriate call if not paired read` on unpaired reads, catches it, and skips the record; vdr does not replicate the skip under unique-second-in-pair mode. | sam parsing / `src/mods/cigar_parser.rs` (unique-mode read handling) |
-| `-x` (segment extend) | `CM-EXTEND` | Region label/scan not extended. With `-x 50`, Java reports the extended region (e.g. `20:1515366-1518971`); vdr reports the original (`20:1515416-1518921`). The config-e2e harness `parse_region` (`tests/common/mod.rs`) builds the region without applying `number_nucleotide_to_extend`. | config-e2e harness region setup (and verify the production CLI region-build path applies `-x`) |
+The three flags below were previously deferred gaps; they are now repaired and their config-e2e parity
+assertions pass byte-identical (un-skipped):
 
-## How these were found
-Added during the config-preset flag-coverage expansion (teeth-probe → 12 new presets). 9 of the 12 were
-byte-identical; these 3 surfaced real divergences — see `tmp/preset-teeth-probe/REPORT.md`. Decision (user):
-ship all 12 in the test suite now, defer these 3 fixes to a later task, and mark them do-not-use here.
+| Flag | Preset | Fix |
+|------|--------|-----|
+| `-x` (segment extend) | `CM-EXTEND` | The config-e2e/sweep test harness now applies `number_nucleotide_to_extend` when building the scan Region (matching the production `-R`/BED paths in `src/bin/vardict_rs.rs`). Production was already correct. |
+| `--UN` (unique, second-in-pair) | `CM-UNIQUN` | `src/mods/cigar_parser.rs` now fully skips unpaired reads under `unique_mode_second_in_pair_enabled`, replicating VarDictJava's `getSecondOfPairFlag()` `IllegalStateException` → per-record catch-and-skip. |
+| `-D` (debug column) | `CM-DEBUG` | `src/mods/to_vars_builder.rs` now emits VarDictJava's `debugVariantsContent` format (`n:cnt:F-fwd:R-rev:freq:…`), with the `I` prefix for insertions. |
+
+If a new gap is discovered: add the preset to `KNOWN_PARITY_GAP_PRESETS`, document it here, and track the fix.
