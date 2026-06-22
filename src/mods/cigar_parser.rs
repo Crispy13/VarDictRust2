@@ -1032,6 +1032,13 @@ impl CigarParser {
         // Java: CigarParser.java#L339-L649 — processCigar: labeled loop
         let mut ci: usize = 0;
         'process_cigar: while ci < num_cigar_elements {
+            // Java: CigarParser.java#L1916 — skipOverlappingReads evaluates record.getSecondOfPairFlag(),
+            // which throws IllegalStateException for unpaired reads under --UN (uniqueModeSecondInPairEnabled);
+            // the per-record catch (CigarParser.java#L94-L104) then skips the whole record. `break` would only
+            // end the cigar loop, so replicate the full-record skip with an early return.
+            if unique_mode_second_in_pair_enabled && !record.is_paired() {
+                return;
+            }
             // Java: CigarParser.java#L340
             if should_check_overlapping_reads
                 && self.skip_overlapping_reads(

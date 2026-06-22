@@ -408,10 +408,14 @@ def looks_like_tile_key(value: bytes) -> bool:
     chrom_and_range = value.split(b":", 1)
     if len(chrom_and_range) != 2:
         return False
-    start_and_end = chrom_and_range[1].split(b"-", 1)
+    # rsplit on the last '-' so a negative start coordinate (e.g. "MT:-50-750", produced by
+    # -x extending a tile past contig start) splits as ("-50", "750") rather than ("", "50-750").
+    start_and_end = chrom_and_range[1].rsplit(b"-", 1)
     if len(start_and_end) != 2:
         return False
-    return start_and_end[0].isdigit() and start_and_end[1].isdigit()
+    start, end = start_and_end
+    start_digits = start[1:] if start.startswith(b"-") else start
+    return start_digits.isdigit() and end.isdigit()
 
 
 def detect_region_column(fields: list[bytes]) -> int | None:

@@ -3,6 +3,12 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Phase 2 wrapper for e2e sweep cache regeneration.
+# START HERE for fixture generation: canonical resource locations (caches, sweep BEDs, per-tag
+#   bed_sha256) and the additive-safe runbook are in
+#   .claude/skills/workflow-management/references/sweep-fixture-generation.md (§5 = runbook).
+#   The canonical sweep BEDs already exist in the sibling repo /home/eck/workspace/vardict_rs2/tmp/
+#   sweep_beds (reuse via --sweep-bed-root; DO NOT regenerate). Writes through the tmp/sweep_fixtures
+#   symlink, which must be repointed at the target cache first. Verify bed_sha256 before generating.
 # References: Phase 0b commit 04b0816 and /memories/session/subplan-e2e-sweep-phase2.md.
 # Context confirmed before implementation:
 # - sweep_fixtures_parallel.py already exposes --output-only, --config, --sweep-bed-root, and --tags.

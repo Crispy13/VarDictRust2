@@ -46,6 +46,12 @@ declarative_test!(
     (parity_config_e2e_push_t2_08, "T2-08"),
     (parity_config_e2e_push_cm_nosv, "CM-NOSV"),
     (parity_config_e2e_push_cm_adaptor, "CM-ADAPTOR"),
+    (parity_config_e2e_push_cm_samfilt, "CM-SAMFILT"),
+    (parity_config_e2e_push_cm_uniq, "CM-UNIQ"),
+    (parity_config_e2e_push_cm_uniqun, "CM-UNIQUN"),
+    (parity_config_e2e_push_cm_qratio, "CM-QRATIO"),
+    (parity_config_e2e_push_cm_meanmapq, "CM-MEANMAPQ"),
+    (parity_config_e2e_push_cm_trim, "CM-TRIM"),
     (parity_config_e2e_push_t2_10, "T2-10"),
     (parity_config_e2e_push_t3_01, "T3-01"),
     (parity_config_e2e_push_t3_02, "T3-02"),
@@ -53,6 +59,12 @@ declarative_test!(
     (parity_config_e2e_push_t3_04, "T3-04"),
     (parity_config_e2e_push_t3_05, "T3-05"),
     (parity_config_e2e_push_cm_chimeric, "CM-CHIMERIC"),
+    (parity_config_e2e_push_cm_extend, "CM-EXTEND"),
+    (parity_config_e2e_push_cm_3prime, "CM-3PRIME"),
+    (parity_config_e2e_push_cm_debug, "CM-DEBUG"),
+    (parity_config_e2e_push_cm_readpos, "CM-READPOS"),
+    (parity_config_e2e_push_cm_minmatch, "CM-MINMATCH"),
+    (parity_config_e2e_push_cm_deldup, "CM-DELDUP"),
     (parity_config_e2e_push_t3_07, "T3-07"),
     (parity_config_e2e_push_t3_08, "T3-08"),
     (parity_config_e2e_push_cm_mapq30, "CM-MAPQ30"),
@@ -94,6 +106,10 @@ fn run_config_e2e_suite(indices: Option<&[usize]>, regeneration_command: &str) {
     let implementation = common::resolve_impl();
 
     for config_name in common::CONFIG_PRESETS {
+        // Known, deferred parity gaps are skipped here too (see docs/known-parity-gaps.md).
+        if common::KNOWN_PARITY_GAP_PRESETS.contains(config_name) {
+            continue;
+        }
         let config = common::config_preset(config_name);
         let java_flags = common::config_preset_java_flags(config_name);
 
@@ -391,9 +407,13 @@ fn assert_config_matches_java_flags(
         config.bed, defaults.bed,
         "Preset {preset_name} unexpectedly changed bed"
     );
-    assert_eq!(
-        config.number_nucleotide_to_extend, defaults.number_nucleotide_to_extend,
-        "Preset {preset_name} unexpectedly changed number_nucleotide_to_extend"
+    assert_int_flag(
+        preset_name,
+        java_flags,
+        "-x",
+        config.number_nucleotide_to_extend,
+        defaults.number_nucleotide_to_extend,
+        "number_nucleotide_to_extend",
     );
     assert_eq!(
         config.zero_based, defaults.zero_based,
@@ -451,9 +471,13 @@ fn assert_config_matches_java_flags(
         config.y, defaults.y,
         "Preset {preset_name} unexpectedly changed y"
     );
-    assert_eq!(
-        config.trim_bases_after, defaults.trim_bases_after,
-        "Preset {preset_name} unexpectedly changed trim_bases_after"
+    assert_int_flag(
+        preset_name,
+        java_flags,
+        "-T",
+        config.trim_bases_after,
+        defaults.trim_bases_after,
+        "trim_bases_after",
     );
     assert_int_bool_flag(
         preset_name,
@@ -472,35 +496,59 @@ fn assert_config_matches_java_flags(
         defaults.bias,
         &format!("Preset {preset_name} unexpectedly changed bias"),
     );
-    assert_eq!(
-        config.debug, defaults.debug,
-        "Preset {preset_name} unexpectedly changed debug"
+    assert_present_bool_flag(
+        java_flags,
+        "-D",
+        config.debug,
+        defaults.debug,
+        preset_name,
+        "debug",
     );
-    assert_eq!(
-        config.move_indels_to_3, defaults.move_indels_to_3,
-        "Preset {preset_name} unexpectedly changed move_indels_to_3"
+    assert_present_bool_flag(
+        java_flags,
+        "-3",
+        config.move_indels_to_3,
+        defaults.move_indels_to_3,
+        preset_name,
+        "move_indels_to_3",
     );
-    assert_eq!(
-        config.samfilter, defaults.samfilter,
-        "Preset {preset_name} unexpectedly changed samfilter"
-    );
+    match java_flags.get("-F") {
+        Some(value) => assert_eq!(
+            config.samfilter, *value,
+            "Preset {preset_name} samfilter must match -F flag"
+        ),
+        None => assert_eq!(
+            config.samfilter, defaults.samfilter,
+            "Preset {preset_name} unexpectedly changed samfilter"
+        ),
+    }
     assert_eq!(
         config.region_of_interest, defaults.region_of_interest,
         "Preset {preset_name} unexpectedly changed region_of_interest"
     );
-    assert_eq!(
-        config.read_pos_filter, defaults.read_pos_filter,
-        "Preset {preset_name} unexpectedly changed read_pos_filter"
+    assert_int_flag(
+        preset_name,
+        java_flags,
+        "-P",
+        config.read_pos_filter,
+        defaults.read_pos_filter,
+        "read_pos_filter",
     );
-    assert_float_eq(
+    assert_float_flag(
+        preset_name,
+        java_flags,
+        "-o",
         config.qratio,
         defaults.qratio,
-        &format!("Preset {preset_name} unexpectedly changed qratio"),
+        "qratio",
     );
-    assert_float_eq(
+    assert_float_flag(
+        preset_name,
+        java_flags,
+        "-O",
         config.mapq,
         defaults.mapq,
-        &format!("Preset {preset_name} unexpectedly changed mapq"),
+        "mapq",
     );
     assert_present_bool_flag(
         java_flags,
@@ -515,9 +563,13 @@ fn assert_config_matches_java_flags(
         defaults.lofreq,
         &format!("Preset {preset_name} unexpectedly changed lofreq"),
     );
-    assert_eq!(
-        config.minmatch, defaults.minmatch,
-        "Preset {preset_name} unexpectedly changed minmatch"
+    assert_int_flag(
+        preset_name,
+        java_flags,
+        "-M",
+        config.minmatch,
+        defaults.minmatch,
+        "minmatch",
     );
     assert_eq!(
         config.output_splicing, defaults.output_splicing,
@@ -531,13 +583,21 @@ fn assert_config_matches_java_flags(
         config.include_n_in_total_depth, defaults.include_n_in_total_depth,
         "Preset {preset_name} unexpectedly changed include_n_in_total_depth"
     );
-    assert_eq!(
-        config.unique_mode_alignment_enabled, defaults.unique_mode_alignment_enabled,
-        "Preset {preset_name} unexpectedly changed unique_mode_alignment_enabled"
+    assert_present_bool_flag(
+        java_flags,
+        "-u",
+        config.unique_mode_alignment_enabled,
+        defaults.unique_mode_alignment_enabled,
+        preset_name,
+        "unique_mode_alignment_enabled",
     );
-    assert_eq!(
-        config.unique_mode_second_in_pair_enabled, defaults.unique_mode_second_in_pair_enabled,
-        "Preset {preset_name} unexpectedly changed unique_mode_second_in_pair_enabled"
+    assert_present_bool_flag(
+        java_flags,
+        "--UN",
+        config.unique_mode_second_in_pair_enabled,
+        defaults.unique_mode_second_in_pair_enabled,
+        preset_name,
+        "unique_mode_second_in_pair_enabled",
     );
     assert_int_flag(
         preset_name,
@@ -563,9 +623,13 @@ fn assert_config_matches_java_flags(
         preset_name,
         "disable_sv",
     );
-    assert_eq!(
-        config.delete_duplicate_variants, defaults.delete_duplicate_variants,
-        "Preset {preset_name} unexpectedly changed delete_duplicate_variants"
+    assert_present_bool_flag(
+        java_flags,
+        "--deldupvar",
+        config.delete_duplicate_variants,
+        defaults.delete_duplicate_variants,
+        preset_name,
+        "delete_duplicate_variants",
     );
     assert_present_bool_flag(
         java_flags,

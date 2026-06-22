@@ -47,7 +47,7 @@ Non-goals are listed below. Behavior outside this scope is explicitly unclaimed.
 - **GRCh38** via `testdata/GRCh38.d1.vd1.fa` (somatic lane only).
 
 ### Flag surface
-The 46 presets in [scripts/config_presets.tsv](scripts/config_presets.tsv) cover the
+The 58 presets in [scripts/config_presets.tsv](scripts/config_presets.tsv) cover the
 following flags. Any flag not in this list is unclaimed:
 
 | Flag | Axis | Coverage |
@@ -59,11 +59,30 @@ following flags. Any flag not in this list is unclaimed:
 | `-X` | Vext (realignment window) | T1-04, T1-13 + T2/T3/PW combinations |
 | `-B` | Bias-read requirement | T1-05, T1-14 + T2/T3/PW combinations |
 | `-th` | SimpleMode worker count | `CM-TH4` only (`-th 4`) |
+| `-F` | SAM filter bitflag | `CM-SAMFILT` (`-F 0`) |
+| `-u` | Unique mode (forward) | `CM-UNIQ` |
+| `--UN` | Unique mode (first-in-pair) | `CM-UNIQUN` |
+| `-o` | Qratio threshold | `CM-QRATIO` (`-o 10`) |
+| `-O` | Mean MapQ floor | `CM-MEANMAPQ` (`-O 30`) |
+| `-T` | Trim read bases after position | `CM-TRIM` (`-T 30`) |
+| `-x` | Extend segment by N bp | `CM-EXTEND` (`-x 50`) |
+| `-3` | Move indels to 3-prime | `CM-3PRIME` |
+| `-D` | Debug mode (append genotype column) | `CM-DEBUG` |
+| `-P` | Read-position filter | `CM-READPOS` (`-P 0`) |
+| `--deldupvar` | Delete duplicate variants | `CM-DELDUP` |
+
+> **All preset flags are byte-identical to VarDictJava.** The former parity gaps `-D` (CM-DEBUG),
+> `--UN` (CM-UNIQUN), and `-x` (CM-EXTEND) were repaired (config-e2e byte-identical) and un-skipped;
+> `KNOWN_PARITY_GAP_PRESETS` in `tests/common/mod.rs` is now empty. The byte-parity claim below covers
+> all **58** presets.
 
 Additional dedicated presets exercise execution-model and call-mode flags:
 `--fisher` (CM-FISHER), `-th 4` (CM-TH4), `-p` (CM-PILEUP), `-U` (CM-NOSV),
 `-k 0` (CM-NOREAL), `--chimeric` (CM-CHIMERIC), `-Q 30` (CM-MAPQ30),
-`--adaptor` (CM-ADAPTOR).
+`--adaptor` (CM-ADAPTOR), `-F 0` (CM-SAMFILT), `-u` (CM-UNIQ), `--UN` (CM-UNIQUN),
+`-o 10` (CM-QRATIO), `-O 30` (CM-MEANMAPQ), `-T 30` (CM-TRIM), `-x 50` (CM-EXTEND),
+`-3` (CM-3PRIME), `-D` (CM-DEBUG), `-P 0` (CM-READPOS), `-M 30` (CM-MINMATCH),
+`--deldupvar` (CM-DELDUP).
 
 CM-ADAPTOR uses the Illumina universal read-through stem `AGATCGGAAGAGC`, valid because every current
 fixture BAM is verified `@RG PL:ILLUMINA` with no adaptor-trim step in `@PG`. When adding a fixture BAM,
@@ -86,12 +105,14 @@ the `wes_il_pair` tag.
   (7 rows each after the CM-* swap; tier-column totals are listed below).
 - **PW-000..PW-009** (10 rows) — pairwise interaction coverage across 6 threshold
   flags.
-- **CM-\*** (8 rows, named `CM-FISHER`, `CM-TH4`, `CM-PILEUP`, `CM-NOSV`,
-  `CM-NOREAL`, `CM-CHIMERIC`, `CM-MAPQ30`, `CM-ADAPTOR`) — call-mode and bounded
+- **CM-\*** (20 rows, named `CM-FISHER`, `CM-TH4`, `CM-PILEUP`, `CM-NOSV`,
+  `CM-NOREAL`, `CM-CHIMERIC`, `CM-MAPQ30`, `CM-ADAPTOR`, `CM-SAMFILT`, `CM-UNIQ`,
+  `CM-UNIQUN`, `CM-QRATIO`, `CM-MEANMAPQ`, `CM-TRIM`, `CM-EXTEND`, `CM-3PRIME`,
+  `CM-DEBUG`, `CM-READPOS`, `CM-MINMATCH`, `CM-DELDUP`) — call-mode and bounded
   multi-thread presets exercising distinct execution branches. The current
-  tier-column distribution is T1=14 / T2=12 / T3=10 / PW=10.
+  tier-column distribution is T1=14 / T2=18 / T3=16 / PW=10.
 
-**Total: 46 rows.**
+**Total: 58 rows.**
 
 Drift between the TSV, the `CONFIG_PRESETS` constant in
 [tests/common/mod.rs](tests/common/mod.rs), and the
@@ -149,7 +170,7 @@ A claim of "100% parity" is substantiated by the following CI gates, **all green
 | E2E full sweep (somatic) | `sweep.yml` nightly | `parity_e2e_sweep_somatic` with `--include-ignored` on `wes_il_pair` |
 | Preset drift gate | `parity.yml` pre-test | `scripts/check_preset_drift.sh` |
 
-Full parity claim requires all rows × all covered chromosomes × all 46 presets to be
+Full parity claim requires all rows × all covered chromosomes × all 58 presets to be
 green in at least one `sweep.yml` nightly run. Partial coverage (e.g., smoke tier
 only) does **not** support the full claim.
 
