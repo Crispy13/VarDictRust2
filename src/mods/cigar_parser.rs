@@ -1032,10 +1032,16 @@ impl CigarParser {
         // Java: CigarParser.java#L339-L649 — processCigar: labeled loop
         let mut ci: usize = 0;
         'process_cigar: while ci < num_cigar_elements {
-            // Java: CigarParser.java#L1916 — skipOverlappingReads evaluates record.getSecondOfPairFlag(),
-            // which throws IllegalStateException for unpaired reads under --UN (uniqueModeSecondInPairEnabled);
-            // the per-record catch (CigarParser.java#L94-L104) then skips the whole record. `break` would only
-            // end the cigar loop, so replicate the full-record skip with an early return.
+            // Java: CigarParser.java#L1916 — skipOverlappingReads evaluates record.getSecondOfPairFlag()
+            // BEFORE its isPairedAndSameChromosome() guard (operand-order bug; the --UNA branch above
+            // guards first), so for an unpaired read it throws IllegalStateException. We skip the whole
+            // record instead, honoring --UN's intent (skip second-in-pair reads, which only paired reads
+            // can be). NOTE: this is intentionally NOT byte-identical to VarDictJava on BAMs with many
+            // unpaired reads: Java's per-record catch (L94-L104) absorbs the first ~10 throws, then the
+            // MAX_EXCEPTION_COUNT backstop (Utils.java#L273) escalates to a CompletionException and the
+            // whole run exits 1 with NO output. We emit correct output instead — a bounded, intent-justified
+            // parity gap documented in docs/known-parity-gaps.md. `break` would only end the cigar loop, so
+            // we early-return to skip the full record.
             if unique_mode_second_in_pair_enabled && !record.is_paired() {
                 return;
             }

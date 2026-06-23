@@ -74,7 +74,10 @@ following flags. Any flag not in this list is unclaimed:
 > **All preset flags are byte-identical to VarDictJava.** The former parity gaps `-D` (CM-DEBUG),
 > `--UN` (CM-UNIQUN), and `-x` (CM-EXTEND) were repaired (config-e2e byte-identical) and un-skipped;
 > `KNOWN_PARITY_GAP_PRESETS` in `tests/common/mod.rs` is now empty. The byte-parity claim below covers
-> all **58** presets.
+> all **58** presets. One bounded exception applies to `--UN` (CM-UNIQUN): on BAMs with >~10 unpaired
+> reads VarDictJava crashes by its own operand-order bug (exit 1, no output) while VarDict-rs emits
+> correct output, so the two are not byte-comparable there. Parity holds on every paired-read BAM (where
+> VarDictJava produces output). See [known-parity-gaps.md](known-parity-gaps.md).
 
 Additional dedicated presets exercise execution-model and call-mode flags:
 `--fisher` (CM-FISHER), `-th 4` (CM-TH4), `-p` (CM-PILEUP), `-U` (CM-NOSV),
