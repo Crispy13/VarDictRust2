@@ -1,4 +1,3 @@
-use vardict_rs::prelude::{HashMap, HashSet};
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -7,6 +6,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
+use vardict_rs::prelude::{HashMap, HashSet};
 
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use vardict_rs::config::{BamNames, Configuration};

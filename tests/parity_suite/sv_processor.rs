@@ -1,5 +1,5 @@
-use vardict_rs::prelude::HashMap;
 use std::sync::Arc;
+use vardict_rs::prelude::HashMap;
 
 use vardict_rs::data::{CoverageMap, PositionMap, RealignedVariationData, Sclip, VariationMap};
 use vardict_rs::mods::structural_variants_processor;

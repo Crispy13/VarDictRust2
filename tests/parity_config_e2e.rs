@@ -1,8 +1,8 @@
 mod common;
 
-use vardict_rs::prelude::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::atomic::Ordering;
+use vardict_rs::prelude::{HashMap, HashSet};
 
 use vardict_rs::config::Configuration;
 

@@ -1,5 +1,5 @@
-use vardict_rs::prelude::HashSet;
 use std::sync::Arc;
+use vardict_rs::prelude::HashSet;
 
 use vardict_rs::data::{CoverageMap, InitialData, PositionMap, Region, VariationMap};
 use vardict_rs::mods::sam_file_parser::sam_file_parser_process;
