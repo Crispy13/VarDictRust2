@@ -1,5 +1,5 @@
-use std::cmp::Ordering;
 use crate::prelude::{HashMap, HashSet};
+use std::cmp::Ordering;
 use std::panic;
 
 use indexmap::IndexMap;

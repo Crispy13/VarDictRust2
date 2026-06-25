@@ -1,5 +1,5 @@
-use std::cell::RefCell;
 use crate::prelude::{HashMap, HashSet};
+use std::cell::RefCell;
 use std::fmt;
 use std::io::Write;
 use std::sync::{Arc, Mutex, RwLock};

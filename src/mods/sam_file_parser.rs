@@ -4,8 +4,8 @@
 //! opens overlapping-query iterators, and streams filtered reads through
 //! RecordPreprocessor's filter cascade to CigarParser.
 
-use std::cell::RefCell;
 use crate::prelude::{HashMap, HashSet};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use rust_htslib::bam::{self, HeaderView, Read as BamRead};
@@ -261,10 +261,9 @@ impl RecordPreprocessor {
         // Java: queryOverlapping(region.chr, region.start, region.end) — 1-based inclusive
         // rust-htslib fetch() with a &str region string uses samtools-style "chr:start-end"
         // which is 1-based inclusive, matching htsjdk's queryOverlapping() semantics.
-        let region_str = format!(
-            "{}:{}-{}",
-            self.region.chr, self.region.start, self.region.end
-        );
+        let fetch_start = self.region.start.max(1);
+        let fetch_end = self.region.end.max(fetch_start);
+        let region_str = format!("{}:{}-{}", self.region.chr, fetch_start, fetch_end);
         reader.fetch(region_str.as_str()).unwrap_or_else(|e| {
             panic!(
                 "Failed to fetch region {} from {}: {}",

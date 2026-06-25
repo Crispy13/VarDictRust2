@@ -3,8 +3,8 @@
 //! IndexedReader owns mutable cursor state, so callers take ownership, fetch the
 //! requested region, read locally, and return the reader when done.
 
-use std::cell::RefCell;
 use crate::prelude::HashMap;
+use std::cell::RefCell;
 
 use rust_htslib::bam;
 use rust_htslib::bam::Read;

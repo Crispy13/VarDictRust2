@@ -1043,8 +1043,8 @@ fn begin_digit_m_number_i_or_d_number_m(
 mod tests {
     use super::*;
     use crate::config::Configuration;
-    use once_cell::sync::Lazy;
     use crate::prelude::HashMap;
+    use once_cell::sync::Lazy;
     use std::sync::Mutex;
 
     static TEST_SCOPE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));

@@ -727,9 +727,17 @@ fn debug_variants_content(v: &Variant, n: &str) -> String {
         crate::utils::format_half_even("0.0000", v.frequency),
         v.strand_bias_flag,
         crate::utils::format_half_even("0.0", v.mean_position),
-        if v.is_at_least_at_2_positions { "1" } else { "0" },
+        if v.is_at_least_at_2_positions {
+            "1"
+        } else {
+            "0"
+        },
         crate::utils::format_half_even("0.0", v.mean_quality),
-        if v.has_at_least_2_diff_qualities { "1" } else { "0" },
+        if v.has_at_least_2_diff_qualities {
+            "1"
+        } else {
+            "0"
+        },
         crate::utils::format_half_even("0.0000", v.high_quality_reads_frequency),
         crate::fisher::java_double_string(v.mean_mapping_quality),
         crate::utils::format_half_even("0.000", v.high_quality_to_low_quality_ratio),

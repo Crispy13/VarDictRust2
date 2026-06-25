@@ -890,7 +890,11 @@ mod tests {
     #[test]
     fn find_conseq_without_adapter_matches_java_fixture() {
         let _guard = TEST_SCOPE_LOCK.lock().expect("test lock poisoned");
-        configure_variation_utils_scope(Configuration::default(), HashMap::default(), HashMap::default());
+        configure_variation_utils_scope(
+            Configuration::default(),
+            HashMap::default(),
+            HashMap::default(),
+        );
 
         let mut sclip = init_sclip();
         assert_eq!(find_conseq(&mut sclip, 0), "CTAAATC");
@@ -904,7 +908,9 @@ mod tests {
         let _guard = TEST_SCOPE_LOCK.lock().expect("test lock poisoned");
         configure_variation_utils_scope(
             Configuration::default(),
-            [(String::from("CTAAAT"), 1)].into_iter().collect::<HashMap<_, _>>(),
+            [(String::from("CTAAAT"), 1)]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
             HashMap::default(),
         );
 
@@ -921,7 +927,9 @@ mod tests {
         configure_variation_utils_scope(
             Configuration::default(),
             HashMap::default(),
-            [(String::from("TAAATC"), 1)].into_iter().collect::<HashMap<_, _>>(),
+            [(String::from("TAAATC"), 1)]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
         );
 
         let mut sclip = init_sclip();
@@ -948,7 +956,7 @@ mod tests {
         vars.variants.push(idx);
         vars.var_description_string_to_variants
             .insert(String::from("A"), idx);
-        let aligned = [(7, vars)].into_iter().collect::<HashMap<_,_>>();
+        let aligned = [(7, vars)].into_iter().collect::<HashMap<_, _>>();
 
         assert!(get_var_maybe(&aligned, 7, VarsType::Ref, VarMaybeArg::None).is_some());
         assert!(get_var_maybe(&aligned, 7, VarsType::Var, VarMaybeArg::Index(0)).is_some());
@@ -1064,7 +1072,7 @@ mod tests {
         entries.insert(String::from("A"), Variation::default());
 
         let map = VariationMap { entries, sv: None };
-        let hash = [(12, map)].into_iter().collect::<HashMap<_,_>>();
+        let hash = [(12, map)].into_iter().collect::<HashMap<_, _>>();
 
         assert!(get_variation_maybe(&hash, 12, Some(b'A')).is_some());
         assert!(get_variation_maybe(&hash, 12, Some(b'T')).is_none());
@@ -1099,8 +1107,12 @@ mod tests {
         };
         configure_variation_utils_scope(
             configuration,
-            [(String::from("AAAAAA"), 1)].into_iter().collect::<HashMap<_, _>>(),
-            [(String::from("TTTTTT"), 1)].into_iter().collect::<HashMap<_, _>>(),
+            [(String::from("AAAAAA"), 1)]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
+            [(String::from("TTTTTT"), 1)]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
         );
 
         let scope = current_scope();
@@ -1135,8 +1147,12 @@ mod tests {
             "test_sample",
             None,
             None,
-            [(String::from("AAAAAA"), 1)].into_iter().collect::<HashMap<_, _>>(),
-            [(String::from("TTTTTT"), 1)].into_iter().collect::<HashMap<_, _>>(),
+            [(String::from("AAAAAA"), 1)]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
+            [(String::from("TTTTTT"), 1)]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
         );
 
         let scope = current_scope();
@@ -1152,7 +1168,11 @@ mod tests {
     #[test]
     fn find_conseq_marks_low_complex_seed_as_used() {
         let _guard = TEST_SCOPE_LOCK.lock().expect("test lock poisoned");
-        configure_variation_utils_scope(Configuration::default(), HashMap::default(), HashMap::default());
+        configure_variation_utils_scope(
+            Configuration::default(),
+            HashMap::default(),
+            HashMap::default(),
+        );
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 2;
@@ -1272,7 +1292,9 @@ mod tests {
 
     #[test]
     fn inc_cnt_overwrites_existing_total_with_addition() {
-        let mut counts = [(String::from("A"), 4)].into_iter().collect::<HashMap<_, _>>();
+        let mut counts = [(String::from("A"), 4)]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
         inc_cnt(&mut counts, String::from("A"), -1);
         assert_eq!(counts.get("A"), Some(&3));
     }
@@ -1280,7 +1302,11 @@ mod tests {
     #[test]
     fn find_conseq_returns_empty_when_consensus_is_weak() {
         let _guard = TEST_SCOPE_LOCK.lock().expect("test lock poisoned");
-        configure_variation_utils_scope(Configuration::default(), HashMap::default(), HashMap::default());
+        configure_variation_utils_scope(
+            Configuration::default(),
+            HashMap::default(),
+            HashMap::default(),
+        );
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 10;
@@ -1365,7 +1391,7 @@ mod tests {
         let mut vars = Vars::default();
         vars.arena.push(Variant::default());
         vars.variants.push(0);
-        let mut vars_map = [(3, vars)].into_iter().collect::<HashMap<_,_>>();
+        let mut vars_map = [(3, vars)].into_iter().collect::<HashMap<_, _>>();
         assert_eq!(get_or_put_vars(&mut vars_map, 3).variants.len(), 1);
     }
 
@@ -1388,7 +1414,11 @@ mod tests {
     #[test]
     fn find_conseq_uses_best_quality_to_break_count_ties() {
         let _guard = TEST_SCOPE_LOCK.lock().expect("test lock poisoned");
-        configure_variation_utils_scope(Configuration::default(), HashMap::default(), HashMap::default());
+        configure_variation_utils_scope(
+            Configuration::default(),
+            HashMap::default(),
+            HashMap::default(),
+        );
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 4;
@@ -1431,7 +1461,11 @@ mod tests {
     #[test]
     fn find_conseq_marks_poly_t_pattern_as_used() {
         let _guard = TEST_SCOPE_LOCK.lock().expect("test lock poisoned");
-        configure_variation_utils_scope(Configuration::default(), HashMap::default(), HashMap::default());
+        configure_variation_utils_scope(
+            Configuration::default(),
+            HashMap::default(),
+            HashMap::default(),
+        );
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 2;
@@ -1486,7 +1520,9 @@ mod tests {
                 bias: 0.3,
                 ..Configuration::default()
             },
-            [(String::from("AAAAAA"), 1)].into_iter().collect::<HashMap<_, _>>(),
+            [(String::from("AAAAAA"), 1)]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
             HashMap::default(),
         );
         clear_variation_utils_scope();
@@ -1500,7 +1536,9 @@ mod tests {
     fn get_variation_maybe_uses_single_base_string_keys() {
         let mut entries = VariationEntries::default();
         entries.insert(String::from("C"), Variation::default());
-        let hash = [(1, VariationMap { entries, sv: None })].into_iter().collect::<HashMap<_,_>>();
+        let hash = [(1, VariationMap { entries, sv: None })]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
 
         assert!(get_variation_maybe(&hash, 1, Some(b'C')).is_some());
     }
@@ -1508,7 +1546,11 @@ mod tests {
     #[test]
     fn weak_consensus_is_cached_as_empty_string() {
         let _guard = TEST_SCOPE_LOCK.lock().expect("test lock poisoned");
-        configure_variation_utils_scope(Configuration::default(), HashMap::default(), HashMap::default());
+        configure_variation_utils_scope(
+            Configuration::default(),
+            HashMap::default(),
+            HashMap::default(),
+        );
 
         let mut sclip = Sclip::default();
         sclip.base.vars_count = 1;
@@ -1600,7 +1642,9 @@ mod tests {
     fn get_variation_maybe_returns_none_for_non_matching_base() {
         let mut entries = VariationEntries::default();
         entries.insert(String::from("G"), Variation::default());
-        let hash = [(4, VariationMap { entries, sv: None })].into_iter().collect::<HashMap<_,_>>();
+        let hash = [(4, VariationMap { entries, sv: None })]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
 
         assert!(get_variation_maybe(&hash, 4, Some(b'A')).is_none());
     }
@@ -1629,7 +1673,11 @@ mod tests {
     #[test]
     fn configure_scope_keeps_empty_adaptor_maps_valid() {
         let _guard = TEST_SCOPE_LOCK.lock().expect("test lock poisoned");
-        configure_variation_utils_scope(Configuration::default(), HashMap::default(), HashMap::default());
+        configure_variation_utils_scope(
+            Configuration::default(),
+            HashMap::default(),
+            HashMap::default(),
+        );
         let scope = current_scope();
         assert!(scope.adaptor_forward.is_empty());
         assert!(scope.adaptor_reverse.is_empty());
