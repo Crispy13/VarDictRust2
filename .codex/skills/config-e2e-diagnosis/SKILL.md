@@ -67,6 +67,13 @@ and provenance/schema compatibility warnings as fixture/cache infrastructure
 problems requiring cache refresh or provenance repair, not as Rust repair
 evidence.
 
+Before any fixture regeneration, read `tests/parity_fixtures/FIXTURE_SOURCES.md`
+and classify the cache problem as missing TSV content, stale metadata, sorted
+overlay requirement, or true cache corruption. Prefer metadata-only overlays
+when the Java TSV content already exists and only `*.chunks.json` provenance
+fields are stale. Do not regenerate VarDictJava fixtures until TSV content is
+proven missing or invalid.
+
 ### State Authority Drift
 
 Older session reports and some mission files were missing or inaccessible during the
@@ -145,6 +152,9 @@ the existing full-scope red artifact when it is already diagnosis-ready.
    or marked not ready may you rerun the sweep gate. That rerun must preserve the active
    gate's full declared scope recorded by the accepted plan or the routed artifact. Do not
    silently collapse to a subset.
+   If the not-ready reason is cache/provenance-related, first perform the fixture triage
+   from `tests/parity_fixtures/FIXTURE_SOURCES.md`; a metadata-only overlay or corrected
+   fixture source may be the required Phase 1 refresh, not Java fixture regeneration.
 4. If a narrower diagnostic rerun is needed after full-scope evidence is established,
    stop and obtain explicit user approval first. Label the rerun diagnostic in the report
    and retain the full-scope artifact as the governing checkpoint.

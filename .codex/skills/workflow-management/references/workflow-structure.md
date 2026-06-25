@@ -107,6 +107,7 @@ The inventory Phase 1 explicitly calls out these files and directories:
 | `tests/parity_sweep_suite/` | Module sweep test directory. |
 | `tests/parity_e2e_sweep/` | Full-BAM sweep support directory. |
 | `tests/parity_e2e_sweep_somatic/` | Somatic sweep support directory. |
+| `tests/parity_fixtures/FIXTURE_SOURCES.md` | Human-readable inventory of large off-repo sweep fixture sources, metadata status, sorted overlays, and required triage before fixture regeneration. |
 | `tests/common/mod.rs` | Shared parity helpers, region loading, fixture lookup, Java invocation, and BAM-tag lookup. |
 
 ### Module parity coverage
@@ -142,6 +143,7 @@ The `tests/parity_sweep_suite/` directory contains one full-sweep parity file pe
 - `tests/parity_e2e_sweep/common.rs` owns cache-root discovery, manifest validation, shard parsing, chunk-plan generation, and the ignored libtest-mimic trial creation.
 - `parity_e2e_sweep_somatic` is the full-pair somatic sweep tier. It is also cost-gated and currently carries one explicit ignored test, `parity_e2e_sweep_somatic_wes_il_pair`, in `tests/parity_e2e_sweep_somatic/wes_il_pair_sweep.rs`.
 - `tests/parity_e2e_sweep_somatic/somatic_common.rs` validates somatic manifest entries and runs the shared tumor/normal pair logic for the `wes_il_pair` tag.
+- `tests/parity_fixtures/FIXTURE_SOURCES.md` must be consulted before regenerating Java sweep fixtures after cache/provenance not-ready warnings. It distinguishes missing TSV content from stale `*.chunks.json` metadata, sorted-overlay requirements, and cache corruption.
 
 ## 5. CI Workflows
 
