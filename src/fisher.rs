@@ -245,7 +245,7 @@ fn round_as_r(value: f64) -> f64 {
 /// only ever emits decimal, so small odds ratios like `0.00088` printed as `0.00088` instead
 /// of Java's `8.8E-4`. Both languages emit the shortest round-tripping digit sequence, so we
 /// reuse Rust's formatting for the digits and only reshape decimal vs scientific to match Java.
-fn java_double_string(value: f64) -> String {
+pub(crate) fn java_double_string(value: f64) -> String {
     if !value.is_finite() {
         return value.to_string();
     }

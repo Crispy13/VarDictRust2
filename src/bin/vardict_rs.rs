@@ -1,11 +1,11 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use vardict_rs::prelude::HashMap;
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, ErrorKind};
 use std::path::Path;
+use vardict_rs::prelude::HashMap;
 
 use clap::Parser;
 use vardict_rs::config::{BamNames, Configuration};
@@ -319,11 +319,19 @@ struct Cli {
         help = "Parser compatibility only: splicing mode is not implemented"
     )]
     output_splicing: bool,
-    #[arg(short = 'h', long = "header", help = "Print a header row describing columns")]
+    #[arg(
+        short = 'h',
+        long = "header",
+        help = "Print a header row describing columns"
+    )]
     print_header: bool,
     #[arg(long = "chimeric", help = "Turn off chimeric read filtering")]
     chimeric: bool,
-    #[arg(short = 'U', long = "nosv", help = "Turn off structural variant calling")]
+    #[arg(
+        short = 'U',
+        long = "nosv",
+        help = "Turn off structural variant calling"
+    )]
     disable_sv: bool,
     #[arg(
         long = "deldupvar",
@@ -452,10 +460,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let config = build_config(&cli)?;
 
     // Resolve regions / segments and the effective amplicon param (CmdParser + VarDictLauncher).
-    let RegionPlan {
-        segments,
-        amplicon,
-    } = resolve_regions(&cli, &config, &chr_lengths)?;
+    let RegionPlan { segments, amplicon } = resolve_regions(&cli, &config, &chr_lengths)?;
 
     // Sample names: VarDictJava splits "-N tumor|normal" into (sample, samplem).
     let (sample, samplem) = split_sample_name(&cli.sample_name);
@@ -1001,13 +1006,27 @@ fn build_amp_regions(
             chr_lengths,
             required_bed_field(&f, 0, "chromosome", *line_number)?,
         );
-        let mut start = parse_bed_i32(required_bed_field(&f, 1, "start", *line_number)?, "start", *line_number)?;
-        let end = parse_bed_i32(required_bed_field(&f, 2, "end", *line_number)?, "end", *line_number)?;
+        let mut start = parse_bed_i32(
+            required_bed_field(&f, 1, "start", *line_number)?,
+            "start",
+            *line_number,
+        )?;
+        let end = parse_bed_i32(
+            required_bed_field(&f, 2, "end", *line_number)?,
+            "end",
+            *line_number,
+        )?;
         let gene = required_bed_field(&f, 3, "gene", *line_number)?.to_string();
-        let mut insert_start =
-            parse_bed_i32(required_bed_field(&f, 6, "insertStart", *line_number)?, "insertStart", *line_number)?;
-        let insert_end =
-            parse_bed_i32(required_bed_field(&f, 7, "insertEnd", *line_number)?, "insertEnd", *line_number)?;
+        let mut insert_start = parse_bed_i32(
+            required_bed_field(&f, 6, "insertStart", *line_number)?,
+            "insertStart",
+            *line_number,
+        )?;
+        let insert_end = parse_bed_i32(
+            required_bed_field(&f, 7, "insertEnd", *line_number)?,
+            "insertEnd",
+            *line_number,
+        )?;
         if zero_based && start < end {
             start += 1;
             insert_start += 1;
@@ -1018,7 +1037,14 @@ fn build_amp_regions(
         by_chr
             .entry(chr.clone())
             .or_default()
-            .push(Region::new_with_insert_range(chr, start, end, gene, insert_start, insert_end));
+            .push(Region::new_with_insert_range(
+                chr,
+                start,
+                end,
+                gene,
+                insert_start,
+                insert_end,
+            ));
     }
 
     let mut segs: Vec<Vec<Region>> = vec![Vec::new()];
@@ -1051,7 +1077,10 @@ fn required_bed_field<'a>(
     fields.get(index).copied().ok_or_else(|| {
         io::Error::new(
             ErrorKind::InvalidData,
-            format!("BED line {line_number} is missing {field_name} column {}", index + 1),
+            format!(
+                "BED line {line_number} is missing {field_name} column {}",
+                index + 1
+            ),
         )
     })
 }
@@ -1143,9 +1172,34 @@ mod tests {
         // sanity: clap accepts the full set incl. bridged -UN/-DP/-VS and -h=header
         let cli = Cli::parse_from(normalize_java_flags(
             [
-                "vardict_rs", "-G", "ref.fa", "-b", "t.bam", "-N", "s", "-U", "-Q", "30", "-F", "0",
-                "-z", "0", "-a", "10:0.95", "--adaptor", "ACGTACGT", "-DP", "ERR", "-VS", "LENIENT",
-                "-UN", "-h", "-3", "-x", "5", "regions.bed",
+                "vardict_rs",
+                "-G",
+                "ref.fa",
+                "-b",
+                "t.bam",
+                "-N",
+                "s",
+                "-U",
+                "-Q",
+                "30",
+                "-F",
+                "0",
+                "-z",
+                "0",
+                "-a",
+                "10:0.95",
+                "--adaptor",
+                "ACGTACGT",
+                "-DP",
+                "ERR",
+                "-VS",
+                "LENIENT",
+                "-UN",
+                "-h",
+                "-3",
+                "-x",
+                "5",
+                "regions.bed",
             ]
             .map(String::from),
         ));
@@ -1218,14 +1272,26 @@ mod tests {
         let cols = cols_3();
         let lines = vec![(7usize, String::from("19\t60432\t61132\t"))];
         // zero-based (default for bedtools): start += 1
-        let zb = build_regions(&lines, &cols, &Configuration::default(), &HashMap::default(), true)
-            .unwrap();
+        let zb = build_regions(
+            &lines,
+            &cols,
+            &Configuration::default(),
+            &HashMap::default(),
+            true,
+        )
+        .unwrap();
         assert_eq!(zb[0].start, 60433);
         assert_eq!(zb[0].chr, "chr19");
         assert_eq!(zb[0].gene, "chr19");
         // one-based (VarDictJava default for explicit -S/-E BED): no increment
-        let ob = build_regions(&lines, &cols, &Configuration::default(), &HashMap::default(), false)
-            .unwrap();
+        let ob = build_regions(
+            &lines,
+            &cols,
+            &Configuration::default(),
+            &HashMap::default(),
+            false,
+        )
+        .unwrap();
         assert_eq!(ob[0].start, 60432);
     }
 
@@ -1246,10 +1312,20 @@ mod tests {
     fn build_regions_reports_invalid_integers() {
         let cols = cols_3();
         let lines = vec![(3usize, String::from("19\tnot-a-number\t61132"))];
-        let error = build_regions(&lines, &cols, &Configuration::default(), &HashMap::default(), false)
-            .unwrap_err();
+        let error = build_regions(
+            &lines,
+            &cols,
+            &Configuration::default(),
+            &HashMap::default(),
+            false,
+        )
+        .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::InvalidData);
-        assert!(error.to_string().contains("invalid start value 'not-a-number'"));
+        assert!(
+            error
+                .to_string()
+                .contains("invalid start value 'not-a-number'")
+        );
     }
 
     #[test]

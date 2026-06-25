@@ -1,5 +1,5 @@
-use vardict_rs::prelude::{HashMap, HashSet};
 use std::sync::Arc;
+use vardict_rs::prelude::{HashMap, HashSet};
 
 use rust_htslib::bam::{self, Read as BamRead};
 

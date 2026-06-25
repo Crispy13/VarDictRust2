@@ -58,7 +58,10 @@ struct StackFmtBuf {
 impl StackFmtBuf {
     #[inline]
     fn new() -> Self {
-        Self { buf: [0; 64], len: 0 }
+        Self {
+            buf: [0; 64],
+            len: 0,
+        }
     }
 
     #[inline]

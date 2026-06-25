@@ -211,3 +211,11 @@ Workflow-management Phase 1 reads `Cargo.toml` for workflow-relevant test config
 - `[[test]] name = "parity_config_e2e_cells"` sets `harness = false`.
 - `[[test]] name = "parity_e2e_sweep"` sets `harness = false`.
 - No `[[bench]]` sections are currently present in `Cargo.toml`.
+
+## 8. Sweep Runtime Resources & Fixture Generation
+
+Where the sweep caches and BEDs live (canonical hdd cache dirs, the already-generated sibling-repo
+BEDs, per-tag `bed_sha256` provenance, the duplicate-cache trap) **and the additive-safe start-here
+runbook for generating e2e parity fixtures** are documented in a dedicated reference:
+[`sweep-fixture-generation.md`](sweep-fixture-generation.md). Any agent doing sweep generation or
+sweep parity must read it first; the generator `scripts/gen_e2e_sweep_golden.sh` header also points there.

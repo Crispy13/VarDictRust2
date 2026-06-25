@@ -3,13 +3,13 @@
 
 mod common;
 
-use vardict_rs::prelude::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use vardict_rs::prelude::HashMap;
 
 use vardict_rs::config::Configuration;
 use vardict_rs::data::Region;

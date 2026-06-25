@@ -1,6 +1,6 @@
-use vardict_rs::prelude::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use vardict_rs::prelude::HashSet;
 
 use crossbeam_channel::bounded;
 use rayon::prelude::*;

@@ -21,3 +21,5 @@ trashcan/
 .github/skills/**/evals.json
 .github/skills/**/benchmark.json
 .github/skills/**/review.html
+
+docs/dev/

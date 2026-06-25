@@ -1586,6 +1586,16 @@ def normalize_bed_sha256(value: object) -> str | None:
     return value.lower()
 
 
+def preset_generator_flags_by_name() -> dict[str, str]:
+    flags_by_name: dict[str, str] = {}
+    with PRESETS_TSV.open(newline="") as handle:
+        for row in csv.reader(handle, delimiter="\t"):
+            if not row or not row[0] or row[0].startswith("#"):
+                continue
+            flags_by_name[row[0]] = row[1] if len(row) > 1 else ""
+    return flags_by_name
+
+
 def provenance_metadata_warning(
     key: str,
     actual_value: object,
@@ -1966,6 +1976,7 @@ def run_stage(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> d
 def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, str]]) -> dict[str, object]:
     live_commit = live_vardictjava_commit()
     grouped_tags = grouped_tags_by_preset(matrix)
+    preset_generator_flags = preset_generator_flags_by_name()
     active_sweep_bed_root = runtime_sweep_bed_root(args)
     provenance_started_at = time.monotonic()
     pair_batches = grouped_cells_by_pair(matrix)
@@ -2042,9 +2053,12 @@ def run_provenance_check(args: argparse.Namespace, matrix: list[tuple[str, str, 
                     f"--sweep-bed-root {active_sweep_bed_root}"
                 )
             else:
-                expected_flags = (
-                    f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} "
-                    f"--sweep-bed-root {active_sweep_bed_root}"
+                expected_flags = preset_generator_flags.get(
+                    preset,
+                    (
+                        f"--output-only --config {preset} --tags {','.join(grouped_tags[preset])} "
+                        f"--sweep-bed-root {active_sweep_bed_root}"
+                    ),
                 )
             optional_checks = {
                 "generator_flags": expected_flags,

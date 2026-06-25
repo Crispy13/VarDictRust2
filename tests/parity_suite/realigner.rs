@@ -1,5 +1,5 @@
-use vardict_rs::prelude::{HashMap, HashSet};
 use std::sync::Arc;
+use vardict_rs::prelude::{HashMap, HashSet};
 
 use vardict_rs::data::VariationData;
 use vardict_rs::mods::variation_realigner;

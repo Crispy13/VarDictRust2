@@ -1,13 +1,13 @@
 //! Somatic full-BAM E2E parity harness against cached Java TSV shards.
 
 use std::collections::{BTreeMap, BTreeSet};
-use vardict_rs::prelude::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
+use vardict_rs::prelude::HashMap;
 
 use serde_json::{Value, json};
 use vardict_rs::config::{BamNames, Configuration};
@@ -414,20 +414,20 @@ fn run_rust_chunk_somatic(
     let reference_path_string = reference_path.to_string_lossy().into_owned();
     let fai_path = format!("{}.fai", reference_path.display());
     let chr_lengths = super::common::load_chr_lengths(&fai_path);
-    let regions = build_regions(tiles)?;
-    let reference_resource = ReferenceResource::new(
-        reference_path_string.clone(),
-        1200,
-        0,
-        chr_lengths.clone(),
-        false,
-    );
     let config = sweep_config(
         config_name,
         &tumor_path_string,
         &normal_path_string,
         &reference_path_string,
         sample,
+    );
+    let regions = build_regions(tiles, config.number_nucleotide_to_extend)?;
+    let reference_resource = ReferenceResource::new(
+        reference_path_string.clone(),
+        config.reference_extension,
+        config.number_nucleotide_to_extend,
+        chr_lengths.clone(),
+        false,
     );
     let _guard = init_sweep_scope(config, chr_lengths, sample);
     let captured = Arc::new(Mutex::new(String::new()));
@@ -503,7 +503,10 @@ fn diff_chunk_somatic(
     failures
 }
 
-fn build_regions(tiles: &[super::r2_common::TileKey]) -> io::Result<Vec<Region>> {
+fn build_regions(
+    tiles: &[super::r2_common::TileKey],
+    extend: i32,
+) -> io::Result<Vec<Region>> {
     tiles
         .iter()
         .map(|tile| {
@@ -521,8 +524,8 @@ fn build_regions(tiles: &[super::r2_common::TileKey]) -> io::Result<Vec<Region>>
             })?;
             Ok(Region::new(
                 tile.chrom.clone(),
-                start,
-                end,
+                start - extend,
+                end + extend,
                 tile.chrom.clone(),
             ))
         })
@@ -552,6 +555,7 @@ fn init_sweep_scope(
     chr_lengths: HashMap<String, i32>,
     sample: &str,
 ) -> SweepScopeGuard {
+    let (adaptor_forward, adaptor_reverse) = super::r2_common::build_adaptor_maps(&config.adaptor);
     GlobalReadOnlyScope::clear();
     GlobalReadOnlyScope::init(
         config,
@@ -559,8 +563,8 @@ fn init_sweep_scope(
         sample,
         None,
         None,
-        HashMap::default(),
-        HashMap::default(),
+        adaptor_forward,
+        adaptor_reverse,
     );
     SweepScopeGuard
 }
