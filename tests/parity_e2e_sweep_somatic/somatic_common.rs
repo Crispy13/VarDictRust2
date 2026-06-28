@@ -74,6 +74,107 @@ pub fn sample_name_for_pair(tumor: &str, normal: &str) -> String {
         .unwrap_or_else(|| panic!("Tumor BAM path has no file stem: {tumor}"))
 }
 
+/// Readiness check: for each cached somatic sweep config of `tag`, run the same manifest gate
+/// functions the real parity test uses plus verify golden output shards exist and are non-empty —
+/// without running vdr or diffing.
+///
+/// Panics with a joined failure report if any config fails (standard `#[test]` harness).
+pub fn verify_readiness(tag: &str) {
+    let manifest_path = super::r2_common::sweep_fixture_root().join("manifest.json");
+    let manifest_str = fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {e}", manifest_path.display()));
+    let manifest_json: Value = serde_json::from_str(&manifest_str)
+        .unwrap_or_else(|e| panic!("Failed to parse {}: {e}", manifest_path.display()));
+
+    // Somatic key shape: "{config}:somatic:{tag}"
+    let mut configs: Vec<String> = manifest_json
+        .get("cache_entries")
+        .and_then(Value::as_object)
+        .map(|entries| {
+            let somatic_suffix = format!(":somatic:{tag}");
+            entries
+                .keys()
+                .filter_map(|key| key.strip_suffix(&somatic_suffix).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    configs.sort();
+
+    eprintln!("READINESS {tag}: {} configs", configs.len());
+
+    if configs.is_empty() {
+        eprintln!("  (0 cached configs for this tag)");
+        return;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+
+    for config in &configs {
+        let reason: Option<String>;
+
+        // Run the same manifest gate the real parity test uses (zero drift).
+        match check_somatic_manifest(config, tag) {
+            Err(e) => {
+                reason = Some(e);
+            }
+            Ok(_bed_root) => {
+                // Verify golden output shards exist and are non-empty.
+                let mut shard_reason: Option<String> = None;
+                match discover_chroms(tag, config) {
+                    Err(e) => {
+                        shard_reason = Some(format!("Failed to discover chroms: {e}"));
+                    }
+                    Ok(chroms) => {
+                        for chrom in &chroms {
+                            let path = java_tsv_path(tag, chrom, config);
+                            if !path.is_file() {
+                                shard_reason =
+                                    Some(format!("Missing shard: {}", path.display()));
+                                break;
+                            }
+                            match fs::metadata(&path) {
+                                Ok(m) if m.len() == 0 => {
+                                    shard_reason =
+                                        Some(format!("Empty shard: {}", path.display()));
+                                    break;
+                                }
+                                Err(e) => {
+                                    shard_reason = Some(format!(
+                                        "Cannot stat {}: {e}",
+                                        path.display()
+                                    ));
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                reason = shard_reason;
+            }
+        }
+
+        if let Some(r) = reason {
+            eprintln!("  FAIL {config}: {r}");
+            failures.push(format!("{config}: {r}"));
+        } else {
+            eprintln!("  PASS {config}");
+        }
+    }
+
+    if failures.is_empty() {
+        eprintln!("  summary: all {} configs PASS", configs.len());
+    } else {
+        let n_fail = failures.len();
+        let n_total = configs.len();
+        eprintln!("  summary: {n_fail}/{n_total} configs FAILED");
+        panic!(
+            "{tag} readiness FAILED: {n_fail}/{n_total} configs:\n{}",
+            failures.join("\n")
+        );
+    }
+}
+
 pub fn run_pair(tag: &str) {
     let (tumor, normal, reference) = somatic_pair_lookup(tag);
     let tumor_path = PathBuf::from(tumor);
@@ -642,8 +743,12 @@ fn compute_reference_sha256(tag: &str) -> io::Result<String> {
 }
 
 fn compute_generator_flags_hash(config: &str, tag: &str, bed_root: &str) -> io::Result<String> {
+    // Must match the generator's somatic flag string byte-for-byte — gen_e2e_sweep_golden.sh:161
+    // emits `--tags  --sweep-bed-root` with TWO spaces (the empty `--tags ""` value renders as
+    // `--tags ` then the separator). Do not collapse to one space, or every somatic
+    // generator_flags_hash gate fails.
     let logical_flags = format!(
-        "--output-only --config {config} --pair-tags {tag} --tags --sweep-bed-root {bed_root}"
+        "--output-only --config {config} --pair-tags {tag} --tags  --sweep-bed-root {bed_root}"
     );
     sha256_bytes(logical_flags.as_bytes())
 }

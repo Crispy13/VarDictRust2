@@ -3,3 +3,9 @@
 fn parity_e2e_sweep_somatic_wes_il_pair() {
     super::somatic_common::run_pair("wes_il_pair");
 }
+
+#[test]
+#[ignore = "Readiness gate: verifies all cached somatic sweep configs for wes_il_pair pass manifest gates + have shards (no vdr run). Run via: cargo test --profile debug-release --test parity_e2e_sweep_somatic wes_il_pair_sweep::readiness -- --ignored --nocapture --test-threads=1"]
+fn readiness_all_configs() {
+    super::somatic_common::verify_readiness("wes_il_pair");
+}

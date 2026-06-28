@@ -82,7 +82,19 @@ use vardict_rs::patterns::SAMPLE_PATTERN2;
 use vardict_rs::reference::ReferenceResource;
 use vardict_rs::scope::{GlobalReadOnlyScope, VariantPrinter};
 
-pub const MAX_FAILURES: usize = 10;
+pub const DEFAULT_MAX_FAILURES: usize = 10;
+
+/// Failure cap for a sweep run. Overridable via the `VARDICT_E2E_SWEEP_MAX_FAILURES`
+/// environment variable (default [`DEFAULT_MAX_FAILURES`] = 10). Raising it lets a single
+/// diagnostic sweep enumerate a tag's full stale set instead of capping at 10 and counting
+/// the remainder as passed. Default behavior is unchanged when the var is unset/invalid.
+pub fn max_failures() -> usize {
+    std::env::var("VARDICT_E2E_SWEEP_MAX_FAILURES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_MAX_FAILURES)
+}
 pub const CHUNK_SIZE: usize = 20_000;
 
 static FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -185,7 +197,130 @@ pub fn legacy_selector_to_chunk_filter(selector: &str) -> Option<String> {
         .then(|| format!("{module_name}::parity_e2e_sweep_{tag}_chr"))
 }
 
+/// Build a fast readiness trial for all cached germline sweep configs of `tag`.
+///
+/// The trial is emitted with `with_ignored_flag(true)` (run via `--ignored`). It reads the
+/// manifest, derives every germline config for the tag, runs the same manifest gate functions
+/// the real parity test uses, and verifies that each golden output shard exists and is
+/// non-empty — without running vdr or diffing.
+fn build_readiness_trial(tag: &str) -> Trial {
+    let tag_owned = tag.to_string();
+    Trial::test(
+        format!("{tag}_sweep::readiness_all_configs"),
+        move || {
+            let tag = tag_owned.as_str();
+
+            // Read manifest and derive germline config list for this tag.
+            // Germline key shape: "{config}:{tag}" with no ":somatic:" in it.
+            let manifest_path = sweep_fixture_root().join("manifest.json");
+            let manifest_str = fs::read_to_string(&manifest_path).map_err(|e| {
+                Failed::from(format!(
+                    "Failed to read {}: {e}",
+                    manifest_path.display()
+                ))
+            })?;
+            let manifest_json: Value = serde_json::from_str(&manifest_str).map_err(|e| {
+                Failed::from(format!(
+                    "Failed to parse {}: {e}",
+                    manifest_path.display()
+                ))
+            })?;
+
+            let mut configs: Vec<String> = manifest_json
+                .get("cache_entries")
+                .and_then(Value::as_object)
+                .map(|entries| {
+                    let suffix = format!(":{tag}");
+                    entries
+                        .keys()
+                        .filter(|key| !key.contains(":somatic:"))
+                        .filter_map(|key| key.strip_suffix(&suffix).map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            configs.sort();
+
+            eprintln!("READINESS {tag}: {} configs", configs.len());
+
+            if configs.is_empty() {
+                eprintln!("  (0 cached configs for this tag)");
+                return Ok(());
+            }
+
+            let chroms = discover_chroms(tag).map_err(|e| {
+                Failed::from(format!("Failed to discover chroms for {tag}: {e}"))
+            })?;
+
+            let mut failures: Vec<String> = Vec::new();
+
+            for config in &configs {
+                let reason: Option<String>;
+
+                // Run the same manifest gate the real parity test uses (zero drift).
+                if let Err(e) = check_e2e_sweep_manifest(config, tag) {
+                    reason = Some(e);
+                } else {
+                    // Verify golden output shards exist and are non-empty.
+                    let mut shard_reason: Option<String> = None;
+                    for chrom in &chroms {
+                        let path = java_tsv_path(tag, chrom, config);
+                        if !path.is_file() {
+                            shard_reason =
+                                Some(format!("Missing shard: {}", path.display()));
+                            break;
+                        }
+                        match fs::metadata(&path) {
+                            Ok(m) if m.len() == 0 => {
+                                shard_reason =
+                                    Some(format!("Empty shard: {}", path.display()));
+                                break;
+                            }
+                            Err(e) => {
+                                shard_reason = Some(format!(
+                                    "Cannot stat {}: {e}",
+                                    path.display()
+                                ));
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    reason = shard_reason;
+                }
+
+                if let Some(r) = reason {
+                    eprintln!("  FAIL {config}: {r}");
+                    failures.push(format!("{config}: {r}"));
+                } else {
+                    eprintln!("  PASS {config}");
+                }
+            }
+
+            if failures.is_empty() {
+                eprintln!("  summary: all {} configs PASS", configs.len());
+                Ok(())
+            } else {
+                eprintln!(
+                    "  summary: {}/{} configs FAILED",
+                    failures.len(),
+                    configs.len()
+                );
+                Err(Failed::from(failures.join("\n")))
+            }
+        },
+    )
+    .with_ignored_flag(true)
+}
+
 pub fn build_trials(tag: &str) -> Vec<Trial> {
+    let mut trials = Vec::new();
+
+    // Emit the readiness trial for germline-only tags (somatic pairs are handled by the
+    // parity_e2e_sweep_somatic binary's own readiness test).
+    if somatic_pair_lookup(tag).is_none() {
+        trials.push(build_readiness_trial(tag));
+    }
+
     // KNOWN PARITY GAP: these configs are shipped/wired but not byte-identical yet
     // (docs/known-parity-gaps.md). Emit zero sweep trials for them so the sweep tier stays
     // green; no Java sweep goldens are needed for them until the fix lands.
@@ -194,43 +329,42 @@ pub fn build_trials(tag: &str) -> Vec<Trial> {
         eprintln!(
             "E2E sweep: skipping known-parity-gap config {active} for tag {tag} (see docs/known-parity-gaps.md)"
         );
-        return Vec::new();
+        return trials;
     }
 
     let Some(context) = prepare_tag_context(tag) else {
-        return Vec::new();
+        return trials;
     };
 
     let shard = parse_shard_env();
     let plans = build_chunk_plans(&context, shard)
         .unwrap_or_else(|error| panic!("Failed to load sweep BED tiles for {tag}: {error}"));
 
-    plans
-        .into_iter()
-        .map(|plan| {
-            let context = Arc::clone(&context);
-            let trial_name = plan.trial_name.clone();
-            let display_name = plan.trial_name.clone();
-            let chrom = plan.chrom.clone();
-            let tiles = Arc::clone(&plan.tiles);
+    trials.extend(plans.into_iter().map(|plan| {
+        let context = Arc::clone(&context);
+        let trial_name = plan.trial_name.clone();
+        let display_name = plan.trial_name.clone();
+        let chrom = plan.chrom.clone();
+        let tiles = Arc::clone(&plan.tiles);
 
-            // NOTE: Each libtest-mimic trial owns one chunk execution. Total RSS scales
-            // roughly with `--test-threads` times the per-chunk working set.
-            Trial::test(trial_name, move || {
-                run_chunk_trial(
-                    Arc::clone(&context),
-                    chrom.clone(),
-                    plan.ordinal,
-                    Arc::clone(&tiles),
-                    plan.start,
-                    plan.end,
-                    display_name.clone(),
-                )
-                .map_err(Failed::from)
-            })
-            .with_ignored_flag(true)
+        // NOTE: Each libtest-mimic trial owns one chunk execution. Total RSS scales
+        // roughly with `--test-threads` times the per-chunk working set.
+        Trial::test(trial_name, move || {
+            run_chunk_trial(
+                Arc::clone(&context),
+                chrom.clone(),
+                plan.ordinal,
+                Arc::clone(&tiles),
+                plan.start,
+                plan.end,
+                display_name.clone(),
+            )
+            .map_err(Failed::from)
         })
-        .collect()
+        .with_ignored_flag(true)
+    }));
+
+    trials
 }
 
 fn prepare_tag_context(tag: &str) -> Option<Arc<TagContext>> {
@@ -361,7 +495,8 @@ fn run_chunk_trial(
         )),
     );
     let result = catch_unwind(AssertUnwindSafe(|| {
-        if FAILURE_COUNT.load(Ordering::Relaxed) >= MAX_FAILURES {
+        let cap = max_failures();
+        if FAILURE_COUNT.load(Ordering::Relaxed) >= cap {
             final_status = "skipped";
             emit_chunk_heartbeat(
                 &context,
@@ -369,9 +504,9 @@ fn run_chunk_trial(
                 &chrom,
                 ordinal,
                 "cap-skip",
-                Some(&format!("max_failures={MAX_FAILURES}")),
+                Some(&format!("max_failures={cap}")),
             );
-            eprintln!("{trial_name}: skipped after MAX_FAILURES cap ({MAX_FAILURES})");
+            eprintln!("{trial_name}: skipped after MAX_FAILURES cap ({cap})");
             return Ok(());
         }
 
@@ -563,8 +698,9 @@ fn push_timing_detail(parts: &mut Vec<String>, key: &str, value: Option<u128>) {
 
 fn fail_or_skip_after_cap(trial_name: &str, message: String) -> Result<(), String> {
     let previous = FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
-    if previous >= MAX_FAILURES {
-        eprintln!("{trial_name}: skipped after MAX_FAILURES cap ({MAX_FAILURES})");
+    let cap = max_failures();
+    if previous >= cap {
+        eprintln!("{trial_name}: skipped after MAX_FAILURES cap ({cap})");
         return Ok(());
     }
 
@@ -2077,7 +2213,7 @@ fn push_failure(
     java: Vec<Row>,
     rust: Vec<Row>,
 ) {
-    if failures.len() < MAX_FAILURES {
+    if failures.len() < DEFAULT_MAX_FAILURES {
         failures.push(TileMismatch {
             config: config.to_string(),
             key,
@@ -2130,7 +2266,7 @@ fn diff_grouped_readers<J: GroupedRowReader, R: GroupedRowReader>(
             }
             (None, None) => break,
         }
-        if !drain_after_max_failures && failures.len() >= MAX_FAILURES {
+        if !drain_after_max_failures && failures.len() >= DEFAULT_MAX_FAILURES {
             break;
         }
     }
@@ -3079,7 +3215,7 @@ fn diff_chunk(
                 rust: rust_rows,
             });
         }
-        if failures.len() >= MAX_FAILURES {
+        if failures.len() >= DEFAULT_MAX_FAILURES {
             break;
         }
     }
@@ -3089,11 +3225,11 @@ fn diff_chunk(
 
 fn format_report(failures: &[TileMismatch]) -> String {
     let mut report = format!(
-        "E2E sweep mismatches: {} tile(s) differ; showing up to {MAX_FAILURES}.",
+        "E2E sweep mismatches: {} tile(s) differ; showing up to {DEFAULT_MAX_FAILURES}.",
         failures.len()
     );
 
-    for (index, failure) in failures.iter().take(MAX_FAILURES).enumerate() {
+    for (index, failure) in failures.iter().take(DEFAULT_MAX_FAILURES).enumerate() {
         report.push_str(&format!(
             "\n\n{}. config={} tile={}:{}-{}\nJava rows:\n{}\nRust rows:\n{}",
             index + 1,
