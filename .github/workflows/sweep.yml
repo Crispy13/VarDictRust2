@@ -80,7 +80,7 @@ jobs:
             VARDICT_E2E_SWEEP_SHARD="0/4" cargo test --profile debug-release --test parity_e2e_sweep -- --include-ignored --test-threads=1 --nocapture
             echo "=== E2E sweep somatic: wes_il_pair ==="
             CI=true VARDICT_IMPL=rust \
-              cargo test --profile debug-release --test parity_e2e_sweep_somatic \
+              cargo test --profile debug-release --test parity_e2e_sweep \
               "wes_il_pair_sweep::" \
               -- --include-ignored --test-threads=1 --nocapture
           elif [ "${{ inputs.module }}" = "e2e" ]; then
@@ -97,7 +97,7 @@ jobs:
             fi
           elif [ "${{ inputs.module }}" = "e2e_sweep_somatic" ]; then
             CI=true VARDICT_IMPL=rust \
-              cargo test --profile debug-release --test parity_e2e_sweep_somatic \
+              cargo test --profile debug-release --test parity_e2e_sweep \
               "${{ inputs.e2e_sweep_somatic_tag }}_sweep::" \
               -- --include-ignored --test-threads=1 --nocapture
           else

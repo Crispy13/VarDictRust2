@@ -38,7 +38,7 @@ BAM/ref inputs (in repo `testdata/`, the inputs vdr reads; **not** the fixtures)
 | `hg005_exome` | `151002…HG005…posiSrt.markDup.bam` | `hs37d5.fa` |
 | `wes_il_pair` | `WES_IL_T_1.bwa.dedup.bam` \| `WES_IL_N_1.bwa.dedup.bam` | `GRCh38.d1.vd1.fa` |
 
-Code refs: `tests/common/mod.rs::BAM_TAG_MAP`, `…_somatic/somatic_common.rs::SOMATIC_BAM_PAIR_MAP`.
+Code refs: `tests/common/mod.rs::BAM_TAG_MAP`, `tests/parity_e2e_sweep/common.rs::SOMATIC_BAM_PAIR_MAP`.
 
 ## 2. What a fixture root contains
 
@@ -84,8 +84,9 @@ na12878 composite is 57, not 58.
 
 ## 5. The 7 read-time gates
 
-`check_e2e_sweep_manifest` (germline, `tests/parity_e2e_sweep/common.rs`) / `check_somatic_manifest`
-(somatic, `tests/parity_e2e_sweep_somatic/somatic_common.rs`) recompute and require a match:
+`check_e2e_sweep_manifest` (germline) / `check_e2e_sweep_manifest_somatic` (somatic) — both in
+`tests/parity_e2e_sweep/common.rs` (the retired standalone `parity_e2e_sweep_somatic` binary and its
+`somatic_common.rs` no longer exist) — recompute and require a match:
 1. `vardictjava_commit` == live `git -C VarDictJava HEAD`.
 2. cache entry present.
 3. `bed_sha256` (sha of `*.bed` in `<bed_root>/<tag>`).
@@ -98,7 +99,7 @@ na12878 composite is 57, not 58.
 
 Reuses the real gate fns (zero drift): germline `<tag>_sweep::readiness_all_configs` (libtest_mimic
 trial, `tests/parity_e2e_sweep/common.rs`); somatic `wes_il_pair_sweep::readiness_all_configs`
-(`#[test]`) → `somatic_common.rs::verify_readiness`.
+(same harness, same file) → `check_e2e_sweep_manifest_somatic`.
 
 ```bash
 source /home/eck/software/miniconda3/etc/profile.d/conda.sh; conda activate vdr
@@ -135,7 +136,7 @@ VARDICT_E2E_SWEEP_CONFIG=CM-EXTEND \
 # somatic (--test-threads=1; GlobalReadOnlyScope) — note §7 gate gap currently
 VARDICT_E2E_SWEEP_FIXTURE_ROOT=$(pwd)/testdata/fixtures/e2e_sweep2/wes_il_pair \
 VARDICT_E2E_SWEEP_SOMATIC_CONFIG=CM-EXTEND \
-  cargo test --profile debug-release --test parity_e2e_sweep_somatic wes_il_pair_sweep:: -- --include-ignored --test-threads=1
+  cargo test --profile debug-release --test parity_e2e_sweep wes_il_pair_sweep:: -- --include-ignored --test-threads=1
 ```
 
 ## 9. Other `/hdd-disk1` dirs — ⚠️ several are live PROVIDERS, not junk

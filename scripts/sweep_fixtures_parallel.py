@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -400,6 +401,14 @@ def fixture_sort_buffer_size() -> str:
     )
 
 
+def fixture_sort_parallel() -> str:
+    return (
+        os.environ.get("VARDICT_SWEEP_FIXTURE_SORT_PARALLEL")
+        or os.environ.get("VARDICT_E2E_SWEEP_SORT_PARALLEL")
+        or "4"
+    )
+
+
 def should_sort_final_output(config_name: str | None) -> bool:
     return True
 
@@ -473,40 +482,113 @@ def sort_final_output_if_required(stdout_path: Path, config_name: str | None) ->
         return None
 
     sort_buffer = fixture_sort_buffer_size()
-    spool_path = stdout_path.with_name(f"{stdout_path.name}.region-sort-input")
-    sorted_spool_path = stdout_path.with_name(f"{stdout_path.name}.region-sort-output")
+    sort_parallel = fixture_sort_parallel()
     sorted_stdout_path = stdout_path.with_name(f"{stdout_path.name}.sorted")
+
+    sort_env = os.environ.copy()
+    sort_env["LC_ALL"] = SORT_ENV
+    sort_env["TMPDIR"] = str(stdout_path.parent)
+
+    # Stream the region-sort instead of materializing spool/sorted temp copies of the (for
+    # CM-PILEUP, ~22GB) intermediate: feed `Region<TAB>row` records into `sort` over a pipe,
+    # read the sorted stream back, strip the prefix, and write the result once. `sort` still
+    # spills its own external-merge temp, but the two full-file copies (.region-sort-input /
+    # .region-sort-output) are gone. Byte-identical: the sort key is the whole prefixed line
+    # (a total order over distinct rows; equal rows are byte-identical), so streaming and
+    # --parallel>1 do not change the output bytes.
+    state: dict[str, object] = {"header": None, "region_index": None, "row_count": 0, "error": None}
+
+    sort_proc = subprocess.Popen(
+        [
+            "sort",
+            f"--buffer-size={sort_buffer}",
+            f"--parallel={sort_parallel}",
+            f"--temporary-directory={stdout_path.parent}",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        env=sort_env,
+    )
+
+    def feed() -> None:
+        region_index: int | None = None
+        try:
+            assert sort_proc.stdin is not None
+            writer = sort_proc.stdin
+            with stdout_path.open("rb") as input_handle:
+                for raw_line in input_handle:
+                    row = raw_line.rstrip(b"\r\n")
+                    if not row.strip():
+                        continue
+                    fields = row.split(b"\t")
+                    if region_index is None:
+                        detected_index = detect_region_column(fields)
+                        if detected_index is None:
+                            raise ValueError(f"Could not locate Region column in {stdout_path}: {row!r}")
+                        region_index = detected_index
+                        state["region_index"] = region_index
+                        if fields[region_index].lower() == b"region":
+                            state["header"] = row
+                            continue
+                    if region_index >= len(fields):
+                        raise ValueError(f"Missing Region column {region_index} in {stdout_path}: {row!r}")
+                    writer.write(fields[region_index])
+                    writer.write(b"\t")
+                    writer.write(row)
+                    writer.write(b"\n")
+                    state["row_count"] = state["row_count"] + 1  # type: ignore[operator]
+        except BaseException as exc:  # noqa: BLE001
+            state["error"] = exc
+        finally:
+            try:
+                if sort_proc.stdin is not None:
+                    sort_proc.stdin.close()
+            except BrokenPipeError:
+                pass
+
+    feeder = threading.Thread(target=feed, daemon=True)
+    feeder.start()
     try:
-        header, row_count = spool_tsv_for_region_sort(stdout_path, spool_path)
-        sort_env = os.environ.copy()
-        sort_env["LC_ALL"] = SORT_ENV
-        sort_env["TMPDIR"] = str(stdout_path.parent)
-        subprocess.run(
-            [
-                "sort",
-                f"--buffer-size={sort_buffer}",
-                "--parallel=1",
-                f"--temporary-directory={stdout_path.parent}",
-                str(spool_path),
-                "-o",
-                str(sorted_spool_path),
-            ],
-            env=sort_env,
-            check=True,
-        )
-        strip_region_sort_prefix(sorted_spool_path, sorted_stdout_path, header)
+        assert sort_proc.stdout is not None
+        header_written = False
+        with sorted_stdout_path.open("wb") as output_handle:
+            for raw_line in sort_proc.stdout:
+                if not header_written:
+                    header = state["header"]
+                    if header is not None:
+                        output_handle.write(header)  # type: ignore[arg-type]
+                        output_handle.write(b"\n")
+                    header_written = True
+                _region, separator, row = raw_line.partition(b"\t")
+                if not separator:
+                    raise ValueError(f"Invalid sorted spool record without tab: {raw_line!r}")
+                output_handle.write(row)
+            if not header_written:
+                header = state["header"]
+                if header is not None:
+                    output_handle.write(header)  # type: ignore[arg-type]
+                    output_handle.write(b"\n")
+        sort_proc.stdout.close()
+        return_code = sort_proc.wait()
+        feeder.join()
+        if state["error"] is not None:
+            raise state["error"]  # type: ignore[misc]
+        if return_code != 0:
+            raise subprocess.CalledProcessError(return_code, sort_proc.args)
         os.replace(sorted_stdout_path, stdout_path)
         return {
             "mode": "sorted",
             "key": SORT_KEY,
             "lc_all": SORT_ENV,
             "sort_buffer_size": sort_buffer,
-            "sort_parallel": 1,
-            "rows": row_count,
+            "sort_parallel": int(sort_parallel) if str(sort_parallel).isdigit() else sort_parallel,
+            "rows": state["row_count"],
         }
     finally:
-        spool_path.unlink(missing_ok=True)
-        sorted_spool_path.unlink(missing_ok=True)
+        if sort_proc.poll() is None:
+            sort_proc.kill()
+            sort_proc.wait()
+        feeder.join()
         sorted_stdout_path.unlink(missing_ok=True)
 
 

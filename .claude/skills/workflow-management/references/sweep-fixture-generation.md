@@ -5,7 +5,8 @@ authoritative entry point for **e2e parity fixture generation**: where the sweep
 live, and the additive-safe runbook to generate them. Any agent doing sweep generation or sweep
 parity must read this first.
 
-The full-BAM/somatic sweep tiers (`parity_e2e_sweep`, `parity_e2e_sweep_somatic`) and the
+The full-BAM/somatic sweep tier (`parity_e2e_sweep`, which also covers the somatic `wes_il_pair`
+tumor/normal pair via the `wes_il_pair_sweep::` trial prefix) and the
 generation scripts (`gen_e2e_sweep_golden.sh` → `sweep_fixtures_parallel.py`, `gen_sweep_bed.sh`,
 `gen_somatic_sweep_bed.sh`) consume two kinds of large runtime data that do **not** live in the git
 repo: cached Java golden **fixtures** and the **sweep BEDs** that tile them. Both already exist on
@@ -95,7 +96,7 @@ bash scripts/gen_e2e_sweep_golden.sh --config CM-SAMFILT --tags "$TAG" --sweep-b
 #    ... repeat per preset, or use --all-configs --config-tier <N>; for wes_il_pair add --somatic.
 
 # 4. Verify additive: entries only grew, pre-existing entries byte-identical to the snapshot.
-# 5. Run sweep parity: parity_e2e_sweep (germline) / parity_e2e_sweep_somatic --test-threads=1 (somatic).
+# 5. Run sweep parity: parity_e2e_sweep (germline), or parity_e2e_sweep wes_il_pair_sweep:: --test-threads=1 (somatic).
 ```
 
 Failure recovery: a failed `gen_e2e_sweep_golden.sh` run overwrites `tmp/sweep_fixtures/manifest.json`

@@ -170,7 +170,7 @@ A claim of "100% parity" is substantiated by the following CI gates, **all green
 | E2E surface gate | `parity.yml` | `scripts/config_e2e_surface_gate.sh` |
 | E2E config cells | `parity.yml` | `parity_config_e2e_cells` |
 | E2E full sweep (single-BAM) | `sweep.yml` nightly | `parity_e2e_sweep` with `--include-ignored` on all 3 single-BAM tags |
-| E2E full sweep (somatic) | `sweep.yml` nightly | `parity_e2e_sweep_somatic` with `--include-ignored` on `wes_il_pair` |
+| E2E full sweep (somatic) | `sweep.yml` nightly | `parity_e2e_sweep` filtered to `wes_il_pair_sweep::` with `--include-ignored` |
 | Preset drift gate | `parity.yml` pre-test | `scripts/check_preset_drift.sh` |
 
 Full parity claim requires all rows × all covered chromosomes × all 58 presets to be
@@ -200,7 +200,7 @@ completed full-matrix parity claim:
 Adding a new mode, new input format, or new flag to the claimed surface requires:
 
 1. Parity harness addition (new test binary or new test function under
-   `parity_e2e_sweep` / `parity_e2e_sweep_somatic`).
+   `parity_e2e_sweep`, e.g. a new tag builder or a new `<tag>_sweep::` filter).
 2. Golden fixture generation via `scripts/gen_e2e_sweep_golden.sh`.
 3. TSV + `CONFIG_PRESETS` + skill-doc update (enforced by
    `scripts/check_preset_drift.sh`).
