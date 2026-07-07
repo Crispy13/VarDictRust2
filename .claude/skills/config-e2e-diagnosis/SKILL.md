@@ -27,6 +27,15 @@ Any narrower rerun is diagnostic-only and requires explicit user approval. A
 diagnostic rerun must be labeled diagnostic in the report and must never replace
 the canonical full-scope artifact as the governing parity claim on its own.
 
+### Step 1 — how to run the gate
+
+The full declared scope is 4 tags: `hg002` (58/58), `hg005_exome` (58/58),
+`na12878_lowcov` (57/57, CM-UNIQUN justified gap), and `wes_il_pair` (58/58 somatic,
+run via the germline harness). For the concrete driver commands, the env matrix, the
+CM-PILEUP streaming lever, and the real-green verification checklist, read
+[`references/full-scope-gate-run.md`](references/full-scope-gate-run.md) before
+running Phase 1 — it is the self-sufficient runbook for this step.
+
 ## When to Use
 
 - After all pipeline modules pass their per-module parity cycle (Steps 0-7)

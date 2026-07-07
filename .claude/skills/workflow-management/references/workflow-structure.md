@@ -21,7 +21,7 @@ The current workflow agent set lives under `.claude/agents/`. Each agent file ca
 
 ## 2. Skills
 
-The Phase 1 workflow inventory tracks 15 current skills under `.claude/skills/*/`. Each skill file is read for its name, description, trigger contexts, which agents reference it, any agent names mentioned in the body, any file paths referenced, and its workflow phases.
+The Phase 1 workflow inventory tracks 19 current skills under `.claude/skills/*/`. Each skill file is read for its name, description, trigger contexts, which agents reference it, any agent names mentioned in the body, any file paths referenced, and its workflow phases.
 
 ### Current skill set
 
@@ -33,13 +33,17 @@ The Phase 1 workflow inventory tracks 15 current skills under `.claude/skills/*/
 6. `logic-parity-audit`
 7. `mismatch-repair`
 8. `module-parity-test`
-9. `perf-optimization`
-10. `rust-freshness-verification`
-11. `shard-diagnosis`
-12. `tiered-config-test`
-13. `workflow-inspector`
-14. `workflow-management`
-15. `workflow-router`
+9. `perf-opt-cycle`
+10. `perf-optimization`
+11. `production-bench`
+12. `ready-fixture-folder`
+13. `rust-freshness-verification`
+14. `shard-diagnosis`
+15. `skill-creator`
+16. `tiered-config-test`
+17. `workflow-inspector`
+18. `workflow-management`
+19. `workflow-router`
 
 ### Skill-only config E2E diagnosis path
 
@@ -50,7 +54,12 @@ and repair plan files under the current CLI session-state artifact path, asks th
 user to accept those checkpoints, and invokes related skills (`mismatch-repair`,
 `logic-parity-audit`, `module-parity-test`, `shard-diagnosis`, and
 `change-impact-review`) directly. The `.claude/agents/` files remain present for
-other workflows, but this path does not require subagent dispatch.
+other workflows, but this path does not require subagent dispatch. `config-e2e-diagnosis`
+carries its own `references/full-scope-gate-run.md` (the skill's first `references/`
+file) documenting how to run Canonical Contract Step 1: the 4-tag scope table
+(`hg002`, `hg005_exome`, `na12878_lowcov`, `wes_il_pair`), the two gate entry points
+(`scripts/e2e_sweep_gate.sh` and `scripts/full_gate_tag.sh`), the env matrix, the
+CM-PILEUP streaming lever, and the real-green verification checklist.
 
 ## 3. Instructions
 
@@ -79,7 +88,6 @@ The current parity harness binaries are:
 4. `parity_config_e2e`
 5. `parity_config_e2e_cells`
 6. `parity_e2e_sweep`
-7. `parity_e2e_sweep_somatic`
 
 ### Top-level harness files
 
@@ -90,8 +98,7 @@ The current parity harness binaries are:
 | `parity_e2e` | `tests/parity_e2e.rs` | Focused E2E parity harness with `parity_e2e_push` and `parity_e2e_all`. |
 | `parity_config_e2e` | `tests/parity_config_e2e.rs` | Preset-driven config E2E harness. Declares `parity_config_e2e_push_*` ignored tests for each preset, plus `config_preset_alignment` and `binary_b_list_terse_format_regression`. Uses `tmp/e2e_fixtures/` goldens and `testdata/parity_regions.tsv`. |
 | `parity_config_e2e_cells` | `tests/parity_config_e2e_cells.rs` | Custom `libtest-mimic` harness (`harness = false` in `Cargo.toml`) that emits ignored `parity_config_e2e_cell_<preset>_rNNN` trials and supports sharding through `VARDICT_CELL_SHARD=i/N`. |
-| `parity_e2e_sweep` | `tests/parity_e2e_sweep.rs` | Custom `libtest-mimic` full-BAM E2E parity tier. Cost-gated. Uses tag-specific builders for `hg002`, `na12878_exome`, and `na12878_lowcov`, reads sweep cache from `tmp/sweep_fixtures/output/` by default, validates `manifest.json`, and supports `VARDICT_E2E_SWEEP_CONFIG`, `VARDICT_E2E_SWEEP_SHARD`, `VARDICT_E2E_SWEEP_FIXTURE_ROOT`, `VARDICT_E2E_SWEEP_BED_ROOT`, and `VARDICT_E2E_SWEEP_HEARTBEAT_LOG`. All generated chunk trials are marked ignored via `.with_ignored_flag(true)`, giving one cost-gated ignored sweep group per BAM tag. |
-| `parity_e2e_sweep_somatic` | `tests/parity_e2e_sweep_somatic.rs` | Full-pair somatic sweep tier. Cost-gated. Compares Rust output against cached Java TSV shards under `tmp/sweep_fixtures/output/` by default, validates `manifest.json`, requires `--test-threads=1`, and supports `VARDICT_E2E_SWEEP_FIXTURE_ROOT`, `VARDICT_E2E_SWEEP_SOMATIC_CONFIG`, `VARDICT_E2E_SWEEP_SHARD`, `VARDICT_E2E_SWEEP_BED_ROOT`, and `CI=true`. |
+| `parity_e2e_sweep` | `tests/parity_e2e_sweep.rs` | Custom `libtest-mimic` full-BAM E2E parity tier. Cost-gated. Uses tag-specific builders for `hg002`, `na12878_exome`, `na12878_lowcov`, and the somatic tumor/normal pair tag `wes_il_pair`, reads sweep cache from `tmp/sweep_fixtures/output/` by default, validates `manifest.json`, and supports `VARDICT_E2E_SWEEP_CONFIG`, `VARDICT_E2E_SWEEP_SHARD`, `VARDICT_E2E_SWEEP_FIXTURE_ROOT`, `VARDICT_E2E_SWEEP_BED_ROOT`, and `VARDICT_E2E_SWEEP_HEARTBEAT_LOG`. All generated chunk trials are marked ignored via `.with_ignored_flag(true)`, giving one cost-gated ignored sweep group per BAM tag (somatic `wes_il_pair` trials are filtered via `wes_il_pair_sweep::` and require `--test-threads=1`). |
 
 ### Required harness support files and directories
 
@@ -101,12 +108,10 @@ The inventory Phase 1 explicitly calls out these files and directories:
 |------|-------|
 | `tests/parity_suite.rs` | Module-parity harness entrypoint. |
 | `tests/parity_sweep_suite.rs` | Sweep harness entrypoint. |
-| `tests/parity_e2e_sweep.rs` | Full-BAM sweep entrypoint. |
-| `tests/parity_e2e_sweep_somatic.rs` | Somatic sweep entrypoint. |
+| `tests/parity_e2e_sweep.rs` | Full-BAM sweep entrypoint (also covers the somatic `wes_il_pair` pair tag). |
 | `tests/parity_suite/` | Module-parity test directory. |
 | `tests/parity_sweep_suite/` | Module sweep test directory. |
-| `tests/parity_e2e_sweep/` | Full-BAM sweep support directory. |
-| `tests/parity_e2e_sweep_somatic/` | Somatic sweep support directory. |
+| `tests/parity_e2e_sweep/` | Full-BAM sweep support directory (includes `wes_il_pair_sweep.rs` for the somatic pair tag). |
 | `tests/common/mod.rs` | Shared parity helpers, region loading, fixture lookup, Java invocation, and BAM-tag lookup. |
 
 ### Module parity coverage
@@ -140,8 +145,7 @@ The `tests/parity_sweep_suite/` directory contains one full-sweep parity file pe
 - `parity_e2e_sweep` is the full-BAM E2E parity tier. It is cost-gated, consumes cached Java TSV sweep fixtures, and builds ignored chunk trials for three single-sample BAM tags (`hg002`, `na12878_exome`, `na12878_lowcov`) plus the somatic tumor/normal pair tag `wes_il_pair`. It is somatic-aware via an internal `SweepMode { Single, Somatic }` and runs the somatic pair as parallel, thread-local chunk trials (same `--test-threads=N` parallelism as the single-sample tags).
 - The tag builder files are `tests/parity_e2e_sweep/hg002_sweep.rs`, `tests/parity_e2e_sweep/na12878_exome_sweep.rs`, `tests/parity_e2e_sweep/na12878_lowcov_sweep.rs`, and `tests/parity_e2e_sweep/wes_il_pair_sweep.rs`; each delegates to `sweep_common::build_trials(<tag>)`.
 - `tests/parity_e2e_sweep/common.rs` owns cache-root discovery, manifest validation (single key `{config}:{tag}` and somatic key `{config}:somatic:{tag}`), shard parsing, chunk-plan generation, the `SweepMode` classification in `prepare_tag_context`, the per-mode `SimpleMode`/`SomaticMode` chunk run, and the ignored libtest-mimic trial creation.
-- `parity_e2e_sweep_somatic` is the full-pair somatic sweep tier. It is also cost-gated and currently carries one explicit ignored test, `parity_e2e_sweep_somatic_wes_il_pair`, in `tests/parity_e2e_sweep_somatic/wes_il_pair_sweep.rs`.
-- `tests/parity_e2e_sweep_somatic/somatic_common.rs` validates somatic manifest entries and runs the shared tumor/normal pair logic for the `wes_il_pair` tag.
+- The standalone `parity_e2e_sweep_somatic` binary has been retired; somatic `wes_il_pair` sweep parity now runs entirely through the `parity_e2e_sweep` germline harness, filtered by the `wes_il_pair_sweep::` trial prefix (e.g. `cargo test --profile debug-release --test parity_e2e_sweep wes_il_pair_sweep:: -- --include-ignored --test-threads=1`).
 
 ## 5. CI Workflows
 
@@ -153,7 +157,7 @@ Workflow-management Phase 1 tracks four CI workflows under `.claude/workflows/`.
 |------|----------|----------------------------|
 | `ci.yml` | `push` to `main`, `pull_request` | Job `check` (`Build + Lint + Unit Tests`) on `ubuntu-latest`. Sets `CARGO_TERM_COLOR=always`, installs `libclang-dev zlib1g-dev cmake`, exports `LIBCLANG_PATH`, installs stable Rust with `clippy` and `rustfmt`, caches `target/debug-release`, runs `cargo build --profile debug-release`, `cargo clippy --profile debug-release`, `cargo fmt -- --check`, and `cargo test --lib --profile debug-release`. This workflow does not run parity harness files. |
 | `parity.yml` | `workflow_dispatch` with `module` choice input, nightly `schedule` at `0 4 * * *` | Job `parity` (`Tier 1 Parity — <module>`) runs on `self-hosted` for non-`dual_run` dispatches. Uses `VARDICT_IMPL=rust` and `VARDICT_CELL_SHARD=0/1`, gates on `scripts/check_preset_drift.sh`, `scripts/check_preset_applicability.sh`, optionally `scripts/gen_e2e_golden_tsv.sh`, optionally `scripts/config_e2e_surface_gate.sh`, then runs `cargo test` against `parity_suite`, all `parity_*` tests, `parity_e2e`, or `parity_config_e2e_cells` depending on input. Job `dual-run` runs on the nightly schedule or when `module=dual_run`, builds Rust and Java, runs `python3 scripts/dual_run.py --push-only --all-configs --verbose`, then runs `tests/parity_e2e.rs` selector `parity_e2e_push` and `tests/parity_config_e2e.rs` selector prefix `parity_config_e2e_push_`. |
-| `sweep.yml` | `workflow_dispatch` with `module`, `shard_scope`, `e2e_sweep_tag`, and `e2e_sweep_somatic_tag` inputs; nightly `schedule` at `0 2 * * *` | Job `sweep` runs on `self-hosted`, times out after 180 minutes, sets `RAYON_NUM_THREADS=10` and shard-scope env, and optionally runs `scripts/config_e2e_surface_gate.sh` and `scripts/gen_e2e_golden_tsv.sh`. The main sweep step dispatches `cargo test` to `tests/parity_sweep_suite.rs`, `tests/parity_e2e.rs`, `tests/parity_config_e2e_cells.rs`, `tests/parity_e2e_sweep.rs`, and `tests/parity_e2e_sweep_somatic.rs` depending on trigger and module. Nightly mode runs all module sweep suites shard-scoped, plus `parity_e2e`, `parity_config_e2e_cells`, one `VARDICT_E2E_SWEEP_SHARD=0/4` `parity_e2e_sweep` run, and one `wes_il_pair_sweep::` somatic sweep run. |
+| `sweep.yml` | `workflow_dispatch` with `module`, `shard_scope`, `e2e_sweep_tag`, and `e2e_sweep_somatic_tag` inputs; nightly `schedule` at `0 2 * * *` | Job `sweep` runs on `self-hosted`, times out after 180 minutes, sets `RAYON_NUM_THREADS=10` and shard-scope env, and optionally runs `scripts/config_e2e_surface_gate.sh` and `scripts/gen_e2e_golden_tsv.sh`. The main sweep step dispatches `cargo test` to `tests/parity_sweep_suite.rs`, `tests/parity_e2e.rs`, `tests/parity_config_e2e_cells.rs`, and `tests/parity_e2e_sweep.rs` depending on trigger and module; the somatic sweep run also targets `tests/parity_e2e_sweep.rs`, filtered by the `wes_il_pair_sweep::` (or `${{ inputs.e2e_sweep_somatic_tag }}_sweep::`) trial prefix. Nightly mode runs all module sweep suites shard-scoped, plus `parity_e2e`, `parity_config_e2e_cells`, one `VARDICT_E2E_SWEEP_SHARD=0/4` `parity_e2e_sweep` run, and one `wes_il_pair_sweep::` somatic sweep run. |
 | `ignore-audit.yml` | `workflow_dispatch`, nightly `schedule` at `30 3 * * *` | Job `ignore-audit` (`Audit Ignored Tests`) on `self-hosted`. Sets `VARDICT_IMPL=rust`, runs `cargo build --profile debug-release`, then `bash scripts/check_ignored_tests.sh`. This workflow audits the ignored-tests policy rather than running a named parity harness directly. |
 
 ## 6. Scripts
@@ -170,15 +174,16 @@ Workflow-management Phase 1 tracks parity-related shell scripts, Python scripts,
 6. `check_preset_drift.sh`
 7. `config_e2e_surface_gate.sh`
 8. `e2e_sweep_gate.sh`
-9. `gen_e2e_golden_tsv.sh`
-10. `gen_e2e_sweep_golden.sh`
-11. `gen_somatic_sweep_bed.sh`
-12. `gen_sweep_bed.sh`
-13. `parity_status.sh`
-14. `sample_regions.sh`
-15. `sync_sweep_cache.sh`
-16. `sweep_aa_check.sh`
-17. `sweep_fixtures.sh`
+9. `full_gate_tag.sh`
+10. `gen_e2e_golden_tsv.sh`
+11. `gen_e2e_sweep_golden.sh`
+12. `gen_somatic_sweep_bed.sh`
+13. `gen_sweep_bed.sh`
+14. `parity_status.sh`
+15. `sample_regions.sh`
+16. `sync_sweep_cache.sh`
+17. `sweep_aa_check.sh`
+18. `sweep_fixtures.sh`
 
 ### Python scripts
 
