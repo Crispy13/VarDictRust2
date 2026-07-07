@@ -23,6 +23,9 @@
 //!   profile lines; it is diagnostic-only.
 //! - `VARDICT_E2E_SWEEP_SORT_BUFFER_SIZE=<size>` overrides the disk-backed comparator's GNU
 //!   sort buffer cap. The default is intentionally bounded to keep CM-PILEUP Rust-sort RSS stable.
+//! - Both the streaming and disk-spool comparators compress GNU-sort spill temps with `zstd`
+//!   (`--compress-program=zstd`, ~13x smaller temp I/O), matching how the canonical fixtures were
+//!   generated.
 //! - `VARDICT_E2E_SWEEP_STREAMING_SORT=1|true` opt-in enables the CM-PILEUP streaming comparator:
 //!   Rust rows stream into GNU sort over stdin/stdout and compare directly against the presorted
 //!   Java `.tsv.zst` fixture. The default remains the plain disk-spool comparator.
@@ -2492,6 +2495,7 @@ impl StreamingSortSession {
             .env("TMPDIR", &spool.root)
             .arg(format!("--buffer-size={}", sort_buffer_size()))
             .arg("--parallel=1")
+            .arg("--compress-program=zstd")
             .arg(format!("--temporary-directory={}", spool.root.display()))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -2519,7 +2523,7 @@ impl StreamingSortSession {
             ordinal,
             "rust-sort-stream",
             Some(&format!(
-                "spawn=ok sort_buffer_size={} sort_parallel=1 keep_spool={}",
+                "spawn=ok sort_buffer_size={} sort_parallel=1 compress=zstd keep_spool={}",
                 sort_buffer_size(),
                 spool.keep_files
             )),
@@ -2845,6 +2849,7 @@ fn sort_spool_file(
         .env("TMPDIR", temp_dir)
         .arg(format!("--buffer-size={}", sort_buffer_size()))
         .arg("--parallel=1")
+        .arg("--compress-program=zstd")
         .arg(format!("--temporary-directory={}", temp_dir.display()))
         .arg(input)
         .arg("-o")
@@ -2860,7 +2865,7 @@ fn sort_spool_file(
                 ordinal,
                 phase,
                 Some(&format!(
-                    "sort_buffer_size={} sort_parallel=1 input_bytes={} output_bytes={}",
+                    "sort_buffer_size={} sort_parallel=1 compress=zstd input_bytes={} output_bytes={}",
                     sort_buffer_size(),
                     file_len(input).unwrap_or(0),
                     file_len(output).unwrap_or(0)
@@ -3746,8 +3751,13 @@ fn compute_generator_flags_hash_somatic(
     tag: &str,
     bed_root: &str,
 ) -> io::Result<String> {
+    // NOTE: the DOUBLE space between `--tags` and `--sweep-bed-root` is intentional and load-bearing.
+    // scripts/sweep_fixtures_parallel.py builds argv as a list where `--tags` carries an empty value,
+    // so the joined provenance string the manifest hashes contains `--tags  --sweep-bed-root`. All 58
+    // recorded wes_il_pair `generator_flags_hash` values match this double-space form (verified
+    // 2026-07-05); a single space here re-breaks the manifest gate (silent skip). Do NOT "fix" it.
     let logical_flags = format!(
-        "--output-only --config {config} --pair-tags {tag} --tags --sweep-bed-root {bed_root}"
+        "--output-only --config {config} --pair-tags {tag} --tags  --sweep-bed-root {bed_root}"
     );
     sha256_bytes_somatic(logical_flags.as_bytes())
 }
