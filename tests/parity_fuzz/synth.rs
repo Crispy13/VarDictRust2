@@ -78,12 +78,12 @@ fn build_sam_text(genome: &Genome) -> String {
         let seq = std::str::from_utf8(&read.seq).expect("synthetic read seq is ASCII");
         let qual = "I".repeat(read.seq.len());
         sam.push_str(&format!(
-            "{}\t{}\t{}\t{}\t60\t{}M\t*\t0\t0\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t60\t{}\t*\t0\t0\t{}\t{}\n",
             read.qname,
             read.flag,
             genome.contig,
             read.pos,
-            read.seq.len(),
+            read.cigar,
             seq,
             qual,
         ));
