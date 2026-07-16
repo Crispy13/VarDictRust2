@@ -8,9 +8,14 @@
 //! insertions (`<a>M<len>I<b>M`). A third manual spike (`gen_mnv_spike.py`)
 //! proved the encoding for multi-nucleotide variants: `k` adjacent base
 //! substitutions at the locus's 1-based `pos`, CIGAR staying `<READ_LEN>M`
-//! (VarDict reports these as `Complex`). This test drives the loop with
-//! proptest so it can generate (and shrink) many synthetic cases
-//! automatically, each locus independently an SNV, deletion, insertion, or MNV:
+//! (VarDict reports these as `Complex`). A fourth manual spike
+//! (`gen_clip_spike.py`) proved read-level soft/hard clips (5' `<c>S<m>M` /
+//! `<c>H<m>M`, 3' `<m>M<c>S` / `<m>M<c>H`) stay byte-identical layered on top
+//! of an SNV or deletion locus -- a clip is a per-read modifier orthogonal to
+//! `VariantKind`, applied by `generator::apply_clip` to a subset of a locus's
+//! reads. This test drives the loop with proptest so it can generate (and
+//! shrink) many synthetic cases automatically, each locus independently an
+//! SNV, deletion, insertion, or MNV, optionally with a clipped read subset:
 //!
 //!   generate `Vec<Locus>` (generator.rs)
 //!     -> materialize ref.fa + sorted/indexed reads.bam via samtools (synth.rs)
