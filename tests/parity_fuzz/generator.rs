@@ -81,6 +81,30 @@ pub struct ClipSpec {
     pub len: u32,
 }
 
+/// SAM FLAG bits both VarDictJava and vardict_rs must skip a read for
+/// entirely: duplicate (0x400), secondary (0x100), supplementary (0x800).
+/// Proven byte-identical by a manual spike (`gen_flags_spike.py`): a clean
+/// SNV locus plus 10 duplicate + 10 secondary + 10 supplementary alt reads
+/// yields `totcov=60, varcov=40` in both tools -- the 30 flagged reads
+/// dropped identically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterFlag {
+    Duplicate,
+    Secondary,
+    Supplementary,
+}
+
+impl FilterFlag {
+    /// The SAM FLAG bit this variant OR's into a read's base strand flag.
+    fn bit(self) -> u16 {
+        match self {
+            FilterFlag::Duplicate => 0x400,
+            FilterFlag::Secondary => 0x100,
+            FilterFlag::Supplementary => 0x800,
+        }
+    }
+}
+
 /// One locus: a reference position covered by `depth` reads, `alt_count` of
 /// which carry `kind`'s variant instead of the plain reference.
 #[derive(Debug, Clone)]
@@ -92,18 +116,26 @@ pub struct Locus {
     pub alt_count: u32,
     /// If set, applied to a subset (every other read) of this locus's reads.
     pub clip: Option<ClipSpec>,
+    /// Extra ALT-carrying reads, each flagged duplicate/secondary/
+    /// supplementary, appended on top of `depth`. Both tools must skip these
+    /// entirely, so they must not change any output column -- the clean
+    /// `depth` reads alone guarantee the call (non-vacuity is preserved).
+    pub filtered_reads: Vec<FilterFlag>,
 }
 
 /// One synthesized read record, materialized from a `Locus`.
 #[derive(Debug, Clone)]
 pub struct ReadRecord {
     pub qname: String,
-    /// SAM FLAG: 0 (forward) or 16 (reverse), alternating per read.
+    /// SAM FLAG: 0 (forward) or 16 (reverse) strand, optionally OR'd with a
+    /// `FilterFlag` bit for noise reads that both tools must skip.
     pub flag: u16,
     /// 1-based leftmost mapping position.
     pub pos: u32,
     pub cigar: String,
     pub seq: Vec<u8>,
+    /// SAM MAPQ column. Normal reads keep the default 60.
+    pub mapq: u8,
 }
 
 /// A synthetic single-contig genome: reference sequence plus the reads covering it.
@@ -188,6 +220,26 @@ struct LocusSpec {
     alt_pct: u32,
     kind_spec: VariantKindSpec,
     clip: Option<ClipSpec>,
+    filtered_reads: Vec<FilterFlag>,
+}
+
+fn filter_flag_strategy() -> impl Strategy<Value = FilterFlag> {
+    prop_oneof![
+        Just(FilterFlag::Duplicate),
+        Just(FilterFlag::Secondary),
+        Just(FilterFlag::Supplementary),
+    ]
+}
+
+/// 0..=6 extra ALT-carrying reads that both tools must skip entirely
+/// (duplicate/secondary/supplementary). Biased toward none (3:1, same weight
+/// as `optional_clip_strategy`) so most loci look like the unfiltered
+/// baseline, keeping filtered-noise loci a stressing minority.
+fn filtered_reads_strategy() -> impl Strategy<Value = Vec<FilterFlag>> {
+    prop_oneof![
+        3 => Just(Vec::new()),
+        1 => prop::collection::vec(filter_flag_strategy(), 1..=6),
+    ]
 }
 
 fn locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
@@ -197,14 +249,16 @@ fn locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
         30u32..=70,
         variant_kind_spec_strategy(),
         optional_clip_strategy(),
+        filtered_reads_strategy(),
     )
         .prop_map(
-            |(spacing_from_previous, depth, alt_pct, kind_spec, clip)| LocusSpec {
+            |(spacing_from_previous, depth, alt_pct, kind_spec, clip, filtered_reads)| LocusSpec {
                 spacing_from_previous,
                 depth,
                 alt_pct,
                 kind_spec,
                 clip,
+                filtered_reads,
             },
         )
 }
@@ -252,6 +306,7 @@ fn build_genome(specs: Vec<LocusSpec>) -> Genome {
             depth: spec.depth,
             alt_count,
             clip: spec.clip,
+            filtered_reads: spec.filtered_reads.clone(),
         });
     }
 
@@ -460,6 +515,25 @@ fn synthesize_reads(
                 pos,
                 cigar,
                 seq,
+                mapq: 60,
+            });
+        }
+
+        // Extra ALT-carrying reads flagged duplicate/secondary/supplementary.
+        // Both tools must skip them entirely, so they ride on the exact same
+        // start position and ALT encoding as a normal alt read -- only the
+        // FLAG differs.
+        for (noise_index, filter_flag) in locus.filtered_reads.iter().enumerate() {
+            let (cigar, seq) = build_read(&locus.kind, sequence, locus.pos, start, true);
+            let base_flag = if noise_index % 2 == 0 { 0 } else { 16 };
+            let flag = base_flag | filter_flag.bit();
+            reads.push(ReadRecord {
+                qname: format!("rf{locus_index}_{noise_index}"),
+                flag,
+                pos: start,
+                cigar,
+                seq,
+                mapq: 60,
             });
         }
     }
@@ -616,6 +690,34 @@ mod clip_tests {
         assert!(
             (0.15..=0.35).contains(&fraction),
             "expected ~25% of sampled loci to carry a clip (3:1 None:Some bias), got {fraction:.3} ({clipped}/{sample_count})"
+        );
+    }
+
+    /// Sampling guard: `filtered_reads_strategy` is biased 3:1 (empty:non-empty),
+    /// same weighting as `optional_clip_strategy`, so filtered-noise reads
+    /// should appear in roughly a quarter of sampled loci -- neither vacuously
+    /// absent (bug in the `prop_oneof!` weights, silently never exercising the
+    /// duplicate/secondary/supplementary skip path) nor dominant (would starve
+    /// the unfiltered majority).
+    #[test]
+    fn filtered_reads_strategy_samples_roughly_quarter_nonempty() {
+        use proptest::strategy::ValueTree;
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::deterministic();
+        let strategy = filtered_reads_strategy();
+        let sample_count = 2000;
+        let mut nonempty = 0;
+        for _ in 0..sample_count {
+            let tree = strategy.new_tree(&mut runner).expect("generate filtered_reads sample");
+            if !tree.current().is_empty() {
+                nonempty += 1;
+            }
+        }
+        let fraction = nonempty as f64 / sample_count as f64;
+        assert!(
+            (0.15..=0.35).contains(&fraction),
+            "expected ~25% of sampled loci to carry filtered noise reads (3:1 empty:non-empty bias), got {fraction:.3} ({nonempty}/{sample_count})"
         );
     }
 
