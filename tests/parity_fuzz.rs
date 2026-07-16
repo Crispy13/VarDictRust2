@@ -1,13 +1,16 @@
-//! Differential parity fuzzer -- germline SNV + indel vertical slice.
+//! Differential parity fuzzer -- germline SNV + indel + MNV vertical slice.
 //!
 //! A manual spike proved the loop: a synthetic reference FASTA + a tiny
 //! sorted/indexed BAM (one contig, one variant) run through both VarDictJava
 //! (VDJ) and vardict_rs (VDR) produce byte-identical output after
 //! sort-normalizing stdout. A second manual spike (`gen_indel_spike.py`)
 //! proved the CIGAR/SEQ/POS encoding for deletions (`<a>M<len>D<b>M`) and
-//! insertions (`<a>M<len>I<b>M`). This test drives the loop with proptest so
-//! it can generate (and shrink) many synthetic cases automatically, each
-//! locus independently an SNV, deletion, or insertion:
+//! insertions (`<a>M<len>I<b>M`). A third manual spike (`gen_mnv_spike.py`)
+//! proved the encoding for multi-nucleotide variants: `k` adjacent base
+//! substitutions at the locus's 1-based `pos`, CIGAR staying `<READ_LEN>M`
+//! (VarDict reports these as `Complex`). This test drives the loop with
+//! proptest so it can generate (and shrink) many synthetic cases
+//! automatically, each locus independently an SNV, deletion, insertion, or MNV:
 //!
 //!   generate `Vec<Locus>` (generator.rs)
 //!     -> materialize ref.fa + sorted/indexed reads.bam via samtools (synth.rs)

@@ -46,6 +46,11 @@ pub enum VariantKind {
     Del { len: u32 },
     /// Insertion of `bases` immediately after the locus's 1-based `pos`.
     Ins { bases: Vec<u8> },
+    /// Multi-nucleotide variant: `alt_offsets.len()` adjacent base
+    /// substitutions starting at the locus's 1-based `pos`. Each
+    /// `alt_offsets[j]` is the cycle offset (1..=3) applied to the ref base
+    /// at `pos + j` to pick a distinct alt base, same trick as `Snv`.
+    Mnv { alt_offsets: Vec<u32> },
 }
 
 /// One locus: a reference position covered by `depth` reads, `alt_count` of
@@ -93,6 +98,9 @@ enum VariantKindSpec {
     Del { len: u32 },
     /// Bases to insert.
     Ins { bases: Vec<u8> },
+    /// Per-position cycle offsets (1..=3), one per adjacent substituted base;
+    /// `alt_offsets.len()` is the MNV length (2..=4).
+    Mnv { alt_offsets: Vec<u32> },
 }
 
 fn acgt_byte_strategy() -> impl Strategy<Value = u8> {
@@ -105,6 +113,8 @@ fn variant_kind_spec_strategy() -> impl Strategy<Value = VariantKindSpec> {
         (1u32..=MAX_INDEL_LEN).prop_map(|len| VariantKindSpec::Del { len }),
         prop::collection::vec(acgt_byte_strategy(), 1..=MAX_INDEL_LEN as usize)
             .prop_map(|bases| VariantKindSpec::Ins { bases }),
+        prop::collection::vec(1u32..=3, 2..=4)
+            .prop_map(|alt_offsets| VariantKindSpec::Mnv { alt_offsets }),
     ]
 }
 
@@ -167,6 +177,9 @@ fn build_genome(specs: Vec<LocusSpec>) -> Genome {
             VariantKindSpec::Del { len } => VariantKind::Del { len: *len },
             VariantKindSpec::Ins { bases } => VariantKind::Ins {
                 bases: bases.clone(),
+            },
+            VariantKindSpec::Mnv { alt_offsets } => VariantKind::Mnv {
+                alt_offsets: alt_offsets.clone(),
             },
         };
 
@@ -249,6 +262,18 @@ fn build_read(kind: &VariantKind, sequence: &[u8], pos: u32, start: u32, is_alt:
             seq.extend_from_slice(bases);
             seq.extend_from_slice(ref_window(pos + 1, b));
             (format!("{a}M{m}I{b}M"), seq)
+        }
+        VariantKind::Mnv { alt_offsets } => {
+            let mut seq = ref_window(start, read_len as usize).to_vec();
+            if is_alt {
+                for (j, alt_offset) in alt_offsets.iter().enumerate() {
+                    let offset = (pos - start) as usize + j;
+                    let ref_base_j = seq[offset];
+                    let ref_index = base_cycle_index(ref_base_j);
+                    seq[offset] = BASES[(ref_index + *alt_offset as usize) % BASES.len()];
+                }
+            }
+            (format!("{read_len}M"), seq)
         }
     }
 }
