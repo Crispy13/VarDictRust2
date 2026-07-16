@@ -88,6 +88,7 @@ The current parity harness binaries are:
 4. `parity_config_e2e`
 5. `parity_config_e2e_cells`
 6. `parity_e2e_sweep`
+7. `parity_fuzz`
 
 ### Top-level harness files
 
@@ -99,6 +100,7 @@ The current parity harness binaries are:
 | `parity_config_e2e` | `tests/parity_config_e2e.rs` | Preset-driven config E2E harness. Declares `parity_config_e2e_push_*` ignored tests for each preset, plus `config_preset_alignment` and `binary_b_list_terse_format_regression`. Uses `tmp/e2e_fixtures/` goldens and `testdata/parity_regions.tsv`. |
 | `parity_config_e2e_cells` | `tests/parity_config_e2e_cells.rs` | Custom `libtest-mimic` harness (`harness = false` in `Cargo.toml`) that emits ignored `parity_config_e2e_cell_<preset>_rNNN` trials and supports sharding through `VARDICT_CELL_SHARD=i/N`. |
 | `parity_e2e_sweep` | `tests/parity_e2e_sweep.rs` | Custom `libtest-mimic` full-BAM E2E parity tier. Cost-gated. Uses tag-specific builders for `hg002`, `na12878_exome`, `na12878_lowcov`, and the somatic tumor/normal pair tag `wes_il_pair`, reads sweep cache from `tmp/sweep_fixtures/output/` by default, validates `manifest.json`, and supports `VARDICT_E2E_SWEEP_CONFIG`, `VARDICT_E2E_SWEEP_SHARD`, `VARDICT_E2E_SWEEP_FIXTURE_ROOT`, `VARDICT_E2E_SWEEP_BED_ROOT`, and `VARDICT_E2E_SWEEP_HEARTBEAT_LOG`. All generated chunk trials are marked ignored via `.with_ignored_flag(true)`, giving one cost-gated ignored sweep group per BAM tag (somatic `wes_il_pair` trials are filtered via `wes_il_pair_sweep::` and require `--test-threads=1`). |
+| `parity_fuzz` | `tests/parity_fuzz.rs` | Differential parity **fuzzer** (germline). proptest generates synthetic single-contig genomes (`tests/parity_fuzz/generator.rs`), materializes ref+sorted/indexed BAM via `samtools` (`tests/parity_fuzz/synth.rs`), runs BOTH `vardict_rs` and VarDictJava over one `-R` region, and asserts byte-identical output after sort-normalization (`tests/parity_fuzz/oracle.rs`). Test `pbt_germline_snv_parity` (proptest, case count via `PARITY_FUZZ_CASES`, default 64) plus loop-proof unit tests. Not `#[ignore]`d but requires the `vdr` conda env (samtools) + a built `target/debug-release/vardict_rs` (override with `VARDICT_RS_BIN`); VDJ pinned by the submodule at `4e362c0`. Corpus of found divergences persists in `tests/parity_fuzz.proptest-regressions`. |
 
 ### Required harness support files and directories
 
@@ -113,6 +115,8 @@ The inventory Phase 1 explicitly calls out these files and directories:
 | `tests/parity_sweep_suite/` | Module sweep test directory. |
 | `tests/parity_e2e_sweep/` | Full-BAM sweep support directory (includes `wes_il_pair_sweep.rs` for the somatic pair tag). |
 | `tests/common/mod.rs` | Shared parity helpers, region loading, fixture lookup, Java invocation, and BAM-tag lookup. |
+| `tests/parity_fuzz.rs` | Differential parity fuzzer entrypoint (germline). |
+| `tests/parity_fuzz/` | Fuzzer support directory: `generator.rs` (proptest strategies), `synth.rs` (samtools BAM/FASTA synthesis), `oracle.rs` (run-both + normalize + compare). |
 
 ### Module parity coverage
 

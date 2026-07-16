@@ -30,6 +30,7 @@ insta = { version = "1", features = ["json"] }
 libtest-mimic = "0.8"
 proptest = "1"
 sha2 = "0.10"
+tempfile = "3"
 zstd = "0.13"
 
 [profile.dev]
