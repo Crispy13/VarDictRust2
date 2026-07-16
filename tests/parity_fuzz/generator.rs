@@ -147,6 +147,33 @@ pub struct Genome {
     pub read_len: u32,
     pub loci: Vec<Locus>,
     pub reads: Vec<ReadRecord>,
+    /// 1-based inclusive scan region passed as `-R contig:scan_start-scan_end`.
+    /// Usually the whole contig, but sometimes cropped to sit at/near loci so
+    /// region-boundary inclusion is exercised (a variant exactly at the region
+    /// edge must be included/excluded identically by both tools).
+    pub scan_start: u32,
+    pub scan_end: u32,
+}
+
+/// How the scan region relates to the loci.
+#[derive(Debug, Clone)]
+enum RegionCrop {
+    /// Whole contig (`1..=contig_len`).
+    Full,
+    /// Region edges placed at `first_locus.pos + start_delta` and
+    /// `last_locus.pos + end_delta` (deltas in -1..=1), so a boundary locus
+    /// lands just inside / on / just outside the region. Only applied when
+    /// there are >=3 loci, so >=1 middle locus is always strictly inside and
+    /// the case stays non-vacuous.
+    Crop { start_delta: i32, end_delta: i32 },
+}
+
+fn region_crop_strategy() -> impl Strategy<Value = RegionCrop> {
+    prop_oneof![
+        2 => Just(RegionCrop::Full),
+        1 => (-1i32..=1, -1i32..=1)
+            .prop_map(|(start_delta, end_delta)| RegionCrop::Crop { start_delta, end_delta }),
+    ]
 }
 
 /// Raw proptest-generated parameters for one locus's variant, before layout
@@ -266,10 +293,14 @@ fn locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
 /// Strategy producing a `Genome` with 1..=8 loci (each independently SNV,
 /// deletion, or insertion) spaced >=200bp apart on one synthetic contig.
 pub fn arb_genome() -> impl Strategy<Value = Genome> {
-    prop::collection::vec(locus_spec_strategy(), 1..=8).prop_map(build_genome)
+    (
+        prop::collection::vec(locus_spec_strategy(), 1..=8),
+        region_crop_strategy(),
+    )
+        .prop_map(|(specs, crop)| build_genome(specs, crop))
 }
 
-fn build_genome(specs: Vec<LocusSpec>) -> Genome {
+fn build_genome(specs: Vec<LocusSpec>, crop: RegionCrop) -> Genome {
     let read_len = READ_LEN;
     // Enough room upstream of the first locus for a full read to fit.
     let leading_margin = read_len + 50;
@@ -320,12 +351,28 @@ fn build_genome(specs: Vec<LocusSpec>) -> Genome {
 
     let reads = synthesize_reads(&loci, &sequence, read_len, contig_len);
 
+    // Scan region: whole contig, unless cropped to the loci edges. Cropping is
+    // only honored with >=3 loci so >=1 middle locus is always strictly inside
+    // (keeps the case non-vacuous); otherwise fall back to the full contig.
+    let (scan_start, scan_end) = match crop {
+        RegionCrop::Crop { start_delta, end_delta } if loci.len() >= 3 => {
+            let first = loci.first().map_or(1, |l| l.pos) as i32;
+            let last = loci.last().map_or(contig_len, |l| l.pos) as i32;
+            let start = (first + start_delta).clamp(1, contig_len as i32) as u32;
+            let end = (last + end_delta).clamp(start as i32, contig_len as i32) as u32;
+            (start, end)
+        }
+        _ => (1, contig_len),
+    };
+
     Genome {
         contig: "chrS".to_string(),
         sequence,
         read_len,
         loci,
         reads,
+        scan_start,
+        scan_end,
     }
 }
 

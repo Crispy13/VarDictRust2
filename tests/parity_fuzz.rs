@@ -1,4 +1,5 @@
-//! Differential parity fuzzer -- germline SNV + indel + MNV vertical slice.
+//! Differential parity fuzzer -- germline (SNV / indel / MNV / clips /
+//! flag-filtered reads / region boundaries).
 //!
 //! A manual spike proved the loop: a synthetic reference FASTA + a tiny
 //! sorted/indexed BAM (one contig, one variant) run through both VarDictJava
@@ -13,9 +14,14 @@
 //! `<c>H<m>M`, 3' `<m>M<c>S` / `<m>M<c>H`) stay byte-identical layered on top
 //! of an SNV or deletion locus -- a clip is a per-read modifier orthogonal to
 //! `VariantKind`, applied by `generator::apply_clip` to a subset of a locus's
-//! reads. This test drives the loop with proptest so it can generate (and
-//! shrink) many synthetic cases automatically, each locus independently an
-//! SNV, deletion, insertion, or MNV, optionally with a clipped read subset:
+//! reads. Further spikes proved read-flag filtering (duplicate/secondary/
+//! supplementary noise reads are skipped identically) and region-boundary
+//! inclusion (a variant at the exact `-R` edge is included/excluded the same
+//! way by both tools). This test drives the loop with proptest so it can
+//! generate (and shrink) many synthetic cases automatically, each locus
+//! independently an SNV, deletion, insertion, or MNV, optionally with a
+//! clipped read subset and/or skipped flag-filtered noise reads, over a scan
+//! region that is sometimes cropped to the loci edges:
 //!
 //!   generate `Vec<Locus>` (generator.rs)
 //!     -> materialize ref.fa + sorted/indexed reads.bam via samtools (synth.rs)

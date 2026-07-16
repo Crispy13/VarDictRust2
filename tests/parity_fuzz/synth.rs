@@ -114,7 +114,7 @@ pub fn materialize(genome: &Genome) -> SynthPaths {
     run_samtools(&["sort", "-o", "reads.bam", "reads.unsorted.bam"], dir);
     run_samtools(&["index", "reads.bam"], dir);
 
-    let region = format!("{}:1-{}", genome.contig, genome.sequence.len());
+    let region = format!("{}:{}-{}", genome.contig, genome.scan_start, genome.scan_end);
     let reads_bam = dir.join("reads.bam");
 
     SynthPaths {
