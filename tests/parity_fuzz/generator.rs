@@ -364,6 +364,35 @@ pub fn arb_germline_preset() -> impl Strategy<Value = Preset> {
     proptest::sample::select(presets)
 }
 
+/// Somatic-specific presets not present as named rows in config_presets.tsv:
+/// `-V` (lowest normal-sample freq for a somatic call = lofreq, default 0.05 —
+/// directly moves the VarLabel status boundary; a spike confirmed VDR<->VDJ
+/// track the shift) and `-I` (indel size threshold). Hardcoded as (name, flags).
+fn somatic_only_presets() -> Vec<Preset> {
+    vec![
+        Preset { name: "SM-LOFREQ-LO".to_string(), flags: vec!["-V".to_string(), "0.02".to_string()] },
+        Preset { name: "SM-LOFREQ-HI".to_string(), flags: vec!["-V".to_string(), "0.10".to_string()] },
+        Preset { name: "SM-INDELSIZE".to_string(), flags: vec!["-I".to_string(), "20".to_string()] },
+    ]
+}
+
+/// Curated preset set for the somatic lane: the germline curated presets (all
+/// `applies_to=both`, proven byte-identical under paired somatic input by a
+/// spike) plus the somatic-specific -V/-I presets above. Same exclusions as the
+/// germline set (CM-UNIQUN unpaired crash, CM-TH4, CM-EXTEND) since they are
+/// simply not in CURATED_GERMLINE_PRESETS.
+pub fn arb_somatic_preset() -> impl Strategy<Value = Preset> {
+    let mut presets: Vec<Preset> = CURATED_GERMLINE_PRESETS
+        .iter()
+        .map(|name| Preset {
+            name: (*name).to_string(),
+            flags: crate::common::config_preset_java_flags(name),
+        })
+        .collect();
+    presets.extend(somatic_only_presets());
+    proptest::sample::select(presets)
+}
+
 /// Strategy producing a `Genome` with 1..=8 loci (each independently SNV,
 /// deletion, or insertion) spaced >=200bp apart on one synthetic contig.
 pub fn arb_genome() -> impl Strategy<Value = Genome> {
@@ -1088,6 +1117,15 @@ mod preset_tests {
         for name in CURATED_GERMLINE_PRESETS {
             let flags = crate::common::config_preset_java_flags(name);
             assert!(!flags.is_empty(), "preset {name} resolved to no flags");
+        }
+    }
+
+    #[test]
+    fn somatic_only_presets_are_nonempty() {
+        let p = super::somatic_only_presets();
+        assert!(!p.is_empty());
+        for preset in &p {
+            assert!(!preset.flags.is_empty(), "somatic preset {} has no flags", preset.name);
         }
     }
 }

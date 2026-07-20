@@ -33,7 +33,10 @@
 //! through both tools via VarDict's paired `-b "tumor.bam|normal.bam"` mode.
 //! Each somatic locus independently an SNV, deletion, insertion, or MNV, with
 //! the normal sample's own alt fraction spanning the full somatic status
-//! spectrum (StrongSomatic/LikelySomatic/AFDiff/Germline/LikelyLOH).
+//! spectrum (StrongSomatic/LikelySomatic/AFDiff/Germline/LikelyLOH). A fourth
+//! test, `pbt_somatic_preset_parity`, runs the paired somatic lane again under
+//! a curated somatic config preset (via `generator::arb_somatic_preset`, the
+//! germline curated set plus somatic-only `-V`/`-I` presets).
 //!
 //!   generate `Vec<Locus>` (generator.rs)
 //!     -> materialize ref.fa + sorted/indexed reads.bam via samtools (synth.rs)
@@ -201,5 +204,29 @@ proptest! {
                 "Somatic parity mismatch for region {}\nloci: {:#?}\n\ntumor.sam:\n{}\nnormal.sam:\n{}\n\n{}\n\nVDJ:\n{}\n\nVDR:\n{}",
                 synth.region, sgenome.loci, synth.tumor_sam_text, synth.normal_sam_text, diff, vdj_out, vdr_out);
         }
+    }
+
+    #[test]
+    fn pbt_somatic_preset_parity(
+        sgenome in generator::arb_somatic_genome(),
+        preset in generator::arb_somatic_preset(),
+    ) {
+        let vdr_bin = vdr_binary_path();
+        assert!(vdr_bin.is_file(), "VDR binary not found at {}. Build with: cargo build --profile debug-release --bin vardict_rs (or set VARDICT_RS_BIN)", vdr_bin.display());
+        let java_bin = common::java_binary_path();
+
+        let synth = synth::materialize_paired(&sgenome);
+
+        let vdj_out = oracle::run_vdj_paired(&java_bin, &synth.ref_fasta, &synth.tumor_bam, &synth.normal_bam, &synth.region, &preset.flags);
+        let vdr_out = oracle::run_vdr_paired(&vdr_bin, &synth.ref_fasta, &synth.tumor_bam, &synth.normal_bam, &synth.region, &preset.flags);
+
+        // Real parity check FIRST (catches one-empty-one-not), then discard cases a
+        // preset legitimately suppressed to nothing.
+        if let Err(diff) = oracle::compare(&vdj_out, &vdr_out) {
+            prop_assert!(false,
+                "Somatic preset parity mismatch under {} ({:?}) for region {}\nloci: {:#?}\n\ntumor.sam:\n{}\nnormal.sam:\n{}\n\n{}\n\nVDJ:\n{}\n\nVDR:\n{}",
+                preset.name, preset.flags, synth.region, sgenome.loci, synth.tumor_sam_text, synth.normal_sam_text, diff, vdj_out, vdr_out);
+        }
+        prop_assume!(!oracle::normalize(&vdj_out).is_empty());
     }
 }
