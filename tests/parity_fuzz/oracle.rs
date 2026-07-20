@@ -8,19 +8,37 @@ use std::process::{Command, Stdio};
 
 /// Run VarDictJava (`-th 1`) over `region` and return its raw (un-normalized) stdout.
 pub fn run_vdj(java_bin: &Path, ref_fasta: &Path, bam: &Path, region: &str, extra_flags: &[String]) -> String {
-    run_tool(java_bin, "-th", ref_fasta, bam, region, extra_flags)
+    run_tool(java_bin, "-th", ref_fasta, bam.as_os_str(), region, extra_flags)
 }
 
 /// Run vardict_rs (`--th 1`) over `region` and return its raw (un-normalized) stdout.
 pub fn run_vdr(vdr_bin: &Path, ref_fasta: &Path, bam: &Path, region: &str, extra_flags: &[String]) -> String {
-    run_tool(vdr_bin, "--th", ref_fasta, bam, region, extra_flags)
+    run_tool(vdr_bin, "--th", ref_fasta, bam.as_os_str(), region, extra_flags)
+}
+
+/// Run VarDictJava in paired somatic mode over `region`: -b "tumor|normal".
+pub fn run_vdj_paired(java_bin: &Path, ref_fasta: &Path, tumor_bam: &Path, normal_bam: &Path, region: &str, extra_flags: &[String]) -> String {
+    run_tool(java_bin, "-th", ref_fasta, &paired_bam_arg(tumor_bam, normal_bam), region, extra_flags)
+}
+
+/// Run vardict_rs in paired somatic mode over `region`: -b "tumor|normal".
+pub fn run_vdr_paired(vdr_bin: &Path, ref_fasta: &Path, tumor_bam: &Path, normal_bam: &Path, region: &str, extra_flags: &[String]) -> String {
+    run_tool(vdr_bin, "--th", ref_fasta, &paired_bam_arg(tumor_bam, normal_bam), region, extra_flags)
+}
+
+/// Join two BAM paths into VarDict's pipe-separated paired -b argument.
+fn paired_bam_arg(tumor_bam: &Path, normal_bam: &Path) -> std::ffi::OsString {
+    let mut arg = tumor_bam.as_os_str().to_os_string();
+    arg.push("|");
+    arg.push(normal_bam.as_os_str());
+    arg
 }
 
 fn run_tool(
     bin: &Path,
     threads_flag: &str,
     ref_fasta: &Path,
-    bam: &Path,
+    bam_arg: &std::ffi::OsStr,
     region: &str,
     extra_flags: &[String],
 ) -> String {
@@ -28,7 +46,7 @@ fn run_tool(
     cmd.arg("-G")
         .arg(ref_fasta)
         .arg("-b")
-        .arg(bam)
+        .arg(bam_arg)
         .arg("-N")
         .arg("test_sample")
         .arg(threads_flag)

@@ -451,6 +451,120 @@ fn build_genome(specs: Vec<LocusSpec>, crop: RegionCrop) -> Genome {
     }
 }
 
+/// A synthetic paired tumor/normal genome for the somatic lane. Tumor and
+/// normal share one reference `sequence`; they differ only in per-locus
+/// alt-read counts. For S0 every locus is StrongSomatic: the variant is
+/// present in the tumor read set and absent from the normal read set.
+#[derive(Debug, Clone)]
+pub struct SomaticGenome {
+    pub contig: String,
+    pub sequence: Vec<u8>,
+    pub loci: Vec<Locus>, // tumor loci (carry the variant); kept for reproducer context
+    pub tumor_reads: Vec<ReadRecord>,
+    pub normal_reads: Vec<ReadRecord>,
+    pub scan_start: u32,
+    pub scan_end: u32,
+}
+
+/// Raw params for one StrongSomatic SNV locus.
+#[derive(Debug, Clone)]
+struct SomaticLocusSpec {
+    /// Distance (bp) from the previous locus; reuses the germline spacing
+    /// range so read windows never overlap.
+    spacing_from_previous: u32,
+    /// Total read depth covering the locus in both tumor and normal. 30..=60
+    /// is safe VarDict-calling range.
+    depth: u32,
+    /// Percent of TUMOR reads carrying the alt allele. 30..=70 is a safe
+    /// calling range. The normal sample carries none (StrongSomatic).
+    tumor_alt_pct: u32,
+    /// Offset (1..=3) applied to the ref base's cycle index (mod 4) to pick a
+    /// distinct alt base, same trick as the germline SNV.
+    snv_alt_offset: u32,
+}
+
+fn somatic_locus_spec_strategy() -> impl Strategy<Value = SomaticLocusSpec> {
+    (
+        MIN_LOCUS_SPACING..=MAX_LOCUS_SPACING,
+        30u32..=60,
+        30u32..=70,
+        1u32..=3,
+    )
+        .prop_map(
+            |(spacing_from_previous, depth, tumor_alt_pct, snv_alt_offset)| SomaticLocusSpec {
+                spacing_from_previous,
+                depth,
+                tumor_alt_pct,
+                snv_alt_offset,
+            },
+        )
+}
+
+/// Strategy producing a `SomaticGenome` with 1..=6 StrongSomatic SNV loci
+/// spaced >=200bp apart on one synthetic contig.
+pub fn arb_somatic_genome() -> impl Strategy<Value = SomaticGenome> {
+    prop::collection::vec(somatic_locus_spec_strategy(), 1..=6).prop_map(build_somatic_genome)
+}
+
+fn build_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
+    let read_len = READ_LEN;
+    // Enough room upstream of the first locus for a full read to fit.
+    let leading_margin = read_len + 50;
+
+    let mut tumor_loci = Vec::with_capacity(specs.len());
+    let mut normal_loci = Vec::with_capacity(specs.len());
+    let mut pos: u32 = leading_margin;
+    for (index, spec) in specs.iter().enumerate() {
+        if index > 0 {
+            pos += spec.spacing_from_previous;
+        }
+
+        let ref_base = base_at_cycle(pos as usize - 1);
+        let ref_index = base_cycle_index(ref_base);
+        let alt_base = BASES[(ref_index + spec.snv_alt_offset as usize) % BASES.len()];
+        let kind = VariantKind::Snv { ref_base, alt_base };
+
+        let tumor_alt_count = ((spec.depth * spec.tumor_alt_pct) / 100)
+            .clamp(1, spec.depth.saturating_sub(1).max(1));
+
+        tumor_loci.push(Locus {
+            pos,
+            kind: kind.clone(),
+            depth: spec.depth,
+            alt_count: tumor_alt_count,
+            clip: None,
+            filtered_reads: vec![],
+            quality_noise: vec![],
+        });
+        normal_loci.push(Locus {
+            pos,
+            kind,
+            depth: spec.depth,
+            alt_count: 0,
+            clip: None,
+            filtered_reads: vec![],
+            quality_noise: vec![],
+        });
+    }
+
+    // Trailing margin mirrors the germline `build_genome` layout.
+    let contig_len = tumor_loci.last().map_or(leading_margin, |l| l.pos) + read_len + 50 + MAX_INDEL_LEN;
+    let sequence: Vec<u8> = (0..contig_len as usize).map(base_at_cycle).collect();
+
+    let tumor_reads = synthesize_reads(&tumor_loci, &sequence, read_len, contig_len);
+    let normal_reads = synthesize_reads(&normal_loci, &sequence, read_len, contig_len);
+
+    SomaticGenome {
+        contig: "chrS".to_string(),
+        sequence,
+        loci: tumor_loci,
+        tumor_reads,
+        normal_reads,
+        scan_start: 1,
+        scan_end: contig_len,
+    }
+}
+
 /// Build the CIGAR + SEQ for one read at a locus. `start` is the read's
 /// 1-based leftmost mapping position; `is_alt` selects whether the read
 /// carries the locus's variant or plain reference bases.

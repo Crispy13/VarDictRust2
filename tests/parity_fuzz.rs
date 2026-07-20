@@ -27,7 +27,10 @@
 //! engage and both tools are checked to drop exactly the same reads. A second test,
 //! `pbt_germline_preset_parity`, runs every generated genome again under a
 //! curated germline config preset (via `generator::arb_germline_preset`),
-//! passing the preset's CLI flags through to both tools:
+//! passing the preset's CLI flags through to both tools. A third test,
+//! `pbt_somatic_parity`, exercises the paired tumor/normal somatic lane: two
+//! synthetic BAMs (tumor + normal) built from one shared reference, run
+//! through both tools via VarDict's paired `-b "tumor.bam|normal.bam"` mode.
 //!
 //!   generate `Vec<Locus>` (generator.rs)
 //!     -> materialize ref.fa + sorted/indexed reads.bam via samtools (synth.rs)
@@ -163,5 +166,37 @@ proptest! {
         // trim near the variant) can zero out a uniform-quality case. prop_assume
         // keeps the case budget spent on informative, non-vacuous parity checks.
         prop_assume!(!oracle::normalize(&vdj_out).is_empty());
+    }
+
+    #[test]
+    fn pbt_somatic_parity(sgenome in generator::arb_somatic_genome()) {
+        let vdr_bin = vdr_binary_path();
+        assert!(
+            vdr_bin.is_file(),
+            "VDR binary not found at {}. Build with: cargo build --profile debug-release --bin vardict_rs (or set VARDICT_RS_BIN)",
+            vdr_bin.display(),
+        );
+        let java_bin = common::java_binary_path();
+
+        let synth = synth::materialize_paired(&sgenome);
+
+        let vdj_out = oracle::run_vdj_paired(&java_bin, &synth.ref_fasta, &synth.tumor_bam, &synth.normal_bam, &synth.region, &[]);
+        let vdr_out = oracle::run_vdr_paired(&vdr_bin, &synth.ref_fasta, &synth.tumor_bam, &synth.normal_bam, &synth.region, &[]);
+
+        // Non-vacuity: every StrongSomatic locus has a clear tumor variant, so VDJ
+        // (the oracle) must emit at least one somatic row. (The NORMAL bam is
+        // legitimately variant-free, so the germline "both bams non-empty" guard
+        // does not apply -- guard on the joint paired stdout instead.)
+        prop_assert!(
+            !oracle::normalize(&vdj_out).is_empty(),
+            "vacuous somatic case: VDJ called no variants for region {}\ntumor.sam:\n{}\nnormal.sam:\n{}",
+            synth.region, synth.tumor_sam_text, synth.normal_sam_text,
+        );
+
+        if let Err(diff) = oracle::compare(&vdj_out, &vdr_out) {
+            prop_assert!(false,
+                "Somatic parity mismatch for region {}\nloci: {:#?}\n\ntumor.sam:\n{}\nnormal.sam:\n{}\n\n{}\n\nVDJ:\n{}\n\nVDR:\n{}",
+                synth.region, sgenome.loci, synth.tumor_sam_text, synth.normal_sam_text, diff, vdj_out, vdr_out);
+        }
     }
 }
