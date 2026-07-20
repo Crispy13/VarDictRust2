@@ -290,6 +290,38 @@ fn locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
         )
 }
 
+/// A curated germline config preset: its name plus the CLI flag tokens it adds
+/// to BOTH tools. Same tokens the e2e sweep feeds via scripts/config_presets.tsv
+/// (resolved through `crate::common::config_preset_java_flags`).
+#[derive(Debug, Clone)]
+pub struct Preset {
+    pub name: String,
+    pub flags: Vec<String>,
+}
+
+/// Curated germline preset names for the preset-parity pass. Deliberately
+/// EXCLUDES: CM-UNIQUN (--UN makes VarDictJava exit 1 on unpaired reads),
+/// CM-TH4 (thread count only, redundant with pinned -th 1), CM-EXTEND
+/// (deferred negative-coord region gap).
+const CURATED_GERMLINE_PRESETS: &[&str] = &[
+    "T1-02", "T1-03", "T1-06", "T1-08", "T1-09", "T1-10",
+    "CM-MAPQ30", "CM-MEANMAPQ", "CM-QRATIO", "CM-TRIM", "CM-MINMATCH",
+    "CM-SAMFILT", "CM-FISHER", "CM-PILEUP", "CM-NOSV", "CM-NOREAL",
+    "CM-3PRIME", "CM-CHIMERIC", "CM-DEBUG",
+];
+
+/// Strategy selecting one curated preset (shrinks toward the first entry).
+pub fn arb_germline_preset() -> impl Strategy<Value = Preset> {
+    let presets: Vec<Preset> = CURATED_GERMLINE_PRESETS
+        .iter()
+        .map(|name| Preset {
+            name: (*name).to_string(),
+            flags: crate::common::config_preset_java_flags(name),
+        })
+        .collect();
+    proptest::sample::select(presets)
+}
+
 /// Strategy producing a `Genome` with 1..=8 loci (each independently SNV,
 /// deletion, or insertion) spaced >=200bp apart on one synthetic contig.
 pub fn arb_genome() -> impl Strategy<Value = Genome> {
@@ -807,6 +839,22 @@ mod clip_tests {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::CURATED_GERMLINE_PRESETS;
+
+    /// Typo-guard: every curated preset name must resolve to a non-empty flag
+    /// set via `config_preset_java_flags` (which panics on an unknown name).
+    #[test]
+    fn curated_presets_all_resolve() {
+        assert!(!CURATED_GERMLINE_PRESETS.is_empty());
+        for name in CURATED_GERMLINE_PRESETS {
+            let flags = crate::common::config_preset_java_flags(name);
+            assert!(!flags.is_empty(), "preset {name} resolved to no flags");
         }
     }
 }

@@ -21,7 +21,10 @@
 //! generate (and shrink) many synthetic cases automatically, each locus
 //! independently an SNV, deletion, insertion, or MNV, optionally with a
 //! clipped read subset and/or skipped flag-filtered noise reads, over a scan
-//! region that is sometimes cropped to the loci edges:
+//! region that is sometimes cropped to the loci edges. A second test,
+//! `pbt_germline_preset_parity`, runs every generated genome again under a
+//! curated germline config preset (via `generator::arb_germline_preset`),
+//! passing the preset's CLI flags through to both tools:
 //!
 //!   generate `Vec<Locus>` (generator.rs)
 //!     -> materialize ref.fa + sorted/indexed reads.bam via samtools (synth.rs)
@@ -93,8 +96,8 @@ proptest! {
 
         let synth = synth::materialize(&genome);
 
-        let vdj_out = oracle::run_vdj(&java_bin, &synth.ref_fasta, &synth.reads_bam, &synth.region);
-        let vdr_out = oracle::run_vdr(&vdr_bin, &synth.ref_fasta, &synth.reads_bam, &synth.region);
+        let vdj_out = oracle::run_vdj(&java_bin, &synth.ref_fasta, &synth.reads_bam, &synth.region, &[]);
+        let vdr_out = oracle::run_vdr(&vdr_bin, &synth.ref_fasta, &synth.reads_bam, &synth.region, &[]);
 
         // Guard against vacuous parity: if VDJ (the reference oracle) called no
         // variants, an empty == empty comparison would pass silently and give
@@ -122,5 +125,40 @@ proptest! {
                 vdr_out,
             );
         }
+    }
+
+    #[test]
+    fn pbt_germline_preset_parity(
+        genome in generator::arb_genome(),
+        preset in generator::arb_germline_preset(),
+    ) {
+        let vdr_bin = vdr_binary_path();
+        assert!(
+            vdr_bin.is_file(),
+            "VDR binary not found at {}. Build with: cargo build --profile debug-release --bin vardict_rs (or set VARDICT_RS_BIN)",
+            vdr_bin.display(),
+        );
+        let java_bin = common::java_binary_path();
+
+        let synth = synth::materialize(&genome);
+
+        let vdj_out = oracle::run_vdj(&java_bin, &synth.ref_fasta, &synth.reads_bam, &synth.region, &preset.flags);
+        let vdr_out = oracle::run_vdr(&vdr_bin, &synth.ref_fasta, &synth.reads_bam, &synth.region, &preset.flags);
+
+        // Real parity check FIRST — always catches a true divergence, including the
+        // one-empty-one-not case, before any vacuity handling.
+        if let Err(diff) = oracle::compare(&vdj_out, &vdr_out) {
+            prop_assert!(
+                false,
+                "Parity mismatch under preset {} ({:?}) for region {}\nloci: {:#?}\n\nreads.sam:\n{}\n\n{}\n\nVDJ stdout:\n{}\n\nVDR stdout:\n{}",
+                preset.name, preset.flags, synth.region, genome.loci, synth.reads_sam_text, diff, vdj_out, vdr_out,
+            );
+        }
+
+        // Discard (do NOT fail) cases the preset legitimately suppressed to nothing:
+        // both-empty is genuine parity but uninformative, and some presets (e.g. -T
+        // trim near the variant) can zero out a uniform-quality case. prop_assume
+        // keeps the case budget spent on informative, non-vacuous parity checks.
+        prop_assume!(!oracle::normalize(&vdj_out).is_empty());
     }
 }

@@ -7,27 +7,37 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// Run VarDictJava (`-th 1`) over `region` and return its raw (un-normalized) stdout.
-pub fn run_vdj(java_bin: &Path, ref_fasta: &Path, bam: &Path, region: &str) -> String {
-    run_tool(java_bin, "-th", ref_fasta, bam, region)
+pub fn run_vdj(java_bin: &Path, ref_fasta: &Path, bam: &Path, region: &str, extra_flags: &[String]) -> String {
+    run_tool(java_bin, "-th", ref_fasta, bam, region, extra_flags)
 }
 
 /// Run vardict_rs (`--th 1`) over `region` and return its raw (un-normalized) stdout.
-pub fn run_vdr(vdr_bin: &Path, ref_fasta: &Path, bam: &Path, region: &str) -> String {
-    run_tool(vdr_bin, "--th", ref_fasta, bam, region)
+pub fn run_vdr(vdr_bin: &Path, ref_fasta: &Path, bam: &Path, region: &str, extra_flags: &[String]) -> String {
+    run_tool(vdr_bin, "--th", ref_fasta, bam, region, extra_flags)
 }
 
-fn run_tool(bin: &Path, threads_flag: &str, ref_fasta: &Path, bam: &Path, region: &str) -> String {
-    let output = Command::new(bin)
-        .arg("-G")
+fn run_tool(
+    bin: &Path,
+    threads_flag: &str,
+    ref_fasta: &Path,
+    bam: &Path,
+    region: &str,
+    extra_flags: &[String],
+) -> String {
+    let mut cmd = Command::new(bin);
+    cmd.arg("-G")
         .arg(ref_fasta)
         .arg("-b")
         .arg(bam)
         .arg("-N")
         .arg("test_sample")
         .arg(threads_flag)
-        .arg("1")
-        .arg("-R")
-        .arg(region)
+        .arg("1");
+    for f in extra_flags {
+        cmd.arg(f);
+    }
+    cmd.arg("-R").arg(region);
+    let output = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
