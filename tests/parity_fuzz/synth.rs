@@ -76,7 +76,9 @@ fn build_sam_text(genome: &Genome) -> String {
 
     for read in &genome.reads {
         let seq = std::str::from_utf8(&read.seq).expect("synthetic read seq is ASCII");
-        let qual = "I".repeat(read.seq.len());
+        let qual: String = std::iter::repeat((b'!' + read.base_qual) as char)
+            .take(read.seq.len())
+            .collect();
         sam.push_str(&format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t*\t0\t0\t{}\t{}\n",
             read.qname,

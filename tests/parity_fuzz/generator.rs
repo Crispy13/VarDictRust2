@@ -105,6 +105,38 @@ impl FilterFlag {
     }
 }
 
+/// Straddle sets: values BELOW common thresholds plus one no-op high value, so
+/// a quality-noise read may or may not be filtered by a given preset.
+const STRADDLE_MAPQS: &[u8] = &[0, 20, 25, 29, 60]; // vs -Q / -O floors
+const STRADDLE_BASE_QUALS: &[u8] = &[10, 14, 15, 40]; // vs -q floor (Phred)
+
+/// One extra ALT-carrying read whose MAPQ and/or base quality may fall below a
+/// preset's filter floor. Appended on top of the clean `depth` reads (like
+/// `filtered_reads`), so the variant always still calls at the default preset.
+#[derive(Debug, Clone, Copy)]
+pub struct QualNoiseRead {
+    pub mapq: u8,
+    pub base_qual: u8,
+}
+
+fn qual_noise_read_strategy() -> impl Strategy<Value = QualNoiseRead> {
+    (
+        proptest::sample::select(STRADDLE_MAPQS.to_vec()),
+        proptest::sample::select(STRADDLE_BASE_QUALS.to_vec()),
+    )
+        .prop_map(|(mapq, base_qual)| QualNoiseRead { mapq, base_qual })
+}
+
+/// 0..=6 quality-noise reads, biased 3:1 toward none (same weighting as
+/// `optional_clip_strategy` / `filtered_reads_strategy`) so most loci look like
+/// the uniform-quality baseline and quality-straddle loci stay a stressing minority.
+fn quality_noise_strategy() -> impl Strategy<Value = Vec<QualNoiseRead>> {
+    prop_oneof![
+        3 => Just(Vec::new()),
+        1 => prop::collection::vec(qual_noise_read_strategy(), 1..=6),
+    ]
+}
+
 /// One locus: a reference position covered by `depth` reads, `alt_count` of
 /// which carry `kind`'s variant instead of the plain reference.
 #[derive(Debug, Clone)]
@@ -121,6 +153,9 @@ pub struct Locus {
     /// entirely, so they must not change any output column -- the clean
     /// `depth` reads alone guarantee the call (non-vacuity is preserved).
     pub filtered_reads: Vec<FilterFlag>,
+    /// Extra ALT-carrying reads whose MAPQ / base quality straddle -Q/-q
+    /// filter floors, appended on top of `depth`. See `QualNoiseRead`.
+    pub quality_noise: Vec<QualNoiseRead>,
 }
 
 /// One synthesized read record, materialized from a `Locus`.
@@ -136,6 +171,10 @@ pub struct ReadRecord {
     pub seq: Vec<u8>,
     /// SAM MAPQ column. Normal reads keep the default 60.
     pub mapq: u8,
+    /// Uniform Phred base quality for EVERY base of this read (SAM QUAL column
+    /// char = b'!' + base_qual). Normal reads use 40 ('I'); quality-noise reads
+    /// use a straddling value so -q filters engage.
+    pub base_qual: u8,
 }
 
 /// A synthetic single-contig genome: reference sequence plus the reads covering it.
@@ -248,6 +287,7 @@ struct LocusSpec {
     kind_spec: VariantKindSpec,
     clip: Option<ClipSpec>,
     filtered_reads: Vec<FilterFlag>,
+    quality_noise: Vec<QualNoiseRead>,
 }
 
 fn filter_flag_strategy() -> impl Strategy<Value = FilterFlag> {
@@ -277,15 +317,17 @@ fn locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
         variant_kind_spec_strategy(),
         optional_clip_strategy(),
         filtered_reads_strategy(),
+        quality_noise_strategy(),
     )
         .prop_map(
-            |(spacing_from_previous, depth, alt_pct, kind_spec, clip, filtered_reads)| LocusSpec {
+            |(spacing_from_previous, depth, alt_pct, kind_spec, clip, filtered_reads, quality_noise)| LocusSpec {
                 spacing_from_previous,
                 depth,
                 alt_pct,
                 kind_spec,
                 clip,
                 filtered_reads,
+                quality_noise,
             },
         )
 }
@@ -370,6 +412,7 @@ fn build_genome(specs: Vec<LocusSpec>, crop: RegionCrop) -> Genome {
             alt_count,
             clip: spec.clip,
             filtered_reads: spec.filtered_reads.clone(),
+            quality_noise: spec.quality_noise.clone(),
         });
     }
 
@@ -595,6 +638,7 @@ fn synthesize_reads(
                 cigar,
                 seq,
                 mapq: 60,
+                base_qual: 40,
             });
         }
 
@@ -613,6 +657,25 @@ fn synthesize_reads(
                 cigar,
                 seq,
                 mapq: 60,
+                base_qual: 40,
+            });
+        }
+
+        // Extra ALT-carrying reads whose MAPQ / base quality straddle the preset
+        // filter floors. On top of the clean `depth`, so the variant still calls
+        // at default; under -Q/-q some of these are dropped and BOTH tools must
+        // drop the same ones (proven parity-safe by a manual spike).
+        for (qi, qn) in locus.quality_noise.iter().enumerate() {
+            let (cigar, seq) = build_read(&locus.kind, sequence, locus.pos, start, true);
+            let flag = if qi % 2 == 0 { 0 } else { 16 };
+            reads.push(ReadRecord {
+                qname: format!("rq{locus_index}_{qi}"),
+                flag,
+                pos: start,
+                cigar,
+                seq,
+                mapq: qn.mapq,
+                base_qual: qn.base_qual,
             });
         }
     }
@@ -797,6 +860,34 @@ mod clip_tests {
         assert!(
             (0.15..=0.35).contains(&fraction),
             "expected ~25% of sampled loci to carry filtered noise reads (3:1 empty:non-empty bias), got {fraction:.3} ({nonempty}/{sample_count})"
+        );
+    }
+
+    /// Sampling guard: `quality_noise_strategy` is biased 3:1 (empty:non-empty),
+    /// same weighting as `optional_clip_strategy` / `filtered_reads_strategy`,
+    /// so quality-noise reads should appear in roughly a quarter of sampled loci
+    /// -- neither vacuously absent (bug in the `prop_oneof!` weights, silently
+    /// never exercising the -Q/-q straddle path) nor dominant (would starve the
+    /// uniform-quality majority).
+    #[test]
+    fn quality_noise_strategy_samples_roughly_quarter_nonempty() {
+        use proptest::strategy::ValueTree;
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::deterministic();
+        let strategy = quality_noise_strategy();
+        let sample_count = 2000;
+        let mut nonempty = 0;
+        for _ in 0..sample_count {
+            let tree = strategy.new_tree(&mut runner).expect("generate quality_noise sample");
+            if !tree.current().is_empty() {
+                nonempty += 1;
+            }
+        }
+        let fraction = nonempty as f64 / sample_count as f64;
+        assert!(
+            (0.15..=0.35).contains(&fraction),
+            "expected ~25% of sampled loci to carry quality-noise reads (3:1 empty:non-empty bias), got {fraction:.3} ({nonempty}/{sample_count})"
         );
     }
 

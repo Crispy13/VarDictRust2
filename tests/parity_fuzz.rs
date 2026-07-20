@@ -21,7 +21,10 @@
 //! generate (and shrink) many synthetic cases automatically, each locus
 //! independently an SNV, deletion, insertion, or MNV, optionally with a
 //! clipped read subset and/or skipped flag-filtered noise reads, over a scan
-//! region that is sometimes cropped to the loci edges. A second test,
+//! region that is sometimes cropped to the loci edges. Each locus may also
+//! carry a minority of quality-noise reads whose MAPQ and base quality
+//! straddle common `-Q`/`-q` filter floors, so those preset filters actually
+//! engage and both tools are checked to drop exactly the same reads. A second test,
 //! `pbt_germline_preset_parity`, runs every generated genome again under a
 //! curated germline config preset (via `generator::arb_germline_preset`),
 //! passing the preset's CLI flags through to both tools:
