@@ -453,8 +453,9 @@ fn build_genome(specs: Vec<LocusSpec>, crop: RegionCrop) -> Genome {
 
 /// A synthetic paired tumor/normal genome for the somatic lane. Tumor and
 /// normal share one reference `sequence`; they differ only in per-locus
-/// alt-read counts. For S0 every locus is StrongSomatic: the variant is
-/// present in the tumor read set and absent from the normal read set.
+/// alt-read counts. The normal sample's alt fraction ranges 0..=70%,
+/// spanning the whole somatic status spectrum (StrongSomatic when 0, up
+/// through LikelySomatic/AFDiff/Germline/LikelyLOH as it rises).
 #[derive(Debug, Clone)]
 pub struct SomaticGenome {
     pub contig: String,
@@ -466,42 +467,57 @@ pub struct SomaticGenome {
     pub scan_end: u32,
 }
 
-/// Raw params for one StrongSomatic SNV locus.
+/// Raw params for one somatic locus.
 #[derive(Debug, Clone)]
 struct SomaticLocusSpec {
     /// Distance (bp) from the previous locus; reuses the germline spacing
     /// range so read windows never overlap.
     spacing_from_previous: u32,
-    /// Total read depth covering the locus in both tumor and normal. 30..=60
-    /// is safe VarDict-calling range.
+    /// Depth covering the locus in BOTH tumor and normal (30..=60).
     depth: u32,
-    /// Percent of TUMOR reads carrying the alt allele. 30..=70 is a safe
-    /// calling range. The normal sample carries none (StrongSomatic).
+    /// Percent of TUMOR reads carrying the alt allele. 30..=98 (high values
+    /// reach the near-homozygous regime that yields LikelyLOH). Always >=30 so
+    /// the tumor variant always calls (non-vacuity).
     tumor_alt_pct: u32,
-    /// Offset (1..=3) applied to the ref base's cycle index (mod 4) to pick a
-    /// distinct alt base, same trick as the germline SNV.
-    snv_alt_offset: u32,
+    /// Percent of NORMAL reads carrying the alt allele. 0 => StrongSomatic;
+    /// small => LikelySomatic/AFDiff; comparable-to-tumor => Germline; with a
+    /// near-homozygous tumor => LikelyLOH. The whole VarLabel spectrum emerges
+    /// naturally from this fraction (proven byte-identical VDR<->VDJ by spike).
+    normal_alt_pct: u32,
+    kind_spec: VariantKindSpec,
+}
+
+/// Normal-sample alt fraction: biased to include 0 (StrongSomatic) often, else
+/// spread across 0..=70 to cover LikelySomatic/AFDiff/Germline/LikelyLOH.
+fn somatic_normal_alt_pct_strategy() -> impl Strategy<Value = u32> {
+    prop_oneof![
+        2 => Just(0u32),
+        3 => 0u32..=70,
+    ]
 }
 
 fn somatic_locus_spec_strategy() -> impl Strategy<Value = SomaticLocusSpec> {
     (
         MIN_LOCUS_SPACING..=MAX_LOCUS_SPACING,
         30u32..=60,
-        30u32..=70,
-        1u32..=3,
+        30u32..=98,
+        somatic_normal_alt_pct_strategy(),
+        variant_kind_spec_strategy(),
     )
         .prop_map(
-            |(spacing_from_previous, depth, tumor_alt_pct, snv_alt_offset)| SomaticLocusSpec {
+            |(spacing_from_previous, depth, tumor_alt_pct, normal_alt_pct, kind_spec)| SomaticLocusSpec {
                 spacing_from_previous,
                 depth,
                 tumor_alt_pct,
-                snv_alt_offset,
+                normal_alt_pct,
+                kind_spec,
             },
         )
 }
 
-/// Strategy producing a `SomaticGenome` with 1..=6 StrongSomatic SNV loci
-/// spaced >=200bp apart on one synthetic contig.
+/// Strategy producing a `SomaticGenome` with 1..=6 somatic loci (each an
+/// SNV/deletion/insertion/MNV) spanning the tumor/normal AF spectrum, spaced
+/// >=200bp apart on one synthetic contig.
 pub fn arb_somatic_genome() -> impl Strategy<Value = SomaticGenome> {
     prop::collection::vec(somatic_locus_spec_strategy(), 1..=6).prop_map(build_somatic_genome)
 }
@@ -519,13 +535,25 @@ fn build_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
             pos += spec.spacing_from_previous;
         }
 
-        let ref_base = base_at_cycle(pos as usize - 1);
-        let ref_index = base_cycle_index(ref_base);
-        let alt_base = BASES[(ref_index + spec.snv_alt_offset as usize) % BASES.len()];
-        let kind = VariantKind::Snv { ref_base, alt_base };
+        let kind = match &spec.kind_spec {
+            VariantKindSpec::Snv { alt_offset } => {
+                let ref_base = base_at_cycle(pos as usize - 1);
+                let ref_index = base_cycle_index(ref_base);
+                let alt_base = BASES[(ref_index + *alt_offset as usize) % BASES.len()];
+                VariantKind::Snv { ref_base, alt_base }
+            }
+            VariantKindSpec::Del { len } => VariantKind::Del { len: *len },
+            VariantKindSpec::Ins { bases } => VariantKind::Ins {
+                bases: bases.clone(),
+            },
+            VariantKindSpec::Mnv { alt_offsets } => VariantKind::Mnv {
+                alt_offsets: alt_offsets.clone(),
+            },
+        };
 
         let tumor_alt_count = ((spec.depth * spec.tumor_alt_pct) / 100)
             .clamp(1, spec.depth.saturating_sub(1).max(1));
+        let normal_alt_count = ((spec.depth * spec.normal_alt_pct) / 100).min(spec.depth);
 
         tumor_loci.push(Locus {
             pos,
@@ -540,7 +568,7 @@ fn build_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
             pos,
             kind,
             depth: spec.depth,
-            alt_count: 0,
+            alt_count: normal_alt_count,
             clip: None,
             filtered_reads: vec![],
             quality_noise: vec![],

@@ -31,6 +31,9 @@
 //! `pbt_somatic_parity`, exercises the paired tumor/normal somatic lane: two
 //! synthetic BAMs (tumor + normal) built from one shared reference, run
 //! through both tools via VarDict's paired `-b "tumor.bam|normal.bam"` mode.
+//! Each somatic locus independently an SNV, deletion, insertion, or MNV, with
+//! the normal sample's own alt fraction spanning the full somatic status
+//! spectrum (StrongSomatic/LikelySomatic/AFDiff/Germline/LikelyLOH).
 //!
 //!   generate `Vec<Locus>` (generator.rs)
 //!     -> materialize ref.fa + sorted/indexed reads.bam via samtools (synth.rs)
