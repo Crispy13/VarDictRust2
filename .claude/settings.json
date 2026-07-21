@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/session-history.sh\"",
+            "timeout": 10,
+            "statusMessage": "Loading session history"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -23,3 +23,5 @@ trashcan/
 .github/skills/**/review.html
 
 docs/dev/
+# Per-session working logs (session-history skill) — ephemeral, not committed
+.claude/session-history/
