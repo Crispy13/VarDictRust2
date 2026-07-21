@@ -514,6 +514,14 @@ struct SomaticLocusSpec {
     /// naturally from this fraction (proven byte-identical VDR<->VDJ by spike).
     normal_alt_pct: u32,
     kind_spec: VariantKindSpec,
+    /// Read-level modifiers (reused from the germline lane, proven parity-safe):
+    /// a subset of this locus's reads carry a soft/hard clip. Rides on top of the
+    /// clean `depth`, so the call is unchanged (non-vacuity preserved).
+    clip: Option<ClipSpec>,
+    /// Extra ALT reads flagged dup/secondary/supplementary (both tools skip them).
+    filtered_reads: Vec<FilterFlag>,
+    /// Extra ALT reads whose MAPQ/base-quality straddle the -Q/-q filter floors.
+    quality_noise: Vec<QualNoiseRead>,
 }
 
 /// Normal-sample alt fraction: biased to include 0 (StrongSomatic) often, else
@@ -532,14 +540,29 @@ fn somatic_locus_spec_strategy() -> impl Strategy<Value = SomaticLocusSpec> {
         30u32..=98,
         somatic_normal_alt_pct_strategy(),
         variant_kind_spec_strategy(),
+        optional_clip_strategy(),
+        filtered_reads_strategy(),
+        quality_noise_strategy(),
     )
         .prop_map(
-            |(spacing_from_previous, depth, tumor_alt_pct, normal_alt_pct, kind_spec)| SomaticLocusSpec {
+            |(
                 spacing_from_previous,
                 depth,
                 tumor_alt_pct,
                 normal_alt_pct,
                 kind_spec,
+                clip,
+                filtered_reads,
+                quality_noise,
+            )| SomaticLocusSpec {
+                spacing_from_previous,
+                depth,
+                tumor_alt_pct,
+                normal_alt_pct,
+                kind_spec,
+                clip,
+                filtered_reads,
+                quality_noise,
             },
         )
 }
@@ -589,18 +612,18 @@ fn build_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
             kind: kind.clone(),
             depth: spec.depth,
             alt_count: tumor_alt_count,
-            clip: None,
-            filtered_reads: vec![],
-            quality_noise: vec![],
+            clip: spec.clip.clone(),
+            filtered_reads: spec.filtered_reads.clone(),
+            quality_noise: spec.quality_noise.clone(),
         });
         normal_loci.push(Locus {
             pos,
             kind,
             depth: spec.depth,
             alt_count: normal_alt_count,
-            clip: None,
-            filtered_reads: vec![],
-            quality_noise: vec![],
+            clip: spec.clip.clone(),
+            filtered_reads: spec.filtered_reads.clone(),
+            quality_noise: spec.quality_noise.clone(),
         });
     }
 
