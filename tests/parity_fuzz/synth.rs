@@ -75,14 +75,21 @@ fn build_sam_text(contig: &str, seq_len: usize, reads: &[ReadRecord]) -> String 
         let qual: String = std::iter::repeat((b'!' + read.base_qual) as char)
             .take(read.seq.len())
             .collect();
+        let (rnext, pnext, tlen) = match &read.mate {
+            Some(m) => ("=", m.pnext, m.tlen),
+            None => ("*", 0u32, 0i32),
+        };
         sam.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t*\t0\t0\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             read.qname,
             read.flag,
             contig,
             read.pos,
             read.mapq,
             read.cigar,
+            rnext,
+            pnext,
+            tlen,
             seq,
             qual,
         ));

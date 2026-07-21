@@ -11,6 +11,13 @@ use proptest::prelude::*;
 /// either side of an indel. Matches the ~60bp scale used by the manual spike.
 pub const READ_LEN: u32 = 60;
 
+/// Proper-pair mate layout: mate1 (forward) starts `pos - MATE1_LEAD`, mate2
+/// (reverse) starts `pos - MATE2_LEAD`, so their READ_LEN M-spans overlap
+/// across `pos` (the variant sits inside the overlap, exercising VarDict's
+/// paired-read handling). Validated byte-identical VDR<->VDJ by a manual spike.
+const MATE1_LEAD: u32 = 40;
+const MATE2_LEAD: u32 = 20;
+
 /// Upper bound on both deletion length and insertion length (bp). Small
 /// enough to stay well inside the read-window margins below.
 const MAX_INDEL_LEN: u32 = 6;
@@ -156,6 +163,20 @@ pub struct Locus {
     /// Extra ALT-carrying reads whose MAPQ / base quality straddle -Q/-q
     /// filter floors, appended on top of `depth`. See `QualNoiseRead`.
     pub quality_noise: Vec<QualNoiseRead>,
+    /// When true, this locus's `depth` reads are emitted as overlapping proper
+    /// read-pairs rather than single-end reads.
+    pub paired: bool,
+}
+
+/// Mate info for a read that is part of a proper pair. `None` => single-end
+/// (emitted as RNEXT=*, PNEXT=0, TLEN=0). `Some` => RNEXT="=" (same contig),
+/// with the given PNEXT and signed TLEN.
+#[derive(Debug, Clone)]
+pub struct MateInfo {
+    /// 1-based mapping position of the mate (SAM PNEXT).
+    pub pnext: u32,
+    /// Signed observed template length (SAM TLEN).
+    pub tlen: i32,
 }
 
 /// One synthesized read record, materialized from a `Locus`.
@@ -175,6 +196,8 @@ pub struct ReadRecord {
     /// char = b'!' + base_qual). Normal reads use 40 ('I'); quality-noise reads
     /// use a straddling value so -q filters engage.
     pub base_qual: u8,
+    /// Proper-pair mate info, or `None` for single-end reads.
+    pub mate: Option<MateInfo>,
 }
 
 /// A synthetic single-contig genome: reference sequence plus the reads covering it.
@@ -288,6 +311,10 @@ struct LocusSpec {
     clip: Option<ClipSpec>,
     filtered_reads: Vec<FilterFlag>,
     quality_noise: Vec<QualNoiseRead>,
+    /// When true, this locus's `depth` reads are emitted as overlapping proper
+    /// FR read-pairs (mate1 fwd + mate2 rev overlapping across `pos`) instead of
+    /// single-end reads, exercising VarDict's paired-read code path.
+    paired: bool,
 }
 
 fn filter_flag_strategy() -> impl Strategy<Value = FilterFlag> {
@@ -309,6 +336,15 @@ fn filtered_reads_strategy() -> impl Strategy<Value = Vec<FilterFlag>> {
     ]
 }
 
+/// Whether a locus emits proper pairs. Biased 3:1 toward single-end (same
+/// weight as `optional_clip_strategy`) so paired loci stay a stressing minority.
+fn paired_strategy() -> impl Strategy<Value = bool> {
+    prop_oneof![
+        3 => Just(false),
+        1 => Just(true),
+    ]
+}
+
 fn locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
     (
         MIN_LOCUS_SPACING..=MAX_LOCUS_SPACING,
@@ -318,9 +354,10 @@ fn locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
         optional_clip_strategy(),
         filtered_reads_strategy(),
         quality_noise_strategy(),
+        paired_strategy(),
     )
         .prop_map(
-            |(spacing_from_previous, depth, alt_pct, kind_spec, clip, filtered_reads, quality_noise)| LocusSpec {
+            |(spacing_from_previous, depth, alt_pct, kind_spec, clip, filtered_reads, quality_noise, paired)| LocusSpec {
                 spacing_from_previous,
                 depth,
                 alt_pct,
@@ -328,6 +365,7 @@ fn locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
                 clip,
                 filtered_reads,
                 quality_noise,
+                paired,
             },
         )
 }
@@ -442,6 +480,7 @@ fn build_genome(specs: Vec<LocusSpec>, crop: RegionCrop) -> Genome {
             clip: spec.clip,
             filtered_reads: spec.filtered_reads.clone(),
             quality_noise: spec.quality_noise.clone(),
+            paired: spec.paired,
         });
     }
 
@@ -615,6 +654,7 @@ fn build_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
             clip: spec.clip.clone(),
             filtered_reads: spec.filtered_reads.clone(),
             quality_noise: spec.quality_noise.clone(),
+            paired: false,
         });
         normal_loci.push(Locus {
             pos,
@@ -624,6 +664,7 @@ fn build_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
             clip: spec.clip.clone(),
             filtered_reads: spec.filtered_reads.clone(),
             quality_noise: spec.quality_noise.clone(),
+            paired: false,
         });
     }
 
@@ -811,31 +852,71 @@ fn synthesize_reads(
     for (locus_index, locus) in loci.iter().enumerate() {
         let start = locus.pos.saturating_sub(half).max(1).min(max_start);
 
-        for read_index in 0..locus.depth {
-            let is_alt = read_index < locus.alt_count;
-            let (cigar, seq) = build_read(&locus.kind, sequence, locus.pos, start, is_alt);
+        if !locus.paired {
+            for read_index in 0..locus.depth {
+                let is_alt = read_index < locus.alt_count;
+                let (cigar, seq) = build_read(&locus.kind, sequence, locus.pos, start, is_alt);
 
-            // Clip ~1/3 of reads (read_index 0, 3, 6, ...) when this locus carries a
-            // clip, leaving the rest unclipped so the variant still calls. Keyed off
-            // a different modulus than the strand flag below so clipped reads land
-            // on both forward- and reverse-strand reads, not just forward-strand.
-            let (cigar, seq, pos) = match &locus.clip {
-                Some(clip_spec) if read_index % 3 == 0 => {
-                    apply_clip(&cigar, seq, start, clip_spec)
-                }
-                _ => (cigar, seq, start),
-            };
+                // Clip ~1/3 of reads (read_index 0, 3, 6, ...) when this locus carries a
+                // clip, leaving the rest unclipped so the variant still calls. Keyed off
+                // a different modulus than the strand flag below so clipped reads land
+                // on both forward- and reverse-strand reads, not just forward-strand.
+                let (cigar, seq, pos) = match &locus.clip {
+                    Some(clip_spec) if read_index % 3 == 0 => {
+                        apply_clip(&cigar, seq, start, clip_spec)
+                    }
+                    _ => (cigar, seq, start),
+                };
 
-            let flag = if read_index % 2 == 0 { 0 } else { 16 };
-            reads.push(ReadRecord {
-                qname: format!("r{locus_index}_{read_index}"),
-                flag,
-                pos,
-                cigar,
-                seq,
-                mapq: 60,
-                base_qual: 40,
-            });
+                let flag = if read_index % 2 == 0 { 0 } else { 16 };
+                reads.push(ReadRecord {
+                    qname: format!("r{locus_index}_{read_index}"),
+                    flag,
+                    pos,
+                    cigar,
+                    seq,
+                    mapq: 60,
+                    base_qual: 40,
+                    mate: None,
+                });
+            }
+        } else {
+            // Proper-pair layout: mate1 (fwd) at `pos - MATE1_LEAD`, mate2 (rev)
+            // at `pos - MATE2_LEAD`; their READ_LEN M-spans overlap across `pos`.
+            // Both mates carry the same allele (a real fragment is alt or ref),
+            // so the variant still calls. Clips are not applied to paired loci.
+            let m1_start = locus.pos.saturating_sub(MATE1_LEAD).max(1).min(max_start);
+            let m2_start = locus.pos.saturating_sub(MATE2_LEAD).max(1).min(max_start);
+            // Signed template length: rightmost mate end minus leftmost mate start.
+            let tlen = (m2_start + read_len - 1) as i32 - m1_start as i32 + 1;
+            for frag_index in 0..locus.depth {
+                let is_alt = frag_index < locus.alt_count;
+                let (cigar1, seq1) = build_read(&locus.kind, sequence, locus.pos, m1_start, is_alt);
+                let (cigar2, seq2) = build_read(&locus.kind, sequence, locus.pos, m2_start, is_alt);
+                let qname = format!("p{locus_index}_{frag_index}");
+                // mate1: paired|proper|mate-reverse|first-in-pair = 0x1|0x2|0x20|0x40 = 99
+                reads.push(ReadRecord {
+                    qname: qname.clone(),
+                    flag: 99,
+                    pos: m1_start,
+                    cigar: cigar1,
+                    seq: seq1,
+                    mapq: 60,
+                    base_qual: 40,
+                    mate: Some(MateInfo { pnext: m2_start, tlen }),
+                });
+                // mate2: paired|proper|reverse|second-in-pair = 0x1|0x2|0x10|0x80 = 147
+                reads.push(ReadRecord {
+                    qname,
+                    flag: 147,
+                    pos: m2_start,
+                    cigar: cigar2,
+                    seq: seq2,
+                    mapq: 60,
+                    base_qual: 40,
+                    mate: Some(MateInfo { pnext: m1_start, tlen: -tlen }),
+                });
+            }
         }
 
         // Extra ALT-carrying reads flagged duplicate/secondary/supplementary.
@@ -854,6 +935,7 @@ fn synthesize_reads(
                 seq,
                 mapq: 60,
                 base_qual: 40,
+                mate: None,
             });
         }
 
@@ -872,6 +954,7 @@ fn synthesize_reads(
                 seq,
                 mapq: qn.mapq,
                 base_qual: qn.base_qual,
+                mate: None,
             });
         }
     }
