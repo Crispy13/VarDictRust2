@@ -181,6 +181,40 @@ proptest! {
 
     #[ignore = "requires vdr conda env (samtools) + built target/debug-release/vardict_rs + VarDictJava@4e362c0; run: PARITY_FUZZ_CASES=64 cargo test --profile debug-release --test parity_fuzz -- --include-ignored"]
     #[test]
+    fn pbt_unique_mode_paired_parity(
+        genome in generator::arb_paired_genome(),
+        preset in generator::arb_unique_mode_preset(),
+    ) {
+        let vdr_bin = vdr_binary_path();
+        assert!(
+            vdr_bin.is_file(),
+            "VDR binary not found at {}. Build with: cargo build --profile debug-release --bin vardict_rs (or set VARDICT_RS_BIN)",
+            vdr_bin.display(),
+        );
+        let java_bin = common::java_binary_path();
+
+        let synth = synth::materialize(&genome);
+
+        let vdj_out = oracle::run_vdj(&java_bin, &synth.ref_fasta, &synth.reads_bam, &synth.region, &preset.flags);
+        let vdr_out = oracle::run_vdr(&vdr_bin, &synth.ref_fasta, &synth.reads_bam, &synth.region, &preset.flags);
+
+        // Real parity check FIRST — catches any true divergence in the overlap-dedup
+        // (skipOverlappingReads) path exercised only by `-u`/`--UN` on paired reads.
+        if let Err(diff) = oracle::compare(&vdj_out, &vdr_out) {
+            prop_assert!(
+                false,
+                "Parity mismatch under unique-mode preset {} ({:?}) for region {}\nloci: {:#?}\n\nreads.sam:\n{}\n\n{}\n\nVDJ stdout:\n{}\n\nVDR stdout:\n{}",
+                preset.name, preset.flags, synth.region, genome.loci, synth.reads_sam_text, diff, vdj_out, vdr_out,
+            );
+        }
+
+        // Discard cases the preset suppressed to nothing (e.g. aggressive dedup on a
+        // tiny genome). Default preset always calls, so the lane stays non-vacuous.
+        prop_assume!(!oracle::normalize(&vdj_out).is_empty());
+    }
+
+    #[ignore = "requires vdr conda env (samtools) + built target/debug-release/vardict_rs + VarDictJava@4e362c0; run: PARITY_FUZZ_CASES=64 cargo test --profile debug-release --test parity_fuzz -- --include-ignored"]
+    #[test]
     fn pbt_somatic_parity(sgenome in generator::arb_somatic_genome()) {
         let vdr_bin = vdr_binary_path();
         assert!(

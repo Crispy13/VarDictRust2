@@ -402,6 +402,21 @@ pub fn arb_germline_preset() -> impl Strategy<Value = Preset> {
     proptest::sample::select(presets)
 }
 
+/// Presets for the unique-mode paired lane. `-u` (uniqueModeAlignment) and
+/// `--UN` (uniqueModeSecondInPair) both collapse a read-pair's overlap so it is
+/// counted once; on all-proper-pair input each is non-vacuous (a spike showed
+/// depth 60->30) and byte-identical VDR<->VDJ. Java-style `-UN` is passed
+/// verbatim to both tools (VDR normalizes `-UN`->`--UN`). `-u --UN` together is
+/// omitted: on all-paired input it suppresses every read (always empty).
+pub fn arb_unique_mode_preset() -> impl Strategy<Value = Preset> {
+    let presets = vec![
+        Preset { name: "UNIQ-DEFAULT".to_string(), flags: vec![] },
+        Preset { name: "UNIQ-U".to_string(), flags: vec!["-u".to_string()] },
+        Preset { name: "UNIQ-UN".to_string(), flags: vec!["-UN".to_string()] },
+    ];
+    proptest::sample::select(presets)
+}
+
 /// Somatic-specific presets not present as named rows in config_presets.tsv:
 /// `-V` (lowest normal-sample freq for a somatic call = lofreq, default 0.05 —
 /// directly moves the VarLabel status boundary; a spike confirmed VDR<->VDJ
@@ -439,6 +454,39 @@ pub fn arb_genome() -> impl Strategy<Value = Genome> {
         region_crop_strategy(),
     )
         .prop_map(|(specs, crop)| build_genome(specs, crop))
+}
+
+/// One locus for the unique-mode lane: always emitted as a proper overlapping
+/// pair (`paired: true`) with NO single-end noise (`clip: None`,
+/// `filtered_reads: []`, `quality_noise: []`). Every read in the genome is thus
+/// a proper pair, so `--UN` never hits an unpaired read (which would make
+/// VarDictJava exit 1). Depth/alt kept in the same safe-calling ranges as the
+/// germline `locus_spec_strategy`.
+fn paired_locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
+    (
+        MIN_LOCUS_SPACING..=MAX_LOCUS_SPACING,
+        30u32..=60,
+        30u32..=70,
+        variant_kind_spec_strategy(),
+    )
+        .prop_map(|(spacing_from_previous, depth, alt_pct, kind_spec)| LocusSpec {
+            spacing_from_previous,
+            depth,
+            alt_pct,
+            kind_spec,
+            clip: None,
+            filtered_reads: vec![],
+            quality_noise: vec![],
+            paired: true,
+        })
+}
+
+/// A genome whose every locus is an overlapping proper pair with no unpaired
+/// reads — the substrate for the unique-mode (`-u` / `--UN`) overlap-dedup lane.
+/// Whole-contig region (no crop); cropping is covered by the germline lane.
+pub fn arb_paired_genome() -> impl Strategy<Value = Genome> {
+    prop::collection::vec(paired_locus_spec_strategy(), 1..=8)
+        .prop_map(|specs| build_genome(specs, RegionCrop::Full))
 }
 
 fn build_genome(specs: Vec<LocusSpec>, crop: RegionCrop) -> Genome {
