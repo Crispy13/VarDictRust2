@@ -166,6 +166,8 @@ pub struct Locus {
     /// When true, this locus's `depth` reads are emitted as overlapping proper
     /// read-pairs rather than single-end reads.
     pub paired: bool,
+    /// See `LocusSpec::disagree_count`. Non-zero only for the unique-mode lane.
+    pub disagree_count: u32,
 }
 
 /// Mate info for a read that is part of a proper pair. `None` => single-end
@@ -315,6 +317,11 @@ struct LocusSpec {
     /// FR read-pairs (mate1 fwd + mate2 rev overlapping across `pos`) instead of
     /// single-end reads, exercising VarDict's paired-read code path.
     paired: bool,
+    /// Extra proper-pair fragments (on top of `depth`) whose two mates carry
+    /// DIFFERENT alleles at the variant. Only meaningful for the unique-mode
+    /// lane (`-u`/`--UN` skip one mate, so which mate survives sets the allele);
+    /// 0 for every other lane. Rides on top of the clean paired depth.
+    disagree_count: u32,
 }
 
 fn filter_flag_strategy() -> impl Strategy<Value = FilterFlag> {
@@ -366,6 +373,7 @@ fn locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
                 filtered_reads,
                 quality_noise,
                 paired,
+                disagree_count: 0,
             },
         )
 }
@@ -456,6 +464,16 @@ pub fn arb_genome() -> impl Strategy<Value = Genome> {
         .prop_map(|(specs, crop)| build_genome(specs, crop))
 }
 
+/// Extra disagreeing-mate fragments per unique-mode locus: biased 3:1 toward
+/// none, else 1..=6, so most loci are clean and disagreement is a stressing
+/// minority (same shape as `filtered_reads_strategy`).
+fn disagree_count_strategy() -> impl Strategy<Value = u32> {
+    prop_oneof![
+        3 => Just(0u32),
+        1 => 1u32..=6,
+    ]
+}
+
 /// One locus for the unique-mode lane: always emitted as a proper overlapping
 /// pair (`paired: true`) with NO single-end noise (`clip: None`,
 /// `filtered_reads: []`, `quality_noise: []`). Every read in the genome is thus
@@ -468,8 +486,9 @@ fn paired_locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
         30u32..=60,
         30u32..=70,
         variant_kind_spec_strategy(),
+        disagree_count_strategy(),
     )
-        .prop_map(|(spacing_from_previous, depth, alt_pct, kind_spec)| LocusSpec {
+        .prop_map(|(spacing_from_previous, depth, alt_pct, kind_spec, disagree_count)| LocusSpec {
             spacing_from_previous,
             depth,
             alt_pct,
@@ -478,6 +497,7 @@ fn paired_locus_spec_strategy() -> impl Strategy<Value = LocusSpec> {
             filtered_reads: vec![],
             quality_noise: vec![],
             paired: true,
+            disagree_count,
         })
 }
 
@@ -529,6 +549,7 @@ fn build_genome(specs: Vec<LocusSpec>, crop: RegionCrop) -> Genome {
             filtered_reads: spec.filtered_reads.clone(),
             quality_noise: spec.quality_noise.clone(),
             paired: spec.paired,
+            disagree_count: spec.disagree_count,
         });
     }
 
@@ -703,6 +724,7 @@ fn build_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
             filtered_reads: spec.filtered_reads.clone(),
             quality_noise: spec.quality_noise.clone(),
             paired: false,
+            disagree_count: 0,
         });
         normal_loci.push(Locus {
             pos,
@@ -713,6 +735,7 @@ fn build_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
             filtered_reads: spec.filtered_reads.clone(),
             quality_noise: spec.quality_noise.clone(),
             paired: false,
+            disagree_count: 0,
         });
     }
 
@@ -954,6 +977,37 @@ fn synthesize_reads(
                     mate: Some(MateInfo { pnext: m2_start, tlen }),
                 });
                 // mate2: paired|proper|reverse|second-in-pair = 0x1|0x2|0x10|0x80 = 147
+                reads.push(ReadRecord {
+                    qname,
+                    flag: 147,
+                    pos: m2_start,
+                    cigar: cigar2,
+                    seq: seq2,
+                    mapq: 60,
+                    base_qual: 40,
+                    mate: Some(MateInfo { pnext: m1_start, tlen: -tlen }),
+                });
+            }
+
+            // Disagreeing fragments (on top of clean `depth`): the two mates
+            // carry DIFFERENT alleles at the variant, alternating which mate is
+            // ALT. Under -u/--UN one mate is skipped, so which survives decides
+            // the counted allele -- both tools must skip the same one (spike-proven).
+            for k in 0..locus.disagree_count {
+                let mate1_alt = k % 2 == 0;
+                let (cigar1, seq1) = build_read(&locus.kind, sequence, locus.pos, m1_start, mate1_alt);
+                let (cigar2, seq2) = build_read(&locus.kind, sequence, locus.pos, m2_start, !mate1_alt);
+                let qname = format!("pd{locus_index}_{k}");
+                reads.push(ReadRecord {
+                    qname: qname.clone(),
+                    flag: 99,
+                    pos: m1_start,
+                    cigar: cigar1,
+                    seq: seq1,
+                    mapq: 60,
+                    base_qual: 40,
+                    mate: Some(MateInfo { pnext: m2_start, tlen }),
+                });
                 reads.push(ReadRecord {
                     qname,
                     flag: 147,
