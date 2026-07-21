@@ -7,7 +7,7 @@ on:
         required: false
         default: 'all'
         type: choice
-        options: [all, cigar_modifier, cigar_parser, realigner, sam_file_parser, sv_processor, tovars, e2e, config_e2e, dual_run]
+        options: [all, cigar_modifier, cigar_parser, realigner, sam_file_parser, sv_processor, tovars, e2e, config_e2e, dual_run, fuzz]
   schedule:
     - cron: '0 4 * * *'
 
@@ -106,3 +106,26 @@ jobs:
         env:
           VARDICT_IMPL: rust
         run: cargo test --profile debug-release --test parity_config_e2e parity_config_e2e_push_ -- --test-threads=10
+
+  fuzz:
+    name: Parity Fuzz (differential)
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.module == 'fuzz')
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build Rust binary
+        env:
+          VARDICT_IMPL: rust
+        run: cargo build --profile debug-release --bin vardict_rs
+
+      - name: Build Java
+        run: cd VarDictJava && ./gradlew installDist -q
+
+      - name: Run parity fuzzer (germline + somatic, all axes + presets)
+        env:
+          VARDICT_IMPL: rust
+          PARITY_FUZZ_CASES: "256"
+        run: cargo test --profile debug-release --test parity_fuzz -- --include-ignored --test-threads=4

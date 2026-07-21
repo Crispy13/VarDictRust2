@@ -792,10 +792,12 @@ fn synthesize_reads(
             let is_alt = read_index < locus.alt_count;
             let (cigar, seq) = build_read(&locus.kind, sequence, locus.pos, start, is_alt);
 
-            // Clip every other read (~50%) when this locus carries a clip,
-            // leaving the rest unclipped so the variant still calls.
+            // Clip ~1/3 of reads (read_index 0, 3, 6, ...) when this locus carries a
+            // clip, leaving the rest unclipped so the variant still calls. Keyed off
+            // a different modulus than the strand flag below so clipped reads land
+            // on both forward- and reverse-strand reads, not just forward-strand.
             let (cigar, seq, pos) = match &locus.clip {
-                Some(clip_spec) if read_index % 2 == 0 => {
+                Some(clip_spec) if read_index % 3 == 0 => {
                     apply_clip(&cigar, seq, start, clip_spec)
                 }
                 _ => (cigar, seq, start),

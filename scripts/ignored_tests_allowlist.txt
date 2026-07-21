@@ -25,3 +25,6 @@ prefix:parity_parallel_determinism_somatic_
 
 # Pilot - temporary
 pilot_v2_readback
+
+# Differential parity fuzzer (4 pbt_* proptest tests in tests/parity_fuzz.rs) - nightly, run via parity.yml fuzz job; needs vdr env + built binary + JVM
+prefix:pbt_

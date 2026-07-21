@@ -93,9 +93,13 @@ fn fuzz_cases() -> u32 {
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: fuzz_cases(),
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::Direct("tests/parity_fuzz.proptest-regressions"),
+        )),
         ..ProptestConfig::default()
     })]
 
+    #[ignore = "requires vdr conda env (samtools) + built target/debug-release/vardict_rs + VarDictJava@4e362c0; run: PARITY_FUZZ_CASES=64 cargo test --profile debug-release --test parity_fuzz -- --include-ignored"]
     #[test]
     fn pbt_germline_snv_parity(genome in generator::arb_genome()) {
         let vdr_bin = vdr_binary_path();
@@ -139,6 +143,7 @@ proptest! {
         }
     }
 
+    #[ignore = "requires vdr conda env (samtools) + built target/debug-release/vardict_rs + VarDictJava@4e362c0; run: PARITY_FUZZ_CASES=64 cargo test --profile debug-release --test parity_fuzz -- --include-ignored"]
     #[test]
     fn pbt_germline_preset_parity(
         genome in generator::arb_genome(),
@@ -174,6 +179,7 @@ proptest! {
         prop_assume!(!oracle::normalize(&vdj_out).is_empty());
     }
 
+    #[ignore = "requires vdr conda env (samtools) + built target/debug-release/vardict_rs + VarDictJava@4e362c0; run: PARITY_FUZZ_CASES=64 cargo test --profile debug-release --test parity_fuzz -- --include-ignored"]
     #[test]
     fn pbt_somatic_parity(sgenome in generator::arb_somatic_genome()) {
         let vdr_bin = vdr_binary_path();
@@ -206,6 +212,7 @@ proptest! {
         }
     }
 
+    #[ignore = "requires vdr conda env (samtools) + built target/debug-release/vardict_rs + VarDictJava@4e362c0; run: PARITY_FUZZ_CASES=64 cargo test --profile debug-release --test parity_fuzz -- --include-ignored"]
     #[test]
     fn pbt_somatic_preset_parity(
         sgenome in generator::arb_somatic_genome(),
