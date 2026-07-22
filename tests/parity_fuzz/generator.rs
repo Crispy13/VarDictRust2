@@ -630,6 +630,10 @@ struct SomaticLocusSpec {
     filtered_reads: Vec<FilterFlag>,
     /// Extra ALT reads whose MAPQ/base-quality straddle the -Q/-q filter floors.
     quality_noise: Vec<QualNoiseRead>,
+    /// Extra proper-pair fragments whose two mates carry DIFFERENT alleles at the
+    /// variant (only meaningful for the paired somatic unique-mode lane). 0 for
+    /// the default single-end somatic lane.
+    disagree_count: u32,
 }
 
 /// Normal-sample alt fraction: biased to include 0 (StrongSomatic) often, else
@@ -671,6 +675,7 @@ fn somatic_locus_spec_strategy() -> impl Strategy<Value = SomaticLocusSpec> {
                 clip,
                 filtered_reads,
                 quality_noise,
+                disagree_count: 0,
             },
         )
 }
@@ -680,6 +685,45 @@ fn somatic_locus_spec_strategy() -> impl Strategy<Value = SomaticLocusSpec> {
 /// >=200bp apart on one synthetic contig.
 pub fn arb_somatic_genome() -> impl Strategy<Value = SomaticGenome> {
     prop::collection::vec(somatic_locus_spec_strategy(), 1..=6).prop_map(build_somatic_genome)
+}
+
+/// One somatic locus for the unique-mode lane: emitted as overlapping proper
+/// pairs (both tumor and normal), no single-end noise, with `disagree_count`
+/// fragments whose mates split the allele. Reuses the germline
+/// `disagree_count_strategy` (biased 3:1 toward none).
+fn paired_somatic_locus_spec_strategy() -> impl Strategy<Value = SomaticLocusSpec> {
+    (
+        MIN_LOCUS_SPACING..=MAX_LOCUS_SPACING,
+        30u32..=60,
+        30u32..=98,
+        somatic_normal_alt_pct_strategy(),
+        variant_kind_spec_strategy(),
+        disagree_count_strategy(),
+    )
+        .prop_map(
+            |(spacing_from_previous, depth, tumor_alt_pct, normal_alt_pct, kind_spec, disagree_count)| {
+                SomaticLocusSpec {
+                    spacing_from_previous,
+                    depth,
+                    tumor_alt_pct,
+                    normal_alt_pct,
+                    kind_spec,
+                    clip: None,
+                    filtered_reads: vec![],
+                    quality_noise: vec![],
+                    disagree_count,
+                }
+            },
+        )
+}
+
+/// A somatic genome whose every tumor/normal locus is an overlapping proper pair
+/// with no unpaired reads — substrate for the somatic unique-mode (`-u`/`--UN`)
+/// overlap-dedup lane. All reads are proper pairs, so `--UN` never hits an
+/// unpaired read.
+pub fn arb_paired_somatic_genome() -> impl Strategy<Value = SomaticGenome> {
+    prop::collection::vec(paired_somatic_locus_spec_strategy(), 1..=6)
+        .prop_map(build_paired_somatic_genome)
 }
 
 fn build_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
@@ -736,6 +780,84 @@ fn build_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
             quality_noise: spec.quality_noise.clone(),
             paired: false,
             disagree_count: 0,
+        });
+    }
+
+    // Trailing margin mirrors the germline `build_genome` layout.
+    let contig_len = tumor_loci.last().map_or(leading_margin, |l| l.pos) + read_len + 50 + MAX_INDEL_LEN;
+    let sequence: Vec<u8> = (0..contig_len as usize).map(base_at_cycle).collect();
+
+    let tumor_reads = synthesize_reads(&tumor_loci, &sequence, read_len, contig_len);
+    let normal_reads = synthesize_reads(&normal_loci, &sequence, read_len, contig_len);
+
+    SomaticGenome {
+        contig: "chrS".to_string(),
+        sequence,
+        loci: tumor_loci,
+        tumor_reads,
+        normal_reads,
+        scan_start: 1,
+        scan_end: contig_len,
+    }
+}
+
+/// Same layout as `build_somatic_genome`, but every tumor/normal `Locus` is
+/// marked `paired: true` (overlapping proper pairs) with `disagree_count`
+/// carried through from the spec, for the somatic unique-mode lane.
+fn build_paired_somatic_genome(specs: Vec<SomaticLocusSpec>) -> SomaticGenome {
+    let read_len = READ_LEN;
+    // Enough room upstream of the first locus for a full read to fit.
+    let leading_margin = read_len + 50;
+
+    let mut tumor_loci = Vec::with_capacity(specs.len());
+    let mut normal_loci = Vec::with_capacity(specs.len());
+    let mut pos: u32 = leading_margin;
+    for (index, spec) in specs.iter().enumerate() {
+        if index > 0 {
+            pos += spec.spacing_from_previous;
+        }
+
+        let kind = match &spec.kind_spec {
+            VariantKindSpec::Snv { alt_offset } => {
+                let ref_base = base_at_cycle(pos as usize - 1);
+                let ref_index = base_cycle_index(ref_base);
+                let alt_base = BASES[(ref_index + *alt_offset as usize) % BASES.len()];
+                VariantKind::Snv { ref_base, alt_base }
+            }
+            VariantKindSpec::Del { len } => VariantKind::Del { len: *len },
+            VariantKindSpec::Ins { bases } => VariantKind::Ins {
+                bases: bases.clone(),
+            },
+            VariantKindSpec::Mnv { alt_offsets } => VariantKind::Mnv {
+                alt_offsets: alt_offsets.clone(),
+            },
+        };
+
+        let tumor_alt_count = ((spec.depth * spec.tumor_alt_pct) / 100)
+            .clamp(1, spec.depth.saturating_sub(1).max(1));
+        let normal_alt_count = ((spec.depth * spec.normal_alt_pct) / 100).min(spec.depth);
+
+        tumor_loci.push(Locus {
+            pos,
+            kind: kind.clone(),
+            depth: spec.depth,
+            alt_count: tumor_alt_count,
+            clip: None,
+            filtered_reads: vec![],
+            quality_noise: vec![],
+            paired: true,
+            disagree_count: spec.disagree_count,
+        });
+        normal_loci.push(Locus {
+            pos,
+            kind,
+            depth: spec.depth,
+            alt_count: normal_alt_count,
+            clip: None,
+            filtered_reads: vec![],
+            quality_noise: vec![],
+            paired: true,
+            disagree_count: spec.disagree_count,
         });
     }
 
