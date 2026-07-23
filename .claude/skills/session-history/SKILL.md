@@ -35,6 +35,13 @@ Your session id is the **UUID directory in your scratchpad path** (shown in your
 system prompt), e.g. `.../<session-id>/scratchpad`. The log lives at
 `.claude/session-history/<session-id>.md`.
 
+> **The id changes across resume (≈ daily in a long-lived chatroom).** Always
+> re-derive it from the scratchpad path shown in your system prompt each time —
+> never trust a path quoted in a compaction summary (that's how a log gets
+> orphaned under a stale id). The load hook now auto-recovers a drifted log by
+> adopting the newest log and migrating it to the current id, but writing to the
+> right name yourself keeps exactly one clean file.
+
 Get the exact path (creates the dir):
 
 ```bash

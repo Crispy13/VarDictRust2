@@ -10,6 +10,7 @@ Usage: session-history-load.py <hist_dir>   (payload on stdin)
 Kept separate from session-history.sh because `python3 -` would consume stdin as
 the program text, colliding with the payload.
 """
+import glob
 import json
 import os
 import sys
@@ -27,8 +28,29 @@ if not sid:
     sys.exit(0)
 
 path = os.path.join(hist_dir, str(sid) + ".md")
-if not os.path.isfile(path):
-    sys.exit(0)  # brand-new session with no log yet -> stay silent
+
+
+def _nonempty(p):
+    try:
+        return os.path.isfile(p) and os.path.getsize(p) > 0
+    except OSError:
+        return False
+
+
+if not _nonempty(path):
+    # session_id drifts across resume/compact-restart (here it rotates ~daily),
+    # orphaning the durable log under a previous id. Adopt the newest non-empty
+    # log and migrate it to the current sid so reads+writes converge on one
+    # canonical name that follows the latest id (fires for every source).
+    logs = [p for p in glob.glob(os.path.join(hist_dir, "*.md")) if _nonempty(p)]
+    if not logs:
+        sys.exit(0)  # truly empty history dir -> stay silent
+    newest = max(logs, key=os.path.getmtime)
+    if os.path.abspath(newest) != os.path.abspath(path):
+        try:
+            os.rename(newest, path)   # migrate to the stable current-sid name
+        except OSError:
+            path = newest             # last resort: read it in place
 
 with open(path, "r", encoding="utf-8") as fh:
     body = fh.read().strip()
